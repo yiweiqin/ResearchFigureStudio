@@ -503,9 +503,11 @@ def validate_program(path: Path) -> int:
         if not isinstance(arrow, dict):
             fail("figure_program.json arrows must be objects")
         aid = arrow.get("id")
-        for key in ("source_id", "target_id", "path_percent", "style_token_id", "render_policy"):
+        for key in ("source_id", "target_id", "source_anchor", "target_anchor", "path_percent", "style_token_id", "render_policy"):
             if key not in arrow or not str(arrow.get(key, "")).strip():
                 fail(f"figure_program.json arrow/control {aid} missing {key}")
+        if not isinstance(arrow.get("path_percent"), list) or len(arrow.get("path_percent", [])) < 2:
+            fail(f"figure_program.json arrow/control {aid} must have at least 2 path_percent points")
         if str(arrow.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
             fail(f"figure_program.json arrow/control {aid} must render as PPT shape, not image asset")
 
@@ -630,6 +632,12 @@ def validate_reference_geometry(path: Path) -> int:
         if not isinstance(item, dict):
             fail("reference_geometry.json controls must be objects")
         validate_geometry_item(item, str(item.get("id")))
+        cid = item.get("id")
+        for key in ("source_id", "target_id", "source_anchor", "target_anchor", "path_percent"):
+            if key not in item or not str(item.get(key, "")).strip():
+                fail(f"reference_geometry control {cid} missing key: {key}")
+        if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+            fail(f"reference_geometry control {cid} must have at least 2 path_percent points")
         if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
             fail(f"reference_geometry control {item.get('id')} must render as PPT shape, not image asset")
     palette = data.get("reference_palette")
@@ -638,6 +646,39 @@ def validate_reference_geometry(path: Path) -> int:
     if not isinstance(data.get("color_tokens"), list) or not data.get("color_tokens"):
         fail("reference_geometry.json must contain non-empty color_tokens")
     return len(slots)
+
+
+def validate_reference_control_candidates(path: Path, root: Path) -> int:
+    data = read_json(path)
+    if not isinstance(data, dict):
+        fail("reference_control_candidates.json must be a JSON object")
+    if not str(data.get("effective_mode", "")).strip():
+        fail("reference_control_candidates.json missing effective_mode")
+    for key in ("slot_overlay_path", "control_overlay_path"):
+        overlay = str(data.get(key, "")).strip()
+        if not overlay:
+            fail(f"reference_control_candidates.json missing {key}")
+        if not (root / overlay).exists() or (root / overlay).stat().st_size == 0:
+            fail(f"reference_control_candidates.json {key} does not point to a non-empty file")
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list):
+        fail("reference_control_candidates.json candidates must be a list")
+    for index, item in enumerate(candidates):
+        if not isinstance(item, dict):
+            fail(f"reference_control_candidates item at index {index} must be an object")
+        cid = item.get("id", index)
+        for key in ("bbox_percent", "center_percent", "width_percent", "height_percent", "path_percent", "editable_in", "render_policy"):
+            if key not in item:
+                fail(f"reference_control_candidates item {cid} missing key: {key}")
+        if arrow_like_asset_id(item.get("asset_id")):
+            fail(f"reference_control_candidates item {cid} must not bind to an image asset")
+        if str(item.get("editable_in", "")).lower() != "pptx":
+            fail(f"reference_control_candidates item {cid} must be editable in PPTX")
+        if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
+            fail(f"reference_control_candidates item {cid} must use ppt_shape_not_image_asset")
+        if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+            fail(f"reference_control_candidates item {cid} must have at least 2 path_percent points")
+    return len(candidates)
 
 
 def validate_reference_controls(path: Path) -> int:
@@ -651,9 +692,11 @@ def validate_reference_controls(path: Path) -> int:
         if not isinstance(item, dict):
             fail(f"reference_controls item at index {index} must be an object")
         cid = item.get("id", index)
-        for key in ("bbox_percent", "center_percent", "width_percent", "height_percent", "source_id", "target_id", "path_percent", "style_token_id", "editable_in", "render_policy"):
-            if key not in item:
+        for key in ("bbox_percent", "center_percent", "width_percent", "height_percent", "source_id", "target_id", "source_anchor", "target_anchor", "path_percent", "style_token_id", "editable_in", "render_policy"):
+            if key not in item or not str(item.get(key, "")).strip():
                 fail(f"reference_controls item {cid} missing key: {key}")
+        if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+            fail(f"reference_controls item {cid} must have at least 2 path_percent points")
         if str(item.get("editable_in", "")).lower() != "pptx":
             fail(f"reference_controls item {cid} must be editable in PPTX")
         if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
@@ -695,6 +738,23 @@ def validate_composition_quality(path: Path) -> int:
             fail(f"composition_quality_report slot {sid} missing numeric image_slot_area_fill_percent")
         if fill < 95:
             fail(f"composition_quality_report slot {sid} image_slot_area_fill_percent {fill:g} below 95")
+    arrows = data.get("arrows")
+    if not isinstance(arrows, list):
+        fail("composition_quality_report.json must contain arrows list")
+    for item in arrows:
+        if not isinstance(item, dict):
+            fail("composition_quality_report arrow entries must be objects")
+        aid = item.get("arrow_id")
+        if str(item.get("editable_in", "")).lower() != "pptx":
+            fail(f"composition_quality_report arrow {aid} must be editable in PPTX")
+        if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
+            fail(f"composition_quality_report arrow {aid} must render as a PPT shape")
+        try:
+            segment_count = int(item.get("segment_count", 0))
+        except (TypeError, ValueError):
+            fail(f"composition_quality_report arrow {aid} missing numeric segment_count")
+        if segment_count < 1:
+            fail(f"composition_quality_report arrow {aid} rendered no connector segments")
     return len(slots)
 
 
@@ -739,6 +799,19 @@ def main(argv: list[str]) -> int:
     require_front_summary(reference_geometry)
     reference_geometry_count = validate_reference_geometry(reference_geometry)
     ok(f"Validated reference_geometry.json with {reference_geometry_count} slots")
+
+    reference_control_candidates = root / "reference_control_candidates.json"
+    if not reference_control_candidates.exists() or reference_control_candidates.stat().st_size == 0:
+        fail("Missing non-empty reference_control_candidates.json")
+    require_front_summary(reference_control_candidates)
+    candidate_count = validate_reference_control_candidates(reference_control_candidates, root)
+    ok(f"Validated reference_control_candidates.json with {candidate_count} candidates")
+
+    for overlay_name in ("slot_overlay.png", "reference_control_overlay.png"):
+        overlay = root / overlay_name
+        if not overlay.exists() or overlay.stat().st_size == 0:
+            fail(f"Missing non-empty {overlay_name}")
+        ok(f"Found {overlay_name}")
 
     reference_controls = root / "reference_controls.json"
     if not reference_controls.exists() or reference_controls.stat().st_size == 0:
@@ -898,6 +971,7 @@ def main(argv: list[str]) -> int:
         root / "asset_visual_review.json",
         root / "layout_plan.json",
         root / "reference_geometry.json",
+        root / "reference_control_candidates.json",
         root / "reference_controls.json",
         root / "reference_style_profile.json",
         root / "composition_quality_report.json",

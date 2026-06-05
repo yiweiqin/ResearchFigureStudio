@@ -30,6 +30,7 @@ def _write_alignment_review(out_dir: Path, paper_brief: dict, inventory: dict, l
         f"- Reference image: {inventory.get('reference_path')}",
         f"- Slot count: {inventory.get('slot_count')}",
         f"- Locator mode: {layout_plan.get('locator_mode')}",
+        f"- Control localizer: {inventory.get('control_localizer', {}).get('effective_mode')}",
         "",
         "## Layout Checks",
         "- Reference image was parameterized into slot bboxes before asset generation.",
@@ -45,7 +46,7 @@ def _write_alignment_review(out_dir: Path, paper_brief: dict, inventory: dict, l
     write_text(out_dir / "alignment_review.md", text + "\n")
 
 
-def _write_critic_report(out_dir: Path, validation: dict, asset_mode: str, locator_mode: str, asset_review: dict | None = None, visual_critic: dict | None = None) -> None:
+def _write_critic_report(out_dir: Path, validation: dict, asset_mode: str, locator_mode: str, control_localizer_mode: str = "hybrid", asset_review: dict | None = None, visual_critic: dict | None = None) -> None:
     status = "PASS" if validation.get("ok") else "FAIL"
     lines = [
         "# Summary",
@@ -55,6 +56,7 @@ def _write_critic_report(out_dir: Path, validation: dict, asset_mode: str, locat
         f"- Status: {status}",
         f"- Asset mode: {asset_mode}",
         f"- Locator mode: {locator_mode}",
+        f"- Control localizer mode: {control_localizer_mode}",
         f"- Generated asset count: {validation.get('asset_count')}",
         "",
         "## Checks",
@@ -92,6 +94,7 @@ def make_framework(
     asset_review_mode: str = "heuristic",
     locator_mode: str = "heuristic",
     locator_model: str | None = None,
+    control_localizer_mode: str = "hybrid",
     prompt_plan_mode: str = "vlm",
     prompt_plan_model: str | None = None,
     prompt_plan_workers: int = 4,
@@ -108,7 +111,14 @@ def make_framework(
     archived_reference = input_manifest.get("reference_archived") or str(reference)
     loaded = load_text(archived_paper)
     paper_brief = analyze_paper(loaded, out_dir)
-    inventory = analyze_reference(archived_reference, paper_brief, out_dir, slot_count=slot_count, slot_source=slot_source)
+    inventory = analyze_reference(
+        archived_reference,
+        paper_brief,
+        out_dir,
+        slot_count=slot_count,
+        slot_source=slot_source,
+        control_localizer_mode=control_localizer_mode,
+    )
     style = build_style_sheet(paper_brief, inventory, out_dir)
     layout_plan = locate_layout(archived_reference, inventory, style, out_dir, mode=locator_mode, model=locator_model)
     program = build_figure_program(paper_brief, inventory, style, out_dir, layout_plan=layout_plan)
@@ -174,7 +184,7 @@ def make_framework(
     _write_alignment_review(out_dir, paper_brief, inventory, layout_plan, export_result)
     write_text(out_dir / "critic_report.md", "# Summary\nCritic review placeholder created before final validation.\n")
     validation_for_critic = validate_output(out_dir)
-    _write_critic_report(out_dir, validation_for_critic, asset_mode, locator_mode, asset_review=asset_review, visual_critic=visual_critic)
+    _write_critic_report(out_dir, validation_for_critic, asset_mode, locator_mode, control_localizer_mode=control_localizer_mode, asset_review=asset_review, visual_critic=visual_critic)
     validation = validate_output(out_dir)
     return {
         "summary": "ResearchFigureStudio make-framework run result.",
@@ -189,6 +199,7 @@ def make_framework(
         "asset_retries": asset_retries,
         "asset_review_mode": asset_review_mode,
         "locator_mode": locator_mode,
+        "control_localizer_mode": control_localizer_mode,
         "prompt_plan_mode": prompt_plan_mode,
         "prompt_plan_workers": prompt_plan_workers,
         "complexity_profile": complexity_profile,

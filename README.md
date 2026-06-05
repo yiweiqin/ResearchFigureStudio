@@ -10,6 +10,7 @@ The current workflow is optimized for AI/ML/NLP system figures:
 - reference-primary geometry, style, color, and flow alignment
 - 25-50 non-arrow image slots
 - `slot_visual_spec.json` for dense mini-scene/image-block planning
+- AutoFigure-inspired control candidates and overlays for arrow/source-target binding
 - multi-candidate image generation through placeholder, Gemini, or Yunwu image2-compatible APIs
 - deterministic PPTX composition with editable labels, panels, arrows, connectors, and formulas
 - strict validation for no single full diagram, no semantic crop, no vector-only fallback, low blank space, and non-trivial image-block complexity
@@ -32,7 +33,9 @@ be treated as a finished top-tier-paper figure generator.
 ## Help Wanted
 
 The most important open problem is reliable arrow and connector localization.
-Current arrow/control placement is useful but still fragile for complex
+The current implementation now has an initial AutoFigure-inspired
+`reference_control_candidates.json` plus `slot_overlay.png` /
+`reference_control_overlay.png` workflow, but it is still fragile for complex
 scientific diagrams: source-target binding, multi-segment routes, avoiding
 overlap, dashed loops, and preserving reference-image logic need stronger
 methods.
@@ -72,6 +75,7 @@ rfs make-framework `
   --complexity-profile reference-dense `
   --candidates-per-slot 2 `
   --locator-mode heuristic `
+  --control-localizer-mode heuristic `
   --prompt-plan-mode heuristic `
   --asset-mode placeholder `
   --asset-workers 4 `
@@ -95,6 +99,7 @@ $env:GEMINI_API_KEY=$env:API_KEY
 $env:GEMINI_GEN_IMG_URL='https://yunwu.ai/v1beta/models/gemini-2.5-flash-image:generateContent'
 $env:MODEL_VLM='gemini-3-pro-preview-thinking'
 $env:RFS_PROMPT_PLANNER_MODEL=$env:MODEL_VLM
+$env:RFS_CONTROL_LOCALIZER_MODEL=$env:MODEL_VLM
 $env:RFS_IMAGE_MODEL='image-2'
 ```
 
@@ -110,6 +115,7 @@ rfs make-framework `
   --complexity-profile reference-dense `
   --candidates-per-slot 4 `
   --locator-mode vlm `
+  --control-localizer-mode hybrid `
   --prompt-plan-mode vlm `
   --prompt-plan-workers 8 `
   --asset-mode image2 `
@@ -125,7 +131,8 @@ Use lower worker counts if your API provider rate-limits requests.
 ## Workflow
 
 ```text
-input archive -> paper brief -> reference_geometry.json/reference_controls.json ->
+input archive -> paper brief -> reference_geometry.json/reference_control_candidates.json ->
+slot_overlay.png/reference_control_overlay.png -> reference_controls.json ->
 reference_style_profile.json/style_sheet.md -> layout_plan.json -> figure_program.json ->
 slot_visual_spec.json -> reference_slot_prompt_brief.json -> slot_prompt_plan.json ->
 multi-candidate slot assets -> asset_quality_report.json -> asset_complexity_report.json ->
@@ -138,6 +145,7 @@ Key rules:
 - The reference image is the source of truth for layout, local visual object choice, color, visual rhythm, and arrow logic when `--slot-source reference-primary` is used.
 - The paper provides scientific terminology and concept mapping; it should not override the reference image into a generic template.
 - Arrows, connector lines, dashed loops, panel frames, labels, formulas, and critical text are PPT editable objects, not image assets.
+- Arrow/control localization is reference-driven: CV detects candidates, overlays label them, optional VLM binding assigns source/target semantics, and the PPT compiler renders editable connectors.
 - Normal non-legend slots should be dense mini scientific scenes/cards with layered objects and micro-details, not simple centered icons.
 - Generated images are inserted with no semantic cropping.
 
@@ -148,6 +156,9 @@ A valid image-rich framework run should include:
 - `input_manifest.json`
 - `paper_brief.md` / `paper_brief.json`
 - `reference_geometry.json`
+- `reference_control_candidates.json`
+- `slot_overlay.png`
+- `reference_control_overlay.png`
 - `reference_controls.json`
 - `reference_style_profile.json`
 - `style_sheet.md`

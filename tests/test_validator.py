@@ -19,6 +19,8 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
     crop_dir.mkdir(parents=True)
     Image.new("RGB", (64, 64), "white").save(root / "asset_contact_sheet.png")
     Image.new("RGB", (64, 64), "white").save(root / "asset_candidate_contact_sheet.png")
+    Image.new("RGB", (64, 64), "white").save(root / "slot_overlay.png")
+    Image.new("RGB", (64, 64), "white").save(root / "reference_control_overlay.png")
     (root / "editable_composition.pptx").write_bytes(b"pptx-placeholder")
     (root / "review.pdf").write_bytes(b"pdf-placeholder")
     Image.new("RGB", (64, 64), "white").save(root / "final_600dpi.png")
@@ -228,7 +230,78 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         })
 
     panels = [{"id": "panel_a", "title": "Panel A", "bbox_percent": {"x": 0.03, "y": 0.03, "w": 0.9, "h": 0.5}, "editable_in": "pptx"}]
-    arrows = [{"id": "flow_a", "source": "panel_a", "target": "panel_a", "source_id": "panel_a", "target_id": "panel_a", "path_percent": [[0.1, 0.1], [0.2, 0.1]], "style_token_id": "panel_a_header_001", "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset"}]
+    arrows = [
+        {
+            "id": "flow_a",
+            "source": "slot_00",
+            "target": "slot_01",
+            "source_id": "slot_00",
+            "target_id": "slot_01",
+            "source_anchor": "right_mid",
+            "target_anchor": "left_mid",
+            "path_percent": [[0.1, 0.1], [0.2, 0.1]],
+            "style_token_id": "panel_a_header_001",
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+            "control_kind": "straight_arrow",
+        },
+        {
+            "id": "loop_a",
+            "source": "slot_02",
+            "target": "slot_03",
+            "source_id": "slot_02",
+            "target_id": "slot_03",
+            "source_anchor": "top_mid",
+            "target_anchor": "bottom_mid",
+            "path_percent": [[0.3, 0.2], [0.35, 0.15], [0.4, 0.2], [0.35, 0.25], [0.3, 0.2]],
+            "style_token_id": "panel_a_header_001",
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+            "control_kind": "dashed_loop",
+        },
+        {
+            "id": "multi_a",
+            "source": "slot_04",
+            "target": "slot_05",
+            "source_id": "slot_04",
+            "target_id": "slot_05",
+            "source_anchor": "right_mid",
+            "target_anchor": "left_mid",
+            "path_percent": [[0.45, 0.3], [0.52, 0.3], [0.52, 0.42], [0.62, 0.42]],
+            "style_token_id": "panel_a_header_001",
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+            "control_kind": "elbow_connector",
+        },
+    ]
+    control_items = []
+    for arrow in arrows:
+        xs = [point[0] for point in arrow["path_percent"]]
+        ys = [point[1] for point in arrow["path_percent"]]
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+        w, h = max(0.001, x1 - x0), max(0.001, y1 - y0)
+        control_items.append({
+            "id": arrow["id"],
+            "type": "ppt_control",
+            "control_kind": arrow["control_kind"],
+            "bbox_percent": {"x": round(x0, 4), "y": round(y0, 4), "w": round(w, 4), "h": round(h, 4)},
+            "center_percent": {"x": round(x0 + w / 2, 4), "y": round(y0 + h / 2, 4)},
+            "width_percent": round(w, 4),
+            "height_percent": round(h, 4),
+            "aspect_ratio_decimal": round(w / h, 3),
+            "aspect_ratio_w_h": f"{w / h:.3f}:1.000",
+            "target_pixels_exact": {"width": round(800 * w, 3), "height": round(800 * h, 3)},
+            "source_id": arrow["source_id"],
+            "target_id": arrow["target_id"],
+            "source_anchor": arrow["source_anchor"],
+            "target_anchor": arrow["target_anchor"],
+            "path_percent": arrow["path_percent"],
+            "style_token_id": arrow["style_token_id"],
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+            "candidate_label": f"AR{len(control_items)+1:02d}",
+        })
     groups = [{"id": "group_a", "members": ["panel_a"], "editable_in": "pptx"}]
     labels = [{"id": "label_a", "text": "Panel A", "target_id": "panel_a", "editable_in": "pptx"}]
     reference_palette = ["#2D6FB7", "#E17721", "#6B57C8", "#1B9A94"]
@@ -248,43 +321,48 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
             "aspect_ratio_w_h": "1.800:1.000",
             "target_pixels_exact": {"width": 720.0, "height": 400.0},
         }],
-        "controls": [{
-            "id": "flow_a",
-            "type": "ppt_control",
-            "bbox_percent": {"x": 0.10, "y": 0.10, "w": 0.10, "h": 0.02},
-            "center_percent": {"x": 0.15, "y": 0.11},
-            "width_percent": 0.10,
-            "height_percent": 0.02,
-            "aspect_ratio_decimal": 5.0,
-            "aspect_ratio_w_h": "5.000:1.000",
-            "target_pixels_exact": {"width": 80.0, "height": 16.0},
-            "source_id": "panel_a",
-            "target_id": "panel_a",
-            "path_percent": [[0.1, 0.1], [0.2, 0.1]],
-            "style_token_id": "panel_a_header_001",
-            "editable_in": "pptx",
-            "render_policy": "ppt_shape_not_image_asset",
-        }],
+        "controls": control_items,
+        "control_localizer": {
+            "requested_mode": "heuristic",
+            "effective_mode": "heuristic",
+            "candidate_count": len(control_items),
+            "candidate_path": "reference_control_candidates.json",
+            "slot_overlay_path": "slot_overlay.png",
+            "control_overlay_path": "reference_control_overlay.png",
+            "warnings": [],
+        },
         "reference_palette": reference_palette,
         "color_tokens": color_tokens,
     })
+    _write_json(root / "reference_control_candidates.json", {
+        "summary": "Reference control candidates.",
+        "requested_mode": "heuristic",
+        "effective_mode": "heuristic",
+        "slot_overlay_path": "slot_overlay.png",
+        "control_overlay_path": "reference_control_overlay.png",
+        "candidate_count": len(control_items),
+        "candidates": control_items,
+        "warnings": [],
+    })
     _write_json(root / "reference_controls.json", {
         "summary": "Reference controls.",
-        "controls": [{
-            "id": "flow_a",
-            "bbox_percent": {"x": 0.10, "y": 0.10, "w": 0.10, "h": 0.02},
-            "center_percent": {"x": 0.15, "y": 0.11},
-            "width_percent": 0.10,
-            "height_percent": 0.02,
-            "source_id": "panel_a",
-            "target_id": "panel_a",
-            "path_percent": [[0.1, 0.1], [0.2, 0.1]],
-            "style_token_id": "panel_a_header_001",
-            "editable_in": "pptx",
-            "render_policy": "ppt_shape_not_image_asset",
-        }],
+        "requested_mode": "heuristic",
+        "effective_mode": "heuristic",
+        "candidate_path": "reference_control_candidates.json",
+        "slot_overlay_path": "slot_overlay.png",
+        "control_overlay_path": "reference_control_overlay.png",
+        "controls": control_items,
+        "ppt_arrows": control_items,
     })
-    _write_json(root / "slot_inventory.json", {"summary": "Slot inventory.", "slot_count": asset_count, "slots": slots})
+    _write_json(root / "slot_inventory.json", {
+        "summary": "Slot inventory.",
+        "slot_count": asset_count,
+        "slots": slots,
+        "reference_control_candidates_path": "reference_control_candidates.json",
+        "slot_overlay_path": "slot_overlay.png",
+        "reference_control_overlay_path": "reference_control_overlay.png",
+        "control_localizer": {"requested_mode": "heuristic", "effective_mode": "heuristic"},
+    })
     _write_json(root / "reference_style_profile.json", {
         "summary": "Reference style profile.",
         "style_summary": "Reference-first scientific style.",
@@ -299,7 +377,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         "color_tokens": color_tokens,
     })
     (root / "style_sheet.md").write_text("# Summary\nStyle sheet.\n", encoding="utf-8")
-    _write_json(root / "layout_plan.json", {"summary": "Layout plan.", "panels": panels, "slots": slots, "arrows": arrows})
+    _write_json(root / "layout_plan.json", {"summary": "Layout plan.", "panels": panels, "slots": slots, "arrows": arrows, "control_shapes": control_items})
     _write_json(root / "figure_program.json", {
         "summary": "Figure program.",
         "canvas": {},
@@ -310,7 +388,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         "assets": [{"id": item["asset_id"], "slot_id": item["slot_id"], "reference_crop_path": f"reference_slot_crops/{item['slot_id']}.png", "visual_spec_id": f"visual_spec_{item['slot_id']}"} for item in asset_items],
         "labels": labels,
         "arrows": arrows,
-        "control_shapes": arrows,
+        "control_shapes": control_items,
         "groups": groups,
         "export_targets": [{"type": "pptx", "path": "editable_composition.pptx"}],
     })
@@ -336,7 +414,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
     (root / "prompts.md").write_text("# Summary\nPrompts.\n", encoding="utf-8")
     _write_json(root / "asset_quality_report.json", {"summary": "Asset quality.", "assets": asset_items})
     _write_json(root / "asset_complexity_report.json", {"summary": "Asset complexity.", "assets": complexity_items})
-    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items})
+    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items, "arrows": [{"arrow_id": item["id"], "segment_count": max(1, len(item["path_percent"]) - 1), "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset"} for item in arrows]})
     _write_json(root / "asset_visual_review.json", {"summary": "Asset review.", "status": "pass", "issues": []})
     (root / "alignment_review.md").write_text("# Summary\nAlignment.\n", encoding="utf-8")
     (root / "critic_report.md").write_text("# Summary\nCritic.\n", encoding="utf-8")

@@ -197,10 +197,19 @@ def _arrow_endpoints(source: dict, target: dict, canvas_w: float, canvas_h: floa
     return sx, s_top - 0.03, tx, t_top + t_h + 0.03
 
 
-def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float) -> None:
+def _arrow_points_from_path(path: list, width_in: float, height_in: float) -> list[tuple[float, float]]:
+    points = []
+    for point in path:
+        if isinstance(point, list) and len(point) >= 2:
+            points.append((float(point[0]) * width_in, float(point[1]) * height_in))
+    return points
+
+
+def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float) -> list[dict]:
     objects_by_id = _object_map(program)
     style = program.get("style", {}) if isinstance(program.get("style"), dict) else {}
     token_map = {str(item.get("token_id")): item for item in style.get("color_tokens", []) if isinstance(item, dict)}
+    rendered: list[dict] = []
     for arrow in program.get("arrows", []):
         if arrow.get("type") == "custom_bus":
             continue
@@ -208,20 +217,37 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
         target = objects_by_id.get(arrow.get("target") or arrow.get("target_id"))
         path = arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else []
         if len(path) >= 2 and all(isinstance(point, list) and len(point) >= 2 for point in path):
-            x1, y1 = float(path[0][0]) * width_in, float(path[0][1]) * height_in
-            x2, y2 = float(path[-1][0]) * width_in, float(path[-1][1]) * height_in
+            points = _arrow_points_from_path(path, width_in, height_in)
         elif source and target:
             x1, y1, x2, y2 = _arrow_endpoints(source, target, width_in, height_in)
+            points = [(x1, y1), (x2, y2)]
         else:
             continue
         token = token_map.get(str(arrow.get("style_token_id")))
         arrow_color = str(token.get("hex")) if token else "#1F6F8B"
-        connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
-        connector.line.color.rgb = _rgb(arrow_color)
-        connector.line.width = Pt(1.55 if source in program.get("slots", []) or target in program.get("slots", []) else 1.8)
-        if str(arrow.get("control_kind") or arrow.get("type", "")).lower() in {"dashed_loop", "dashed", "loop"}:
-            connector.line.dash_style = MSO_LINE_DASH_STYLE.DASH
-        _apply_arrow(connector, "sm")
+        control_kind = str(arrow.get("control_kind") or arrow.get("type", "")).lower()
+        dashed = control_kind in {"dashed_loop", "dashed", "loop"}
+        line_width = float(arrow.get("stroke_width_pt") or style.get("arrow_weight_pt") or 1.7)
+        segment_count = 0
+        for idx, ((x1, y1), (x2, y2)) in enumerate(zip(points[:-1], points[1:])):
+            connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+            connector.line.color.rgb = _rgb(arrow_color)
+            connector.line.width = Pt(line_width)
+            if dashed:
+                connector.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+            if idx == len(points) - 2:
+                _apply_arrow(connector, "sm")
+            segment_count += 1
+        rendered.append({
+            "arrow_id": arrow.get("id"),
+            "control_kind": control_kind or "straight_arrow",
+            "segment_count": segment_count,
+            "point_count": len(points),
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+            "status": "ok" if segment_count else "not_rendered",
+        })
+    return rendered
 
 
 def _ocean_label(text: str) -> str:
@@ -269,7 +295,7 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
         header = _add_round_rect(slide, x, y, w, header_h, header_color, header_color, width_pt=0.8)
         _set_text(header, panel["title"], font_size=9 if w < 2.0 else 10, bold=True, color="#FFFFFF")
 
-    _draw_program_arrows(slide, program, width_in, height_in)
+    rendered_arrows = _draw_program_arrows(slide, program, width_in, height_in)
 
     # Slot image layer and editable captions.
     composition_items = []
@@ -370,5 +396,6 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
             "caption_inside_image_slot_allowed": False,
         },
         "slots": composition_items,
+        "arrows": rendered_arrows,
     })
     return pptx_path

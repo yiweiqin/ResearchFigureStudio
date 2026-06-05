@@ -37,7 +37,8 @@ Minimum top-level keys:
 - `labels`: PPT-editable text objects, including module names, variables,
   captions, panel IDs, and formulas
 - `arrows`: PPT-editable connectors with `source_id`, `target_id`,
-  `path_percent`, `style_token_id`, `editable_in: "pptx"`, and
+  `source_anchor`, `target_anchor`, multi-point `path_percent`,
+  `style_token_id`, `editable_in: "pptx"`, and
   `render_policy: "ppt_shape_not_image_asset"`; arrows, connector lines,
   dashed loops, and transition arrows must never be generated image assets
 - `control_shapes`: measured non-image controls from `reference_controls.json`
@@ -126,7 +127,20 @@ Minimum top-level keys:
     }
   ],
   "labels": [],
-  "arrows": [],
+  "arrows": [
+    {
+      "id": "AR01",
+      "source_id": "slot_scene_card",
+      "target_id": "slot_next_card",
+      "source_anchor": "right_mid",
+      "target_anchor": "left_mid",
+      "control_kind": "elbow_connector",
+      "path_percent": [[0.16, 0.24], [0.24, 0.24], [0.24, 0.38], [0.32, 0.38]],
+      "style_token_id": "arrow_orange_001",
+      "editable_in": "pptx",
+      "render_policy": "ppt_shape_not_image_asset"
+    }
+  ],
   "groups": [],
   "export_targets": [
     {
@@ -157,6 +171,10 @@ Minimum top-level keys:
   JSON, but must not write arbitrary PPT code or generate a full diagram.
 - `labels`, `arrows`, `groups`, panels, formulas, variables, metrics, and panel
   IDs must be marked as PPT editable objects, usually with `editable_in: "pptx"`.
+- `arrows` must originate from `reference_controls.json` when a reference image
+  exists. Heuristic arrows are a fallback only. Every arrow must include
+  non-empty source/target IDs, source/target anchors, at least two normalized
+  `path_percent` points, and a reference color token.
 - `assets` must be slot-level blocks, not one full generated diagram. Asset IDs
   and slot IDs must not contain arrow/control semantics such as `arrow`,
   `transition_arrow`, `dashed_arc`, `dashed_arrows`, or `graph_connector`.

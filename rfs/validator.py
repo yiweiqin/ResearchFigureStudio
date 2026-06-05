@@ -7,6 +7,9 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 REQUIRED = [
     "input_manifest.json",
     "reference_geometry.json",
+    "reference_control_candidates.json",
+    "slot_overlay.png",
+    "reference_control_overlay.png",
     "reference_controls.json",
     "slot_inventory.json",
     "reference_style_profile.json",
@@ -146,6 +149,14 @@ def validate_output(out_dir: str | Path) -> dict:
         for item in geometry.get("controls", []):
             if isinstance(item, dict):
                 _validate_geometry_item(item, f"reference_geometry control {item.get('id')}", errors)
+                if not str(item.get("source_id", "")).strip():
+                    errors.append(f"reference_geometry control {item.get('id')} missing source_id")
+                if not str(item.get("target_id", "")).strip():
+                    errors.append(f"reference_geometry control {item.get('id')} missing target_id")
+                if not str(item.get("source_anchor", "")).strip():
+                    errors.append(f"reference_geometry control {item.get('id')} missing source_anchor")
+                if not str(item.get("target_anchor", "")).strip():
+                    errors.append(f"reference_geometry control {item.get('id')} missing target_anchor")
                 if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
                     errors.append(f"reference_geometry control {item.get('id')} must render as a PPT shape, not an image asset")
         palette = geometry.get("reference_palette", [])
@@ -157,15 +168,41 @@ def validate_output(out_dir: str | Path) -> dict:
         errors.append(f"Invalid reference_geometry.json: {exc}")
 
     try:
+        candidates_doc = json.loads((root / "reference_control_candidates.json").read_text(encoding="utf-8"))
+        if not str(candidates_doc.get("effective_mode", "")).strip():
+            errors.append("reference_control_candidates.json missing effective_mode")
+        if not isinstance(candidates_doc.get("candidates"), list):
+            errors.append("reference_control_candidates.json candidates must be a list")
+        if str(candidates_doc.get("slot_overlay_path", "")).strip() and not (root / str(candidates_doc.get("slot_overlay_path"))).exists():
+            errors.append("reference_control_candidates.json slot_overlay_path does not exist")
+        if str(candidates_doc.get("control_overlay_path", "")).strip() and not (root / str(candidates_doc.get("control_overlay_path"))).exists():
+            errors.append("reference_control_candidates.json control_overlay_path does not exist")
+        for item in candidates_doc.get("candidates", []) if isinstance(candidates_doc.get("candidates"), list) else []:
+            cid = item.get("id")
+            for key in ["bbox_percent", "center_percent", "width_percent", "height_percent", "path_percent", "editable_in", "render_policy"]:
+                if key not in item:
+                    errors.append(f"reference_control_candidates item {cid} missing {key}")
+            if _arrow_like_asset_id(item.get("asset_id")):
+                errors.append(f"reference_control_candidates item {cid} must not bind to an image asset")
+    except Exception as exc:
+        errors.append(f"Invalid reference_control_candidates.json: {exc}")
+
+    try:
         controls_doc = json.loads((root / "reference_controls.json").read_text(encoding="utf-8"))
         controls = controls_doc.get("controls", [])
         if not isinstance(controls, list):
             errors.append("reference_controls.json controls must be a list")
         for item in controls if isinstance(controls, list) else []:
             cid = item.get("id")
-            for key in ["bbox_percent", "center_percent", "width_percent", "height_percent", "source_id", "target_id", "path_percent", "style_token_id", "editable_in", "render_policy"]:
+            for key in ["bbox_percent", "center_percent", "width_percent", "height_percent", "source_id", "target_id", "source_anchor", "target_anchor", "path_percent", "style_token_id", "editable_in", "render_policy"]:
                 if key not in item:
                     errors.append(f"reference_controls item {cid} missing {key}")
+            if not str(item.get("source_id", "")).strip():
+                errors.append(f"reference_controls item {cid} missing non-empty source_id")
+            if not str(item.get("target_id", "")).strip():
+                errors.append(f"reference_controls item {cid} missing non-empty target_id")
+            if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+                errors.append(f"reference_controls item {cid} must have at least 2 path_percent points")
             if str(item.get("editable_in", "")).lower() != "pptx":
                 errors.append(f"reference_controls item {cid} must be editable in PPTX")
             if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
@@ -260,8 +297,12 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"Arrow/control {arrow.get('id')} missing source_id")
             if not str(arrow.get("target_id") or arrow.get("target") or "").strip():
                 errors.append(f"Arrow/control {arrow.get('id')} missing target_id")
-            if not isinstance(arrow.get("path_percent"), list) or not arrow.get("path_percent"):
-                errors.append(f"Arrow/control {arrow.get('id')} missing path_percent")
+            if not isinstance(arrow.get("path_percent"), list) or len(arrow.get("path_percent", [])) < 2:
+                errors.append(f"Arrow/control {arrow.get('id')} must have at least 2 path_percent points")
+            if not str(arrow.get("source_anchor", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing source_anchor")
+            if not str(arrow.get("target_anchor", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing target_anchor")
             if not str(arrow.get("style_token_id", "")).strip():
                 errors.append(f"Arrow/control {arrow.get('id')} missing style_token_id")
             if str(arrow.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
@@ -275,6 +316,10 @@ def validate_output(out_dir: str | Path) -> dict:
         distinct = {str(c).upper() for c in palette if str(c).strip()}
         if len(distinct) < 4:
             errors.append("figure_program.json style must preserve reference-derived palette tokens, not a hardcoded fallback template")
+        token_ids = {str(item.get("token_id")) for item in style.get("color_tokens", []) if isinstance(item, dict)}
+        for arrow in program.get("arrows", []):
+            if str(arrow.get("style_token_id")) not in token_ids:
+                errors.append(f"Arrow/control {arrow.get('id')} style_token_id is not present in reference color_tokens")
     except Exception as exc:
         errors.append(f"Invalid figure_program.json: {exc}")
 
@@ -428,6 +473,14 @@ def validate_output(out_dir: str | Path) -> dict:
             fill = float(item.get("image_slot_area_fill_percent", 0))
             if fill < 95:
                 errors.append(f"Composition slot {sid} image fills {fill}% of slot, below 95%")
+        for item in comp.get("arrows", []) if isinstance(comp.get("arrows"), list) else []:
+            aid = item.get("arrow_id")
+            if str(item.get("editable_in", "")).lower() != "pptx":
+                errors.append(f"Composition arrow {aid} is not editable in PPTX")
+            if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
+                errors.append(f"Composition arrow {aid} must render as a PPT shape")
+            if int(item.get("segment_count", 0)) < 1:
+                errors.append(f"Composition arrow {aid} rendered no connector segments")
     except Exception as exc:
         errors.append(f"Invalid composition_quality_report.json: {exc}")
 

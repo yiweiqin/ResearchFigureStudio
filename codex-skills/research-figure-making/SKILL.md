@@ -61,7 +61,7 @@ When `D:\ResearchFigureStudio` and the `rfs` CLI are available, use them as the
 default implementation for image-rich framework figures:
 
 ```powershell
-rfs make-framework --paper <paper> --reference <reference_image> --out <output_dir> --slot-count 40 --slot-source reference-primary --complexity-profile reference-dense --candidates-per-slot 4 --locator-mode vlm --prompt-plan-mode vlm --prompt-plan-workers 8 --asset-mode image2 --asset-workers 6 --asset-retries 3 --asset-review-mode heuristic --critic-mode heuristic
+rfs make-framework --paper <paper> --reference <reference_image> --out <output_dir> --slot-count 40 --slot-source reference-primary --complexity-profile reference-dense --candidates-per-slot 4 --locator-mode vlm --control-localizer-mode hybrid --prompt-plan-mode vlm --prompt-plan-workers 8 --asset-mode image2 --asset-workers 6 --asset-retries 3 --asset-review-mode heuristic --critic-mode heuristic
 ```
 
 Use `--asset-mode image2` for real image generation through the Yunwu
@@ -82,6 +82,13 @@ local slot before producing `slot_prompt_plan.json`. Use heuristic prompt
 planning only for offline engineering validation. Use `--prompt-plan-workers`
 to parallelize per-slot VLM prompt planning; use `--asset-workers` separately to
 parallelize Yunwu image2/Gemini image generation.
+Use `--control-localizer-mode hybrid` by default for arrow and connector
+localization. This AutoFigure-inspired stage writes
+`reference_control_candidates.json`, `slot_overlay.png`, and
+`reference_control_overlay.png`; VLM binding may assign source-target semantics
+from those overlays, while the fallback heuristic keeps the workflow offline.
+The VLM may patch arrow IDs, anchors, and normalized paths only; it must not
+write PPT code, rasterize arrows, or redraw the full figure.
 
 Before execution, read these references in this order:
 
@@ -114,10 +121,15 @@ Execution checklist:
    decimals where numeric precision matters. `target_pixels` must equal
    `target_pixels_exact`; use `generation_min_pixels` only for the image
    generator's minimum resolution safeguard.
-   Also write `reference_controls.json` for measured arrows, connector lines,
-   dashed loops, transition arrows, framework shapes, and text regions. These
-   controls must record geometry, source/target logic, path, color token, and
-   `render_policy: ppt_shape_not_image_asset`.
+   Also write `reference_control_candidates.json`,
+   `slot_overlay.png`, `reference_control_overlay.png`, and
+   `reference_controls.json` for measured arrows, connector lines, dashed
+   loops, transition arrows, framework shapes, and text regions. Control
+   candidates are analogous to a boxlib/overlay layer: they identify possible
+   arrows and connectors from the reference image before semantic binding.
+   Bound controls must record geometry, `source_id`, `target_id`,
+   `source_anchor`, `target_anchor`, multi-point `path_percent`, color token,
+   and `render_policy: ppt_shape_not_image_asset`.
 3. Create a slot inventory before using image2. Default to 25-50 image slots for
    a normal paper system figure. This count means non-arrow image slots only;
    arrows, connector lines, dashed loops, panel frames, and titles must not be
@@ -194,6 +206,7 @@ Execution checklist:
 Hard workflow order:
 
 `input archive -> paper brief -> reference slot/control analysis -> reference_geometry.json ->
+reference_control_candidates.json -> slot_overlay.png/reference_control_overlay.png ->
 reference_controls.json -> reference_style_profile.json/style sheet ->
 layout_plan.json -> figure_program.json -> slot_visual_spec.json ->
 reference_slot_prompt_brief.json -> slot_prompt_plan.json -> image2/Gemini slot prompts -> generated
@@ -232,6 +245,9 @@ Required output files for image-rich framework figures:
 
 - `slot_inventory.json` or `slot_inventory.md`
 - `reference_geometry.json`
+- `reference_control_candidates.json`
+- `slot_overlay.png`
+- `reference_control_overlay.png`
 - `reference_controls.json`
 - `reference_style_profile.json`
 - `style_sheet.md` or `style_sheet.json`
@@ -275,8 +291,13 @@ or `style_drift`.
 Validation must fail when arrow, dashed loop, transition, or connector elements
 appear in `slots`/`assets`; they must appear in `reference_controls.json` and
 `figure_program.json` as editable PPT controls with source/target logic and
-style tokens. Validation must also fail when image slots lack local reference
-crops, local color token ids, or `reference_style_profile.json` grounding.
+style tokens. Validation must also fail when `reference_control_candidates.json`
+or the slot/control overlay images are missing, when a bound control lacks
+`source_id`, `target_id`, `source_anchor`, `target_anchor`, or at least two
+`path_percent` points, or when composition reports that a control was not
+rendered as an editable PPT connector. Validation must also fail when image
+slots lack local reference crops, local color token ids, or
+`reference_style_profile.json` grounding.
 
 ## Core Workflow
 
