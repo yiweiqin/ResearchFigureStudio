@@ -16,6 +16,31 @@ The current workflow is optimized for AI/ML/NLP system figures:
 
 This repository does not include API keys, papers, reference images, generated outputs, or local run artifacts.
 
+## Current Capability Boundary
+
+ResearchFigureStudio is an early engineering prototype. Its current practical
+ability is limited to placing many small generated image blocks into precise
+PowerPoint positions, then keeping surrounding labels, arrows, panels, formulas,
+and grouping elements editable in PPTX.
+
+It does **not** yet solve the harder goal of generating truly publication-grade,
+fully editable scientific figures end to end. The image blocks themselves are
+still raster assets, not editable scientific vector objects. The system can
+produce a PPTX composition that is easier to manually revise, but it should not
+be treated as a finished top-tier-paper figure generator.
+
+## Help Wanted
+
+The most important open problem is reliable arrow and connector localization.
+Current arrow/control placement is useful but still fragile for complex
+scientific diagrams: source-target binding, multi-segment routes, avoiding
+overlap, dashed loops, and preserving reference-image logic need stronger
+methods.
+
+If you have experience with vision-language layout parsing, diagram structure
+reconstruction, PowerPoint object routing, graph drawing, or editable scientific
+figure generation, guidance and contributions are very welcome.
+
 ## Installation
 
 ```powershell
