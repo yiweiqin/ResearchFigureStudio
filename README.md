@@ -41,6 +41,11 @@ If you have experience with vision-language layout parsing, diagram structure
 reconstruction, PowerPoint object routing, graph drawing, or editable scientific
 figure generation, guidance and contributions are very welcome.
 
+![Current capability vs target capability](docs/assets/current-vs-target.png)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and
+[docs/help-wanted.md](docs/help-wanted.md) for concrete contribution areas.
+
 ## Installation
 
 ```powershell
