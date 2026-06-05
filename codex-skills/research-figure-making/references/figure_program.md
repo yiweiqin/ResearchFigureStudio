@@ -1,0 +1,196 @@
+# Figure Program
+
+## Summary
+
+Use `figure_program.json` as the structured intermediate representation for an
+image-rich framework figure. It is required before composition or layout
+scripting. The program keeps the figure editable and auditable instead of relying
+on ad hoc placement code.
+
+## Required File
+
+Write `figure_program.json` in the output directory.
+
+Minimum top-level keys:
+
+- `summary`: one short overview of the program and output route
+- `canvas`: size, aspect ratio, units, background, margin, and export scale
+- `locator`: locator mode, reference path, and source `layout_plan.json`
+- `panels`: macro containers with IDs, paper concepts, bbox, visual role,
+  `editable_in: "pptx"`, and editable layer style
+- `slots`: image2 asset slots with IDs, parent panel, paper concept,
+  `bbox_percent`, `center_percent`, `width_percent`, `height_percent`,
+  `aspect_ratio_decimal`, `aspect_ratio_w_h`, `target_canvas_ratio`,
+  `target_pixels`, `target_pixels_exact`, `generation_min_pixels`,
+  `safe_area_percent`, `fit_policy`,
+  `text_policy`, visual density, prompt ID, prompt plan ID, asset ID,
+  `target_content_fill_percent`, `min_content_fill_percent`,
+  `max_empty_margin_percent`, `composition_type`, `blank_space_policy`,
+  `slot_frame_policy`, `visual_spec_id`, `complexity_kind`,
+  `foreground_subject`, `secondary_objects`, `micro_details`,
+  `background_fill_elements`, `scientific_mechanism_detail`,
+  `required_visual_complexity`, `forbidden_simplification`, optional
+  `slot_function`, and optional VLM-planned `image_prompt_core`
+- `assets`: generated image files with slot ID, selected candidate, source
+  prompt, quality status, local reference crop path, local color token IDs, and
+  no-crop fit status plus `visual_spec_id`
+- `labels`: PPT-editable text objects, including module names, variables,
+  captions, panel IDs, and formulas
+- `arrows`: PPT-editable connectors with `source_id`, `target_id`,
+  `path_percent`, `style_token_id`, `editable_in: "pptx"`, and
+  `render_policy: "ppt_shape_not_image_asset"`; arrows, connector lines,
+  dashed loops, and transition arrows must never be generated image assets
+- `control_shapes`: measured non-image controls from `reference_controls.json`
+- `groups`: PPT-editable visual groupings, lanes, resource libraries, loops, or
+  stages
+- `export_targets`: must include `editable_composition.pptx` plus final PDF and
+  600 DPI PNG/TIFF exports; SVG is optional
+
+## Minimal Shape
+
+```json
+{
+  "summary": "PPTX-first image-rich framework figure assembled from slot-level image assets.",
+  "canvas": {
+    "width": 1800,
+    "height": 1050,
+    "aspect_ratio": 1.714,
+    "units": "px",
+    "background": "paper_tint"
+  },
+  "locator": {
+    "mode": "vlm_or_heuristic",
+    "layout_plan_path": "layout_plan.json",
+    "reference_path": "inputs/reference.png"
+  },
+  "panels": [
+    {
+      "id": "panel_method_stage",
+      "paper_concept": "paper-specific stage name",
+      "bbox_percent": {"x": 0.04, "y": 0.12, "w": 0.22, "h": 0.34},
+      "editable_in": "pptx"
+    }
+  ],
+  "slots": [
+    {
+      "id": "slot_scene_card",
+      "parent_panel": "panel_method_stage",
+      "paper_concept": "paper-specific visual unit",
+      "bbox_percent": {"x": 0.06, "y": 0.18, "w": 0.10, "h": 0.12},
+      "center_percent": {"x": 0.11, "y": 0.24},
+      "width_percent": 0.10,
+      "height_percent": 0.12,
+      "aspect_ratio_decimal": 1.429,
+      "aspect_ratio_w_h": "1.429:1.000",
+      "target_canvas_ratio": "1.429:1.000",
+      "target_pixels": {"width": 180.000, "height": 126.000},
+      "target_pixels_exact": {"width": 180.000, "height": 126.000},
+      "generation_min_pixels": {"width": 512, "height": 512},
+      "safe_area_percent": 92,
+      "fit_policy": "contain",
+      "text_policy": "decorative_only",
+      "target_content_fill_percent": 93,
+      "min_content_fill_percent": 85,
+      "max_empty_margin_percent": 10,
+      "composition_type": "full_bleed_card",
+      "slot_frame_policy": "frameless_slot",
+      "blank_space_policy": "minimal_blank_canvas",
+      "visual_spec_id": "visual_spec_slot_scene_card",
+      "complexity_kind": "pipeline_module",
+      "foreground_subject": "dominant local reference object",
+      "secondary_objects": ["supporting object", "input-output cue"],
+      "micro_details": ["small glyph texture", "internal line detail"],
+      "background_fill_elements": ["edge-to-edge local color surface"],
+      "scientific_mechanism_detail": "show the operation as a layered mechanism",
+      "required_visual_complexity": "dense",
+      "forbidden_simplification": ["simple icon", "centered icon", "clean blank background"],
+      "slot_function": "what this small image block does in the paper figure",
+      "prompt_plan_id": "prompt_plan_slot_scene_card",
+      "image_prompt_core": "VLM-planned concrete prompt core for the slot image",
+      "reference_crop_path": "reference_slot_crops/slot_scene_card.png",
+      "reference_style_profile_path": "reference_style_profile.json",
+      "local_color_token_ids": ["slot_scene_card_local_001"],
+      "prompt_id": "prompt_scene_card",
+      "asset_id": "asset_scene_card"
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset_scene_card",
+      "slot_id": "slot_scene_card",
+      "path": "assets/slot_scene_card.png",
+      "reference_crop_path": "reference_slot_crops/slot_scene_card.png",
+      "visual_spec_id": "visual_spec_slot_scene_card",
+      "local_color_token_ids": ["slot_scene_card_local_001"],
+      "quality_status": "ok_no_crop"
+    }
+  ],
+  "labels": [],
+  "arrows": [],
+  "groups": [],
+  "export_targets": [
+    {
+      "type": "pptx",
+      "path": "editable_composition.pptx",
+      "role": "main_editable_source"
+    },
+    {
+      "type": "png",
+      "path": "final_600dpi.png",
+      "dpi": 600,
+      "role": "submission_or_review_export"
+    },
+    {
+      "type": "pdf",
+      "path": "review.pdf",
+      "role": "fixed_layout_review"
+    }
+  ]
+}
+```
+
+## Rules
+
+- `slots` must come from the paper brief and, when available, the reference-image
+  slot inventory plus `layout_plan.json`.
+- `layout_plan.json` owns normalized positions. VLM locators may produce this
+  JSON, but must not write arbitrary PPT code or generate a full diagram.
+- `labels`, `arrows`, `groups`, panels, formulas, variables, metrics, and panel
+  IDs must be marked as PPT editable objects, usually with `editable_in: "pptx"`.
+- `assets` must be slot-level blocks, not one full generated diagram. Asset IDs
+  and slot IDs must not contain arrow/control semantics such as `arrow`,
+  `transition_arrow`, `dashed_arc`, `dashed_arrows`, or `graph_connector`.
+- Every slot asset must bind to a local reference crop and
+  `reference_style_profile.json` before generation.
+- Every normal non-legend slot must bind to `slot_visual_spec.json`, include a
+  foreground subject, at least two secondary objects, at least two micro details,
+  and forbidden simplifications such as `simple icon`, `centered icon`, and
+  `clean blank background`.
+- `fit_policy` must not be center-crop, cover-crop, fill-crop, forced crop, or
+  crop-to-ratio.
+- `composition_type` should be one of `full_frame_icon`, `full_bleed_card`,
+  `scene_thumbnail`, or `symbol_cutout`.
+- `target_content_fill_percent` should usually be 90-97. The default target is
+  93.
+- `min_content_fill_percent` should usually be 85 or higher.
+- `max_empty_margin_percent` should usually be 10 or lower.
+- `target_canvas_ratio` must be a precise decimal ratio from
+  `reference_geometry.json`, not a coarse preset.
+- `target_pixels` must equal `target_pixels_exact`; use
+  `generation_min_pixels` only for minimum generated asset resolution.
+- `slot_frame_policy` should default to `frameless_slot`; do not add extra white
+  tiles around image assets unless the reference slot explicitly has that frame.
+- `blank_space_policy` should explain how the prompt avoids tiny centered
+  subjects and large blank borders.
+- `export_targets` must include one PPTX target for the main editable source.
+  SVG can be added only as an optional export or intermediate.
+- A normal paper system figure should have 25-50 non-arrow image slots. Complex
+  figures may use 40-50. Arrows, connector lines, dashed loops, panel frames,
+  and titles are editable PPT controls and do not count toward this number.
+
+## Use In Composition
+
+The composition script or manual PPT assembly should read this program as the
+source of truth for placement. If the final layout changes, update
+`figure_program.json` so the program still matches the delivered figure.
+

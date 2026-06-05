@@ -1,0 +1,7 @@
+interface:
+  display_name: "Research Figure Making"
+  short_description: "Create paper-grounded scientific figures and editable framework diagrams."
+  default_prompt: "Use $research-figure-making to turn my paper draft into publication-quality framework and data figures."
+
+policy:
+  allow_implicit_invocation: true

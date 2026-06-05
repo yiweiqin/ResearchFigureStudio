@@ -1,0 +1,64 @@
+﻿# Python caches/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+research_figure_studio.egg-info/
+
+# Local environments and secrets
+.env
+.env.*
+*.env
+*.key
+*.pem
+
+# ResearchFigureStudio generated outputs
+output/
+outputs/
+asset_candidates/
+assets_generated/
+assets_raw/
+*.log
+*.tmp
+
+# Heavy/generated figure artifacts
+*.pptx
+*.ppt
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.tif
+*.tiff
+*.svg
+
+# Keep repository-authored docs/examples if explicitly tracked by extension overrides
+!docs/**/*.md
+!examples/**/*.md
+!codex-skills/**/*.md
+!codex-skills/**/*.yaml
+!codex-skills/**/*.py
+
+# Local input data and papers
+inputs/
+data/
+datasets/
+*.docx
+*.xlsx
+*.xls
+*.csv
+*.tsv
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

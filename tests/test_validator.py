@@ -1,0 +1,414 @@
+﻿import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from PIL import Image
+
+from rfs.validator import validate_output
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _make_valid_output(root: Path, asset_count: int = 25) -> None:
+    assets = root / "assets"
+    assets.mkdir(parents=True)
+    crop_dir = root / "reference_slot_crops"
+    crop_dir.mkdir(parents=True)
+    Image.new("RGB", (64, 64), "white").save(root / "asset_contact_sheet.png")
+    Image.new("RGB", (64, 64), "white").save(root / "asset_candidate_contact_sheet.png")
+    (root / "editable_composition.pptx").write_bytes(b"pptx-placeholder")
+    (root / "review.pdf").write_bytes(b"pdf-placeholder")
+    Image.new("RGB", (64, 64), "white").save(root / "final_600dpi.png")
+
+    slots = []
+    geometry_slots = []
+    asset_items = []
+    complexity_items = []
+    composition_items = []
+    prompt_brief_items = []
+    prompt_plan_items = []
+    color_tokens = [{
+        "token_id": "panel_a_header_001",
+        "hex": "#2D6FB7",
+        "rgb": {"r": 45, "g": 111, "b": 183},
+        "hsl": {"h": 211.0, "s": 0.606, "l": 0.447},
+        "source_region": "panel:panel_a:header",
+        "usage": "header_fill",
+    }]
+    for index in range(asset_count):
+        slot_id = f"slot_{index:02d}"
+        asset_id = f"asset_{index:02d}"
+        crop_path = f"reference_slot_crops/{slot_id}.png"
+        Image.new("RGB", (64, 64), (50, 160, 190)).save(assets / f"{asset_id}.png")
+        Image.new("RGB", (64, 64), (50, 160, 190)).save(root / crop_path)
+        slot = {
+            "id": slot_id,
+            "parent_panel": "panel_a",
+            "paper_concept": f"concept {index}",
+            "bbox_percent": {"x": 0.05, "y": 0.05, "w": 0.08, "h": 0.08},
+            "center_percent": {"x": 0.09, "y": 0.09},
+            "width_percent": 0.08,
+            "height_percent": 0.08,
+            "aspect_ratio_decimal": 1.0,
+            "aspect_ratio_w_h": "1.000:1.000",
+            "target_canvas_ratio": "1.000:1.000",
+            "target_pixels": {"width": 64.0, "height": 64.0},
+            "target_pixels_exact": {"width": 64.0, "height": 64.0},
+            "generation_min_pixels": {"width": 256, "height": 256},
+            "safe_area_percent": 92,
+            "fit_policy": "contain_no_crop",
+            "text_policy": "very_small_decorative_text_only; critical labels in pptx",
+            "asset_id": asset_id,
+            "target_content_fill_percent": 93,
+            "min_content_fill_percent": 85,
+            "max_empty_margin_percent": 10,
+            "composition_type": "full_frame_icon",
+            "slot_frame_policy": "frameless_slot",
+            "picture_fill_policy": "direct_full_slot_contain_no_tile",
+            "blank_space_policy": "full-frame composition; no tiny centered subject",
+            "reference_crop_path": crop_path,
+            "reference_style_profile_path": "reference_style_profile.json",
+            "local_color_token_ids": ["panel_a_header_001"],
+            "visual_spec_id": f"visual_spec_{slot_id}",
+            "complexity_profile": "reference-dense",
+            "complexity_kind": "pipeline_module",
+            "reference_crop_objects": ["paper-specific object", "visible relation"],
+            "foreground_subject": "paper-specific object",
+            "secondary_objects": ["supporting object", "input-output cue"],
+            "micro_details": ["small glyph texture", "internal line detail"],
+            "background_fill_elements": ["edge-to-edge colored support", "subtle texture"],
+            "scientific_mechanism_detail": "show the concept as a layered mechanism",
+            "required_visual_complexity": "dense",
+            "forbidden_simplification": ["simple icon", "centered icon", "clean blank background", "single object on white canvas"],
+            "object_count_target": 3,
+            "detail_score_target": 65,
+        }
+        slots.append(slot)
+        geometry_slots.append({
+            "id": slot_id,
+            "type": "slot",
+            "bbox_percent": slot["bbox_percent"],
+            "center_percent": slot["center_percent"],
+            "width_percent": slot["width_percent"],
+            "height_percent": slot["height_percent"],
+            "aspect_ratio_decimal": slot["aspect_ratio_decimal"],
+            "aspect_ratio_w_h": slot["aspect_ratio_w_h"],
+            "target_pixels_exact": slot["target_pixels_exact"],
+            "local_color_token_ids": ["panel_a_header_001"],
+        })
+        asset_items.append({
+            "asset_id": asset_id,
+            "slot_id": slot_id,
+            "selected_candidate_index": 1,
+            "content_fill_percent": 90,
+            "min_content_fill_percent": 85,
+            "empty_margin_percent": 8,
+            "max_empty_margin_percent": 10,
+            "edge_cutoff_status": "ok",
+            "ratio_status": "ok",
+            "issue_tags": [],
+            "action": "ok_no_crop",
+            "detail_score": 75,
+            "detail_score_target": 65,
+            "object_count_estimate": 4,
+            "object_count_target": 3,
+            "simple_icon_risk": False,
+            "reference_crop_match": "planned_reference_crop_grounded",
+            "style_match": "planned_reference_style_grounded",
+            "complexity_issue_tags": [],
+            "selected_reason": "Selected because it had the best combined fill, margin, ratio, and visual-complexity score.",
+        })
+        complexity_items.append({
+            "asset_id": asset_id,
+            "slot_id": slot_id,
+            "selected_candidate_index": 1,
+            "selected_candidate_path": f"asset_candidates/{slot_id}/candidate_01.png",
+            "complexity_kind": "pipeline_module",
+            "required_visual_complexity": "dense",
+            "detail_score": 75,
+            "detail_score_target": 65,
+            "object_count_estimate": 4,
+            "object_count_target": 3,
+            "simple_icon_risk": False,
+            "reference_crop_match": "planned_reference_crop_grounded",
+            "style_match": "planned_reference_style_grounded",
+            "complexity_issue_tags": [],
+            "selected_reason": "Selected because it had the best combined fill, margin, ratio, and visual-complexity score.",
+        })
+        composition_items.append({
+            "slot_id": slot_id,
+            "asset_id": asset_id,
+            "slot_frame_policy": "frameless_slot",
+            "picture_fill_policy": "direct_full_slot_contain_no_tile",
+            "tile_frame_added": False,
+            "caption_inside_image_slot": False,
+            "image_slot_area_fill_percent": 100,
+        })
+        prompt_brief_items.append({
+            "slot_id": slot_id,
+            "paper_concept": f"concept {index}",
+            "slot_function": f"visualize concept {index} in its local reference slot",
+            "bbox_percent": slot["bbox_percent"],
+            "center_percent": slot["center_percent"],
+            "width_percent": slot["width_percent"],
+            "height_percent": slot["height_percent"],
+            "aspect_ratio_decimal": slot["aspect_ratio_decimal"],
+            "aspect_ratio_w_h": slot["aspect_ratio_w_h"],
+            "target_canvas_ratio": slot["target_canvas_ratio"],
+            "target_pixels": slot["target_pixels"],
+            "target_pixels_exact": slot["target_pixels_exact"],
+            "generation_min_pixels": slot["generation_min_pixels"],
+            "composition_type": "full_frame_icon",
+            "visual_metaphor": "concrete scientific object",
+            "must_show": ["paper-specific object", "visible relation"],
+            "avoid_showing": ["generic sci-fi dashboard"],
+            "reference_crop_path": crop_path,
+            "reference_style_profile_path": "reference_style_profile.json",
+            "local_color_token_ids": ["panel_a_header_001"],
+            "visual_spec_id": f"visual_spec_{slot_id}",
+            "complexity_profile": "reference-dense",
+            "complexity_kind": "pipeline_module",
+            "reference_crop_objects": ["paper-specific object", "visible relation"],
+            "foreground_subject": "paper-specific object",
+            "secondary_objects": ["supporting object", "input-output cue"],
+            "micro_details": ["small glyph texture", "internal line detail"],
+            "background_fill_elements": ["edge-to-edge colored support", "subtle texture"],
+            "scientific_mechanism_detail": "show the concept as a layered mechanism",
+            "required_visual_complexity": "dense",
+            "forbidden_simplification": ["simple icon", "centered icon", "clean blank background", "single object on white canvas"],
+            "object_count_target": 3,
+            "detail_score_target": 65,
+        })
+        prompt_plan_items.append({
+            "slot_id": slot_id,
+            "paper_concept": f"concept {index}",
+            "slot_function": f"visualize concept {index} in its local reference slot",
+            "bbox_percent": slot["bbox_percent"],
+            "center_percent": slot["center_percent"],
+            "width_percent": slot["width_percent"],
+            "height_percent": slot["height_percent"],
+            "aspect_ratio_decimal": slot["aspect_ratio_decimal"],
+            "aspect_ratio_w_h": slot["aspect_ratio_w_h"],
+            "target_canvas_ratio": slot["target_canvas_ratio"],
+            "target_pixels": slot["target_pixels"],
+            "target_pixels_exact": slot["target_pixels_exact"],
+            "generation_min_pixels": slot["generation_min_pixels"],
+            "target_content_fill_percent": 93,
+            "min_content_fill_percent": 85,
+            "max_empty_margin_percent": 10,
+            "reference_crop_path": crop_path,
+            "reference_crop_used": True,
+            "reference_style_profile_path": "reference_style_profile.json",
+            "local_color_token_ids": ["panel_a_header_001"],
+            "visual_spec_id": f"visual_spec_{slot_id}",
+            "complexity_profile": "reference-dense",
+            "complexity_kind": "pipeline_module",
+            "reference_crop_objects": ["paper-specific object", "visible relation"],
+            "foreground_subject": "paper-specific object",
+            "secondary_objects": ["supporting object", "input-output cue"],
+            "micro_details": ["small glyph texture", "internal line detail"],
+            "background_fill_elements": ["edge-to-edge colored support", "subtle texture"],
+            "scientific_mechanism_detail": "show the concept as a layered mechanism",
+            "required_visual_complexity": "dense",
+            "forbidden_simplification": ["simple icon", "centered icon", "clean blank background", "single object on white canvas"],
+            "object_count_target": 3,
+            "detail_score_target": 65,
+            "reference_slot_role": "near-square icon/card in the reference layout",
+            "reference_shape_language": "near-square icon/card",
+            "reference_local_style": "rounded scientific card with compact visual density",
+            "reference_density": "high",
+            "reference_prompt_hint": "match the local reference slot while drawing the paper concept",
+            "visual_metaphor": "concrete scientific object",
+            "must_show": ["paper-specific object", "visible relation"],
+            "avoid_showing": ["generic sci-fi dashboard"],
+            "image_prompt_core": "Draw a dense mini scientific scene/card from the local crop that visibly represents this paper-specific relation with foreground_subject, 2-5 layered objects, micro details, edge-to-edge support detail, and not a standalone pictogram. Use reference_style_profile.json, exact aspect ratio 1.000:1, content fill 90-97%, empty margin below 10% on every edge.",
+        })
+
+    panels = [{"id": "panel_a", "title": "Panel A", "bbox_percent": {"x": 0.03, "y": 0.03, "w": 0.9, "h": 0.5}, "editable_in": "pptx"}]
+    arrows = [{"id": "flow_a", "source": "panel_a", "target": "panel_a", "source_id": "panel_a", "target_id": "panel_a", "path_percent": [[0.1, 0.1], [0.2, 0.1]], "style_token_id": "panel_a_header_001", "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset"}]
+    groups = [{"id": "group_a", "members": ["panel_a"], "editable_in": "pptx"}]
+    labels = [{"id": "label_a", "text": "Panel A", "target_id": "panel_a", "editable_in": "pptx"}]
+    reference_palette = ["#2D6FB7", "#E17721", "#6B57C8", "#1B9A94"]
+
+    _write_json(root / "input_manifest.json", {"summary": "Archived source inputs.", "paper_archived": "inputs/paper.pdf", "reference_archived": "inputs/reference.png"})
+    _write_json(root / "reference_geometry.json", {
+        "summary": "Reference geometry.",
+        "slots": geometry_slots,
+        "panels": [{
+            "id": "panel_a",
+            "type": "panel",
+            "bbox_percent": {"x": 0.03, "y": 0.03, "w": 0.9, "h": 0.5},
+            "center_percent": {"x": 0.48, "y": 0.28},
+            "width_percent": 0.9,
+            "height_percent": 0.5,
+            "aspect_ratio_decimal": 1.8,
+            "aspect_ratio_w_h": "1.800:1.000",
+            "target_pixels_exact": {"width": 720.0, "height": 400.0},
+        }],
+        "controls": [{
+            "id": "flow_a",
+            "type": "ppt_control",
+            "bbox_percent": {"x": 0.10, "y": 0.10, "w": 0.10, "h": 0.02},
+            "center_percent": {"x": 0.15, "y": 0.11},
+            "width_percent": 0.10,
+            "height_percent": 0.02,
+            "aspect_ratio_decimal": 5.0,
+            "aspect_ratio_w_h": "5.000:1.000",
+            "target_pixels_exact": {"width": 80.0, "height": 16.0},
+            "source_id": "panel_a",
+            "target_id": "panel_a",
+            "path_percent": [[0.1, 0.1], [0.2, 0.1]],
+            "style_token_id": "panel_a_header_001",
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+        }],
+        "reference_palette": reference_palette,
+        "color_tokens": color_tokens,
+    })
+    _write_json(root / "reference_controls.json", {
+        "summary": "Reference controls.",
+        "controls": [{
+            "id": "flow_a",
+            "bbox_percent": {"x": 0.10, "y": 0.10, "w": 0.10, "h": 0.02},
+            "center_percent": {"x": 0.15, "y": 0.11},
+            "width_percent": 0.10,
+            "height_percent": 0.02,
+            "source_id": "panel_a",
+            "target_id": "panel_a",
+            "path_percent": [[0.1, 0.1], [0.2, 0.1]],
+            "style_token_id": "panel_a_header_001",
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_not_image_asset",
+        }],
+    })
+    _write_json(root / "slot_inventory.json", {"summary": "Slot inventory.", "slot_count": asset_count, "slots": slots})
+    _write_json(root / "reference_style_profile.json", {
+        "summary": "Reference style profile.",
+        "style_summary": "Reference-first scientific style.",
+        "illustration_style": "flat academic illustration",
+        "line_weight": "medium",
+        "shadow_style": "soft",
+        "corner_radius": "rounded",
+        "icon_detail_level": "high",
+        "visual_density": "dense",
+        "text_policy": "critical text in PPT",
+        "reference_priority": "reference_image_primary",
+        "color_tokens": color_tokens,
+    })
+    (root / "style_sheet.md").write_text("# Summary\nStyle sheet.\n", encoding="utf-8")
+    _write_json(root / "layout_plan.json", {"summary": "Layout plan.", "panels": panels, "slots": slots, "arrows": arrows})
+    _write_json(root / "figure_program.json", {
+        "summary": "Figure program.",
+        "canvas": {},
+        "locator": {"mode": "heuristic", "reference_path": "inputs/reference.png"},
+        "style": {"reference_palette": reference_palette, "slot_frame_policy": "frameless_slot", "color_tokens": color_tokens, "reference_style_profile_path": "reference_style_profile.json"},
+        "panels": panels,
+        "slots": slots,
+        "assets": [{"id": item["asset_id"], "slot_id": item["slot_id"], "reference_crop_path": f"reference_slot_crops/{item['slot_id']}.png", "visual_spec_id": f"visual_spec_{item['slot_id']}"} for item in asset_items],
+        "labels": labels,
+        "arrows": arrows,
+        "control_shapes": arrows,
+        "groups": groups,
+        "export_targets": [{"type": "pptx", "path": "editable_composition.pptx"}],
+    })
+    _write_json(root / "reference_slot_prompt_brief.json", {"summary": "Reference slot prompt briefing.", "mode": "vlm", "slots": prompt_brief_items})
+    _write_json(root / "slot_visual_spec.json", {"summary": "Slot visual spec.", "complexity_profile": "reference-dense", "slots": [{
+        "slot_id": slot["id"],
+        "paper_concept": slot["paper_concept"],
+        "complexity_profile": "reference-dense",
+        "complexity_kind": "pipeline_module",
+        "reference_crop_path": slot["reference_crop_path"],
+        "reference_crop_objects": ["paper-specific object", "visible relation"],
+        "foreground_subject": "paper-specific object",
+        "secondary_objects": ["supporting object", "input-output cue"],
+        "micro_details": ["small glyph texture", "internal line detail"],
+        "background_fill_elements": ["edge-to-edge colored support", "subtle texture"],
+        "scientific_mechanism_detail": "show the concept as a layered mechanism",
+        "required_visual_complexity": "dense",
+        "forbidden_simplification": ["simple icon", "centered icon", "clean blank background", "single object on white canvas"],
+        "object_count_target": 3,
+        "detail_score_target": 65,
+    } for slot in slots]})
+    _write_json(root / "slot_prompt_plan.json", {"summary": "Slot prompt plan.", "mode": "heuristic", "slots": prompt_plan_items})
+    (root / "prompts.md").write_text("# Summary\nPrompts.\n", encoding="utf-8")
+    _write_json(root / "asset_quality_report.json", {"summary": "Asset quality.", "assets": asset_items})
+    _write_json(root / "asset_complexity_report.json", {"summary": "Asset complexity.", "assets": complexity_items})
+    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items})
+    _write_json(root / "asset_visual_review.json", {"summary": "Asset review.", "status": "pass", "issues": []})
+    (root / "alignment_review.md").write_text("# Summary\nAlignment.\n", encoding="utf-8")
+    (root / "critic_report.md").write_text("# Summary\nCritic.\n", encoding="utf-8")
+    _write_json(root / "visual_critic_iter_0.json", {"summary": "Visual critic.", "status": "pass", "blocking_issues": []})
+
+
+class ValidatorTests(unittest.TestCase):
+    def test_missing_directory_fails(self):
+        result = validate_output("Z:/definitely/missing/path")
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["errors"])
+
+    def test_minimal_valid_output_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            result = validate_output(root)
+            self.assertTrue(result["ok"], result["errors"])
+
+    def test_low_fill_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            data = json.loads((root / "asset_quality_report.json").read_text(encoding="utf-8"))
+            data["assets"][0]["content_fill_percent"] = 62
+            _write_json(root / "asset_quality_report.json", data)
+            result = validate_output(root)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("fill" in err for err in result["errors"]))
+
+    def test_missing_pptx_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            (root / "editable_composition.pptx").unlink()
+            result = validate_output(root)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("editable_composition.pptx" in err for err in result["errors"]))
+
+    def test_coarse_ratio_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            data = json.loads((root / "figure_program.json").read_text(encoding="utf-8"))
+            data["slots"][0]["target_canvas_ratio"] = "3:4"
+            _write_json(root / "figure_program.json", data)
+            result = validate_output(root)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("target_canvas_ratio" in err for err in result["errors"]))
+
+    def test_composition_tile_frame_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            data = json.loads((root / "composition_quality_report.json").read_text(encoding="utf-8"))
+            data["slots"][0]["tile_frame_added"] = True
+            _write_json(root / "composition_quality_report.json", data)
+            result = validate_output(root)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("tile frame" in err for err in result["errors"]))
+
+    def test_low_composition_fill_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_valid_output(root)
+            data = json.loads((root / "composition_quality_report.json").read_text(encoding="utf-8"))
+            data["slots"][0]["image_slot_area_fill_percent"] = 80
+            _write_json(root / "composition_quality_report.json", data)
+            result = validate_output(root)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("below 95" in err for err in result["errors"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

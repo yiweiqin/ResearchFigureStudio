@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-figure-studio"
+version = "0.1.0"
+description = "PPTX-first research figure generation pipeline guided by papers and reference images."
+requires-python = ">=3.10"
+dependencies = [
+  "pillow",
+  "python-pptx",
+  "PyMuPDF",
+  "requests",
+  "pywin32; platform_system == 'Windows'"
+]
+
+[project.scripts]
+rfs = "rfs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rfs*"]
