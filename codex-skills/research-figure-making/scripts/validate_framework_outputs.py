@@ -568,6 +568,11 @@ def validate_selected_arrow_routes(path: Path) -> int:
             fail(f"selected_arrow_routes item {rid} overrides a locked reference path")
         if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
             fail(f"selected_arrow_routes item {rid} must have at least 2 path_percent points")
+        if str(item.get("route_generation_status", "")).lower() == "aesthetic_tunnel_adjusted":
+            if not isinstance(item.get("reference_original_path_percent"), list) or len(item.get("reference_original_path_percent", [])) < 2:
+                fail(f"selected_arrow_routes item {rid} missing reference_original_path_percent for aesthetic adjustment")
+            if item.get("reference_tunnel_preserved") is not True:
+                fail(f"selected_arrow_routes item {rid} left its reference tunnel")
     return len(routes)
 
 
@@ -579,6 +584,8 @@ def validate_arrow_quality_report(path: Path) -> None:
         fail("arrow_quality_report.json reports failed arrow quality")
     if data.get("reference_path_overrides"):
         fail("arrow_quality_report.json contains reference_path_overrides")
+    if data.get("reference_tunnel_violations"):
+        fail("arrow_quality_report.json contains reference_tunnel_violations")
     for key in ("total_crossing_count", "average_aesthetic_score"):
         if key not in data:
             fail(f"arrow_quality_report.json missing {key}")

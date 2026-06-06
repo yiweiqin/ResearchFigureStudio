@@ -6,6 +6,8 @@ from typing import Any
 from .utils import write_json
 
 ROUTER_VERSION = "reference-constrained-orthogonal-v1"
+AESTHETIC_ROUTER_VERSION = "reference-tunnel-aesthetic-v2"
+DEFAULT_REFERENCE_TUNNEL_PERCENT = 0.024
 
 
 def _bbox_center(bbox: dict[str, Any]) -> list[float]:
@@ -90,6 +92,101 @@ def _path_length(points: list[list[float]]) -> float:
     for a, b in _segments(points):
         total += ((float(a[0]) - float(b[0])) ** 2 + (float(a[1]) - float(b[1])) ** 2) ** 0.5
     return round(total, 4)
+
+
+def _path_normal(points: list[list[float]]) -> list[float]:
+    if len(points) < 2:
+        return [0.0, 0.0]
+    dx = float(points[-1][0]) - float(points[0][0])
+    dy = float(points[-1][1]) - float(points[0][1])
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 0.0001:
+        return [0.0, 0.0]
+    return [-dy / length, dx / length]
+
+
+def _point_distance(a: list[float], b: list[float]) -> float:
+    return ((float(a[0]) - float(b[0])) ** 2 + (float(a[1]) - float(b[1])) ** 2) ** 0.5
+
+
+def _point_segment_distance(point: list[float], a: list[float], b: list[float]) -> float:
+    px, py = float(point[0]), float(point[1])
+    ax, ay = float(a[0]), float(a[1])
+    bx, by = float(b[0]), float(b[1])
+    dx = bx - ax
+    dy = by - ay
+    denom = dx * dx + dy * dy
+    if denom < 0.0000001:
+        return _point_distance(point, a)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
+    proj = [ax + t * dx, ay + t * dy]
+    return _point_distance(point, proj)
+
+
+def _max_distance_to_polyline(points: list[list[float]], reference: list[list[float]]) -> float:
+    segments = _segments(reference)
+    if not segments:
+        return 0.0
+    distances = []
+    for point in points:
+        distances.append(min(_point_segment_distance(point, a, b) for a, b in segments))
+    return round(max(distances, default=0.0), 4)
+
+
+def _lane_offset(lane_index: int, lane_count: int, tunnel_percent: float) -> float:
+    if lane_count <= 1:
+        return 0.0
+    centered = float(lane_index) - (float(lane_count) - 1.0) / 2.0
+    step = min(0.006, max(0.002, tunnel_percent / max(lane_count, 1)))
+    return max(-tunnel_percent * 0.82, min(tunnel_percent * 0.82, centered * step))
+
+
+def _shift_point(point: list[float], normal: list[float], offset: float) -> list[float]:
+    return [
+        round(min(1.0, max(0.0, float(point[0]) + normal[0] * offset)), 4),
+        round(min(1.0, max(0.0, float(point[1]) + normal[1] * offset)), 4),
+    ]
+
+
+def _aesthetic_tunnel_path(
+    points: list[list[float]],
+    lane_index: int,
+    lane_count: int,
+    role: str,
+    tunnel_percent: float = DEFAULT_REFERENCE_TUNNEL_PERCENT,
+) -> tuple[list[list[float]], dict[str, Any]]:
+    original = _clean_path(points)
+    if len(original) < 2:
+        return original, {
+            "routing_algorithm": AESTHETIC_ROUTER_VERSION,
+            "route_generation_status": "aesthetic_no_path",
+            "reference_tunnel_percent": tunnel_percent,
+            "reference_path_delta_max": 0.0,
+            "reference_tunnel_preserved": True,
+        }
+    normal = _path_normal(original)
+    offset = _lane_offset(lane_index, lane_count, tunnel_percent)
+    adjusted = [list(point) for point in original]
+    if abs(offset) > 0.0001 and len(original) == 2:
+        mid = [
+            (float(original[0][0]) + float(original[1][0])) / 2.0,
+            (float(original[0][1]) + float(original[1][1])) / 2.0,
+        ]
+        adjusted = [original[0], _shift_point(mid, normal, offset), original[-1]]
+    elif role in {"main_flow", "module_flow"}:
+        # Single-lane arrows keep the exact reference geometry; the PPT renderer
+        # still softens them through curve connectors, halo, and line caps.
+        adjusted = original
+    adjusted = _clean_path(adjusted)
+    delta = _max_distance_to_polyline(adjusted, original)
+    return adjusted, {
+        "routing_algorithm": AESTHETIC_ROUTER_VERSION,
+        "route_generation_status": "aesthetic_tunnel_adjusted" if adjusted != original else "aesthetic_style_only",
+        "reference_tunnel_percent": tunnel_percent,
+        "reference_path_delta_max": delta,
+        "reference_tunnel_preserved": delta <= tunnel_percent,
+        "lane_offset_percent": round(offset, 4),
+    }
 
 
 def _orientation(a: list[float], b: list[float], c: list[float]) -> float:
@@ -281,8 +378,20 @@ def _infer_role(arrow: dict, out_counts: dict[str, int], in_counts: dict[str, in
     return "module_flow"
 
 
-def _style_for_role(role: str, arrow: dict) -> dict[str, Any]:
+def _style_for_role(role: str, arrow: dict, mode: str = "reference") -> dict[str, Any]:
     kind = str(arrow.get("control_kind") or arrow.get("type") or "").lower()
+    if str(mode).lower() == "aesthetic":
+        if role == "main_flow":
+            return {"route_style": "soft_curve", "stroke_width_pt": 2.35, "arrowhead_size": "med", "line_cap": "round", "halo_width_pt": 4.4, "halo_color": "#FFFFFF"}
+        if role == "branch":
+            return {"route_style": "metro_bundle", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "line_cap": "round", "halo_width_pt": 3.2, "halo_color": "#FFFFFF"}
+        if role == "convergence":
+            return {"route_style": "metro_bundle", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "line_cap": "round", "halo_width_pt": 3.2, "halo_color": "#FFFFFF"}
+        if role == "feedback_loop":
+            return {"route_style": "dashed_loop", "stroke_width_pt": 1.75, "arrowhead_size": "sm", "line_cap": "round", "line_pattern": "dash", "halo_width_pt": 3.0, "halo_color": "#FFFFFF"}
+        if "elbow" in kind:
+            return {"route_style": "rounded_elbow", "stroke_width_pt": 1.6, "arrowhead_size": "sm", "line_cap": "round", "halo_width_pt": 3.0, "halo_color": "#FFFFFF"}
+        return {"route_style": "soft_curve", "stroke_width_pt": 1.55, "arrowhead_size": "sm", "line_cap": "round", "halo_width_pt": 3.0, "halo_color": "#FFFFFF"}
     if role == "main_flow":
         return {"route_style": "soft_straight", "stroke_width_pt": 2.2, "arrowhead_size": "med", "line_cap": "round"}
     if role == "branch":
@@ -412,7 +521,7 @@ def style_and_route_arrows(
             points = _clean_path(points)
         arrow["path_percent"] = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in points if isinstance(p, list) and len(p) >= 2]
         role = _infer_role(arrow, out_counts, in_counts, panel_ids)
-        style = _style_for_role(role, arrow)
+        style = _style_for_role(role, arrow, mode=mode)
         recompute_generated_style = str(arrow.get("aesthetic_policy", "")).startswith("reference_first")
         for key, value in style.items():
             if recompute_generated_style or key not in arrow or not str(arrow.get(key, "")).strip():
@@ -447,8 +556,40 @@ def style_and_route_arrows(
     for bundle_id, items in grouped.items():
         items.sort(key=lambda item: (item.get("target_id", ""), item.get("id", "")))
         for lane_index, arrow in enumerate(items):
-            arrow.setdefault("lane_index", lane_index)
-            arrow.setdefault("lane_count", len(items))
+            arrow["lane_index"] = lane_index
+            arrow["lane_count"] = len(items)
+
+    if str(mode).lower() == "aesthetic":
+        tunnel_percent = DEFAULT_REFERENCE_TUNNEL_PERCENT
+        for arrow in enriched:
+            original_path = _clean_path(arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else [])
+            arrow["reference_original_path_percent"] = original_path
+            if arrow.get("reference_locked") and len(original_path) >= 2:
+                offset_allowed = bool(arrow.get("aesthetic_offset_allowed")) or str(arrow.get("route_policy", "")).lower() == "aesthetic_tunnel_allowed"
+                if offset_allowed:
+                    adjusted_path, aesthetic_meta = _aesthetic_tunnel_path(
+                        original_path,
+                        int(arrow.get("lane_index") or 0),
+                        int(arrow.get("lane_count") or 1),
+                        str(arrow.get("semantic_role") or ""),
+                        tunnel_percent=tunnel_percent,
+                    )
+                    arrow["path_percent"] = adjusted_path
+                    arrow["routing_algorithm"] = aesthetic_meta["routing_algorithm"]
+                    arrow["route_generation_status"] = aesthetic_meta["route_generation_status"]
+                    arrow["reference_tunnel_percent"] = aesthetic_meta["reference_tunnel_percent"]
+                    arrow["reference_path_delta_max"] = aesthetic_meta["reference_path_delta_max"]
+                    arrow["reference_tunnel_preserved"] = aesthetic_meta["reference_tunnel_preserved"]
+                    arrow["lane_offset_percent"] = aesthetic_meta["lane_offset_percent"]
+                    arrow["reference_path_preserved"] = bool(aesthetic_meta["reference_tunnel_preserved"])
+                else:
+                    arrow["routing_algorithm"] = AESTHETIC_ROUTER_VERSION
+                    arrow["route_generation_status"] = "aesthetic_style_only"
+                    arrow["reference_tunnel_percent"] = tunnel_percent
+                    arrow["reference_path_delta_max"] = 0.0
+                    arrow["reference_tunnel_preserved"] = True
+                    arrow["lane_offset_percent"] = 0.0
+                    arrow["reference_path_preserved"] = True
 
     metrics, total_crossings = _route_metrics(enriched, slot_objects)
     routes = []
@@ -480,6 +621,13 @@ def style_and_route_arrows(
             "line_pattern": arrow.get("line_pattern", "solid"),
             "routing_algorithm": arrow.get("routing_algorithm"),
             "route_generation_status": arrow.get("route_generation_status"),
+            "reference_original_path_percent": arrow.get("reference_original_path_percent"),
+            "reference_tunnel_percent": arrow.get("reference_tunnel_percent"),
+            "reference_path_delta_max": arrow.get("reference_path_delta_max"),
+            "reference_tunnel_preserved": arrow.get("reference_tunnel_preserved"),
+            "lane_offset_percent": arrow.get("lane_offset_percent"),
+            "halo_width_pt": arrow.get("halo_width_pt"),
+            "halo_color": arrow.get("halo_color"),
             "candidate_count": arrow.get("candidate_count"),
             "candidate_score": arrow.get("candidate_score"),
             "metrics": m,
@@ -492,13 +640,23 @@ def style_and_route_arrows(
         "reference_priority": "reference_image_hard_constraint",
         "routing_principle": "preserve reference-derived source-target logic and path geometry; only synthesize missing fallback paths",
         "routing_algorithm": ROUTER_VERSION,
+        "aesthetic_routing_algorithm": AESTHETIC_ROUTER_VERSION,
+        "reference_tunnel_percent": DEFAULT_REFERENCE_TUNNEL_PERCENT,
         "fallback_routing_policy": "only arrows with missing paths or route_policy=fallback_reroute_allowed may use obstacle-aware orthogonal routing",
+        "aesthetic_mode_policy": "mode=aesthetic may adjust reference-locked paths only inside the reference tunnel and must keep reference_tunnel_preserved=true",
         "style_rules": {
             "main_flow": {"route_style": "soft_straight", "stroke_width_pt": 2.2, "arrowhead_size": "med"},
             "branch": {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm"},
             "convergence": {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm"},
             "feedback_loop": {"route_style": "dashed_spline_like", "stroke_width_pt": 1.8, "arrowhead_size": "sm"},
             "module_flow": {"route_style": "soft_straight", "stroke_width_pt": 1.45, "arrowhead_size": "sm"},
+        },
+        "aesthetic_style_rules": {
+            "main_flow": {"route_style": "soft_curve", "stroke_width_pt": 2.35, "arrowhead_size": "med", "halo_width_pt": 4.4},
+            "branch": {"route_style": "metro_bundle", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "halo_width_pt": 3.2},
+            "convergence": {"route_style": "metro_bundle", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "halo_width_pt": 3.2},
+            "feedback_loop": {"route_style": "dashed_loop", "stroke_width_pt": 1.75, "arrowhead_size": "sm", "halo_width_pt": 3.0},
+            "module_flow": {"route_style": "soft_curve", "stroke_width_pt": 1.55, "arrowhead_size": "sm", "halo_width_pt": 3.0},
         },
         "ppt_editability": "all arrows render as PPT connector shapes, not raster assets",
         "rounded_line_policy": "use round line caps and editable connector segments; reference-locked paths are not geometrically rewritten",
@@ -509,14 +667,18 @@ def style_and_route_arrows(
         "route_count": len(routes),
         "routes": routes,
     }
+    tunnel_violations = [route["id"] for route in routes if route.get("reference_tunnel_preserved") is False]
     quality_report = {
         "summary": "Arrow routing and styling quality report.",
         "mode": mode,
-        "status": "pass" if all(route["aesthetic_score"] >= 35 for route in routes) else "needs_review",
+        "status": "pass" if all(route["aesthetic_score"] >= 35 for route in routes) and not tunnel_violations else "needs_review",
         "arrow_count": len(routes),
         "total_crossing_count": total_crossings,
         "total_obstacle_overlap_count": sum(int(route["metrics"].get("obstacle_overlap_count", 0)) for route in routes),
         "fallback_route_count": sum(1 for route in routes if route.get("route_generation_status") == "fallback_route_selected"),
+        "aesthetic_tunnel_adjusted_count": sum(1 for route in routes if route.get("route_generation_status") == "aesthetic_tunnel_adjusted"),
+        "aesthetic_style_only_count": sum(1 for route in routes if route.get("route_generation_status") == "aesthetic_style_only"),
+        "reference_tunnel_violations": tunnel_violations,
         "average_aesthetic_score": round(sum(float(route["aesthetic_score"]) for route in routes) / max(len(routes), 1), 2),
         "reference_path_overrides": [route["id"] for route in routes if route.get("reference_locked") and not route.get("reference_path_preserved")],
         "routes": routes,

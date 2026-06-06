@@ -242,6 +242,11 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"selected_arrow_routes item {rid} overrides a locked reference path")
             if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
                 errors.append(f"selected_arrow_routes item {rid} must have at least 2 path_percent points")
+            if str(item.get("route_generation_status", "")).lower() == "aesthetic_tunnel_adjusted":
+                if not isinstance(item.get("reference_original_path_percent"), list) or len(item.get("reference_original_path_percent", [])) < 2:
+                    errors.append(f"selected_arrow_routes item {rid} missing reference_original_path_percent for aesthetic adjustment")
+                if item.get("reference_tunnel_preserved") is not True:
+                    errors.append(f"selected_arrow_routes item {rid} left its reference tunnel")
     except Exception as exc:
         errors.append(f"Invalid selected_arrow_routes.json: {exc}")
 
@@ -251,6 +256,8 @@ def validate_output(out_dir: str | Path) -> dict:
             errors.append("arrow_quality_report.json reports failed arrow quality")
         if arrow_quality.get("reference_path_overrides"):
             errors.append("arrow_quality_report.json contains reference_path_overrides")
+        if arrow_quality.get("reference_tunnel_violations"):
+            errors.append("arrow_quality_report.json contains reference_tunnel_violations")
         if "total_crossing_count" not in arrow_quality:
             errors.append("arrow_quality_report.json missing total_crossing_count")
         if "average_aesthetic_score" not in arrow_quality:

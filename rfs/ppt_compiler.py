@@ -32,6 +32,12 @@ def _apply_line_cap(connector, cap: str = "round") -> None:
     ln.set("cap", value)
 
 
+def _connector_type_for_route(route_style: str):
+    if str(route_style).lower() in {"soft_curve", "dashed_loop", "dashed_spline_like"}:
+        return MSO_CONNECTOR.CURVE
+    return MSO_CONNECTOR.STRAIGHT
+
+
 def _set_text(shape, text: str, font_size: int = 10, bold: bool = False, color: str = "#163B4D", align=PP_ALIGN.CENTER) -> None:
     tf = shape.text_frame
     tf.clear()
@@ -238,12 +244,23 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
         if str(arrow.get("line_pattern", "")).lower() in {"dash", "dashed"}:
             dashed = True
         line_width = float(arrow.get("stroke_width_pt") or style.get("arrow_weight_pt") or 1.7)
+        route_style = str(arrow.get("route_style") or "")
+        connector_type = _connector_type_for_route(route_style)
+        halo_width = float(arrow.get("halo_width_pt") or 0.0)
+        halo_color = str(arrow.get("halo_color") or "#FFFFFF")
         arrowhead_size = str(arrow.get("arrowhead_size") or "sm").lower()
         if arrowhead_size not in {"sm", "med", "lg"}:
             arrowhead_size = "sm"
         segment_count = 0
         for idx, ((x1, y1), (x2, y2)) in enumerate(zip(points[:-1], points[1:])):
-            connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+            if halo_width > 0:
+                halo = slide.shapes.add_connector(connector_type, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+                halo.line.color.rgb = _rgb(halo_color)
+                halo.line.width = Pt(max(line_width + 1.2, halo_width))
+                _apply_line_cap(halo, str(arrow.get("line_cap") or "round"))
+                if dashed:
+                    halo.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+            connector = slide.shapes.add_connector(connector_type, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
             connector.line.color.rgb = _rgb(arrow_color)
             connector.line.width = Pt(line_width)
             _apply_line_cap(connector, str(arrow.get("line_cap") or "round"))
@@ -256,11 +273,14 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
             "arrow_id": arrow.get("id"),
             "control_kind": control_kind or "straight_arrow",
             "semantic_role": arrow.get("semantic_role"),
-            "route_style": arrow.get("route_style"),
+            "route_style": route_style,
             "bundle_id": arrow.get("bundle_id"),
             "lane_index": arrow.get("lane_index"),
             "line_cap": arrow.get("line_cap", "round"),
             "line_pattern": "dash" if dashed else "solid",
+            "connector_type": "curve" if connector_type == MSO_CONNECTOR.CURVE else "straight",
+            "halo_width_pt": halo_width,
+            "halo_color": halo_color if halo_width > 0 else None,
             "stroke_width_pt": line_width,
             "arrowhead_size": arrowhead_size,
             "routing_algorithm": arrow.get("routing_algorithm"),

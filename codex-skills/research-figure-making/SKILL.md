@@ -96,6 +96,12 @@ constraint. It must not replace reference-derived flow logic with a generic
 graph router. Orthogonal obstacle-aware routing is allowed only for missing
 paths or arrows explicitly marked `route_policy=fallback_reroute_allowed`; it
 must never rewrite reference-locked `path_percent` values.
+Use `--arrow-style-mode aesthetic` only for an explicit experimental
+beautification pass. In that mode, the router may apply curve connectors and
+halo underlays by default. Bundle lane offsets require explicit route opt-in
+and must stay inside `reference_tunnel_percent`; the router must record
+`reference_original_path_percent`, `reference_path_delta_max`, and
+`reference_tunnel_preserved`, and it must not change source-target logic.
 
 Before execution, read these references in this order:
 
@@ -143,6 +149,9 @@ Execution checklist:
    synthesize missing or explicitly fallback-allowed paths. If fallback routing
    is used, record `routing_algorithm`, `route_generation_status`, candidate
    count, and obstacle/crossing metrics.
+   If `--arrow-style-mode aesthetic` is used, also record original reference
+   paths, tunnel width, path delta, halo settings, connector type, and whether
+   each adjusted route stayed inside the reference tunnel.
 3. Create a slot inventory before using image2. Default to 25-50 image slots for
    a normal paper system figure. This count means non-arrow image slots only;
    arrows, connector lines, dashed loops, panel frames, and titles must not be
@@ -318,6 +327,10 @@ rendered as an editable PPT connector. Validation must fail when
 a locked reference path without a documented reason. Validation must also fail
 when fallback obstacle routing is applied to a reference-locked path, or when
 route artifacts omit `routing_algorithm` / `route_generation_status`.
+For aesthetic mode, validation or critic review must fail when
+`reference_tunnel_preserved` is false, when source-target binding changes, or
+when a curve/bundle/halo style is baked into raster images instead of PPT
+editable connector shapes.
 Validation must also fail when image slots lack local reference crops, local color token ids, or
 `reference_style_profile.json` grounding.
 

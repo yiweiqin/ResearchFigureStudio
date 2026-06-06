@@ -191,6 +191,13 @@ Minimum top-level keys:
   missing or the arrow is explicitly marked
   `route_policy=fallback_reroute_allowed`; every route must record
   `routing_algorithm` and `route_generation_status`.
+- `--arrow-style-mode aesthetic` is an optional experimental beautification
+  pass. It may use curve connectors, halo underlays, and bundle lane offsets
+  only for explicitly opted-in routes and only inside the recorded
+  `reference_tunnel_percent`. It must keep source and target IDs unchanged and
+  record `reference_original_path_percent`,
+  `reference_path_delta_max`, and `reference_tunnel_preserved` for every
+  adjusted route.
 - `assets` must be slot-level blocks, not one full generated diagram. Asset IDs
   and slot IDs must not contain arrow/control semantics such as `arrow`,
   `transition_arrow`, `dashed_arc`, `dashed_arrows`, or `graph_connector`.

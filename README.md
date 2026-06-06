@@ -13,6 +13,7 @@ The current workflow is optimized for AI/ML/NLP system figures:
 - AutoFigure-inspired control candidates and overlays for arrow/source-target binding
 - reference-preserving arrow styling/routing reports for softer editable PPT connectors
 - reference-constrained orthogonal fallback routing for missing or explicitly fallback-allowed connectors
+- optional `--arrow-style-mode aesthetic` for reference-tunnel arrow beautification with curve connectors, halo underlays, and explicit opt-in bundle lane offsets
 - multi-candidate image generation through placeholder, Gemini, or Yunwu image2-compatible APIs
 - deterministic PPTX composition with editable labels, panels, arrows, connectors, and formulas
 - strict validation for no single full diagram, no semantic crop, no vector-only fallback, low blank space, and non-trivial image-block complexity
@@ -156,8 +157,29 @@ Key rules:
 - Arrow/control localization is reference-driven: CV detects candidates, overlays label them, optional VLM binding assigns source/target semantics, and the PPT compiler renders editable connectors.
 - Arrow styling is reference-preserving: it may soften line caps, assign bundle IDs, vary widths/dashes, and report aesthetics, but it must not replace reference-image flow logic with a generic router.
 - Obstacle-aware routing is fallback-only: it may synthesize orthogonal paths for missing routes or `route_policy=fallback_reroute_allowed`, but it must not rewrite reference-locked paths.
+- Aesthetic mode is experimental: `--arrow-style-mode aesthetic` may offset reference-locked arrows only when the route explicitly opts in, only within `reference_tunnel_percent`; it records the original path and must keep `reference_tunnel_preserved=true`.
 - Normal non-legend slots should be dense mini scientific scenes/cards with layered objects and micro-details, not simple centered icons.
 - Generated images are inserted with no semantic cropping.
+
+Optional arrow-beautification pass:
+
+```powershell
+rfs make-framework `
+  --paper "C:\path\paper.pdf" `
+  --reference "C:\path\reference.png" `
+  --out D:\ResearchFigureStudio\output\aesthetic_experiment `
+  --slot-count 40 `
+  --slot-source reference-primary `
+  --control-localizer-mode hybrid `
+  --arrow-style-mode aesthetic `
+  --prompt-plan-mode vlm `
+  --asset-mode image2
+```
+
+For publication-safe comparison, keep both `--arrow-style-mode reference` and
+`--arrow-style-mode aesthetic` outputs. Use the aesthetic version only when the
+small reference-tunnel deviations improve readability without changing the
+reference image's flow logic.
 
 ## Output Contract
 

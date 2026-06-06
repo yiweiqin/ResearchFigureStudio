@@ -28,7 +28,7 @@ Input Loader
 - `rfs/input_loader.py`: extracts text from source documents.
 - `rfs/paper_analyzer.py`: creates paper-grounded figure brief.
 - `rfs/reference_analyzer.py`: creates 25-50 non-arrow slot inventory from the reference image geometry and paper figure goal; it also detects arrow/control candidates, writes overlays, and emits `reference_control_candidates.json` / `reference_controls.json`.
-- `rfs/arrow_router.py`: assigns reference-preserving arrow aesthetics, bundle metadata, line softness, and route QA reports without changing reference-image flow logic. It also provides reference-constrained orthogonal fallback routing for missing or explicitly fallback-allowed connectors only.
+- `rfs/arrow_router.py`: assigns reference-preserving arrow aesthetics, bundle metadata, line softness, and route QA reports without changing reference-image flow logic. It also provides reference-constrained orthogonal fallback routing for missing or explicitly fallback-allowed connectors only. In aesthetic mode it records original paths and applies reference-tunnel bundle offsets only for explicitly opted-in routes.
 - `rfs/stylist.py`: writes the style sheet before image prompting.
 - `rfs/layout_locator.py`: creates `layout_plan.json`; heuristic mode is local, VLM mode returns JSON coordinates only.
 - `rfs/program_builder.py`: creates `figure_program.json`, the single source for PPT compilation, preserving control source/target anchors and normalized routes from `reference_controls.json`.
@@ -59,6 +59,7 @@ Input Loader
 - `arrow_style_profile.json`: reference-first arrow style rules, fallback routing policy, and routing algorithm metadata for main flow, branch, convergence, feedback loops, and module flow.
 - `selected_arrow_routes.json`: selected route/style assignments, bundle IDs, lane indices, reference-lock status, route generation status, and routing algorithm.
 - `arrow_quality_report.json`: crossing, bend, obstacle-overlap, and aesthetic-score diagnostics for PPT connectors.
+- `composition_quality_report.json`: records PPT arrow connector type, halo usage, route style, and editability alongside slot composition checks.
 - `layout_plan.json`: normalized positions, panels, arrows, and z order.
 - `figure_program.json`: final composition program consumed by the PPT compiler.
 - `reference_slot_prompt_brief.json`: per-slot paper concept, local reference role, geometry, and function briefing sent before prompt planning.

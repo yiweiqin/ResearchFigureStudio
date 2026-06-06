@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rfs.arrow_router import _segment_bbox_overlap, _segments, style_and_route_arrows
+from rfs.arrow_router import AESTHETIC_ROUTER_VERSION, _segment_bbox_overlap, _segments, style_and_route_arrows
 
 
 class ArrowRouterTests(unittest.TestCase):
@@ -117,6 +117,58 @@ class ArrowRouterTests(unittest.TestCase):
             route_by_id = {item["id"]: item for item in routes}
             self.assertEqual(route_by_id["fallback_flow"]["route_generation_status"], "fallback_route_selected")
             self.assertGreater(route_by_id["fallback_flow"]["candidate_count"], 1)
+
+    def test_aesthetic_mode_uses_reference_tunnel_for_bundle_offsets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            arrows = []
+            for index, y in enumerate([0.18, 0.30, 0.42], start=1):
+                arrows.append({
+                    "id": f"branch_{index}",
+                    "source_id": "source",
+                    "target_id": f"target_{index}",
+                    "path_percent": [[0.20, 0.30], [0.70, y]],
+                    "style_token_id": "arrow_001",
+                    "editable_in": "pptx",
+                    "render_policy": "ppt_shape_not_image_asset",
+                    "binding_source": "reference_control_candidates",
+                    "aesthetic_offset_allowed": True,
+                })
+            program = {
+                "summary": "Figure program.",
+                "canvas": {"width_in": 10, "height_in": 5},
+                "style": {"color_tokens": [{"token_id": "arrow_001", "hex": "#111111"}]},
+                "panels": [],
+                "slots": [
+                    {"id": "source", "bbox_percent": {"x": 0.10, "y": 0.25, "w": 0.10, "h": 0.10}},
+                    {"id": "target_1", "bbox_percent": {"x": 0.70, "y": 0.13, "w": 0.10, "h": 0.10}},
+                    {"id": "target_2", "bbox_percent": {"x": 0.70, "y": 0.25, "w": 0.10, "h": 0.10}},
+                    {"id": "target_3", "bbox_percent": {"x": 0.70, "y": 0.37, "w": 0.10, "h": 0.10}},
+                ],
+                "arrows": arrows,
+            }
+
+            result = style_and_route_arrows(program, out, mode="aesthetic")
+            by_id = {item["id"]: item for item in result["arrows"]}
+            adjusted = 0
+            for arrow_id, arrow in by_id.items():
+                self.assertEqual(arrow["semantic_role"], "branch")
+                self.assertEqual(arrow["route_style"], "metro_bundle")
+                self.assertEqual(arrow["routing_algorithm"], AESTHETIC_ROUTER_VERSION)
+                self.assertIn(arrow["route_generation_status"], {"aesthetic_tunnel_adjusted", "aesthetic_style_only"})
+                self.assertTrue(arrow["reference_tunnel_preserved"], arrow_id)
+                self.assertLessEqual(arrow["reference_path_delta_max"], arrow["reference_tunnel_percent"])
+                self.assertTrue(arrow["reference_path_preserved"])
+                self.assertTrue(arrow["reference_original_path_percent"])
+                self.assertGreater(float(arrow["halo_width_pt"]), 0)
+                if arrow["route_generation_status"] == "aesthetic_tunnel_adjusted":
+                    adjusted += 1
+            self.assertGreaterEqual(adjusted, 2)
+
+            quality = json.loads((out / "arrow_quality_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(quality["mode"], "aesthetic")
+            self.assertEqual(quality["reference_tunnel_violations"], [])
+            self.assertGreaterEqual(quality["aesthetic_tunnel_adjusted_count"], 2)
 
 
 if __name__ == "__main__":
