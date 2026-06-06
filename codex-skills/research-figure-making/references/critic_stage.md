@@ -55,7 +55,9 @@ Minimum checks:
 - `arrow_style_quality`: `arrow_style_profile.json`,
   `selected_arrow_routes.json`, and `arrow_quality_report.json` exist; styling
   preserves reference-locked paths, improves softness/variation through PPT
-  connector properties, and reports crossings, bends, and obstacle overlaps
+  connector properties, reports crossings, bends, and obstacle overlaps, and
+  uses obstacle-aware routing only for missing or explicitly fallback-allowed
+  paths
 - `reference_alignment`: when a reference image exists, major flow, group
   positions, visual density, and resource regions remain aligned unless the
   paper requires a deviation
@@ -71,8 +73,8 @@ Minimum checks:
   failure, unresolved severe complexity failure such as `too_simple` or
   `reference_crop_ignored`, arrows baked into raster assets, missing control
   overlays, controls without source-target binding, arrow styling that
-  overrides reference-locked paths, or fewer than 25 slot assets for a normal
-  system figure
+  overrides reference-locked paths, fallback routing applied to a reference
+  locked path, or fewer than 25 slot assets for a normal system figure
 - `medium`: inconsistent style, poor slot density, unclear arrow route, weak
   reference alignment, or incomplete prompt records
 - `minor`: spacing, padding, color balance, small visual cleanup, or export

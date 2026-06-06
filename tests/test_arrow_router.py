@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rfs.arrow_router import style_and_route_arrows
+from rfs.arrow_router import _segment_bbox_overlap, _segments, style_and_route_arrows
 
 
 class ArrowRouterTests(unittest.TestCase):
@@ -58,6 +58,65 @@ class ArrowRouterTests(unittest.TestCase):
             self.assertEqual(quality["summary"], "Arrow routing and styling quality report.")
             self.assertEqual(quality["arrow_count"], 2)
             self.assertFalse(quality["reference_path_overrides"])
+
+    def test_fallback_route_avoids_slot_obstacle_without_changing_reference_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            program = {
+                "summary": "Figure program.",
+                "canvas": {"width_in": 10, "height_in": 5},
+                "style": {"color_tokens": [{"token_id": "arrow_001", "hex": "#111111"}]},
+                "panels": [],
+                "slots": [
+                    {"id": "source", "bbox_percent": {"x": 0.10, "y": 0.42, "w": 0.10, "h": 0.12}},
+                    {"id": "target", "bbox_percent": {"x": 0.78, "y": 0.42, "w": 0.10, "h": 0.12}},
+                    {"id": "obstacle", "bbox_percent": {"x": 0.42, "y": 0.38, "w": 0.14, "h": 0.20}},
+                    {"id": "locked_a", "bbox_percent": {"x": 0.10, "y": 0.12, "w": 0.10, "h": 0.10}},
+                    {"id": "locked_b", "bbox_percent": {"x": 0.78, "y": 0.12, "w": 0.10, "h": 0.10}},
+                ],
+                "arrows": [
+                    {
+                        "id": "locked_flow",
+                        "source_id": "locked_a",
+                        "target_id": "locked_b",
+                        "path_percent": [[0.20, 0.17], [0.78, 0.17]],
+                        "style_token_id": "arrow_001",
+                        "editable_in": "pptx",
+                        "render_policy": "ppt_shape_not_image_asset",
+                        "binding_source": "reference_control_candidates",
+                    },
+                    {
+                        "id": "fallback_flow",
+                        "source_id": "source",
+                        "target_id": "target",
+                        "path_percent": [],
+                        "style_token_id": "arrow_001",
+                        "editable_in": "pptx",
+                        "render_policy": "ppt_shape_not_image_asset",
+                        "route_policy": "fallback_reroute_allowed",
+                    },
+                ],
+            }
+
+            result = style_and_route_arrows(program, out, mode="reference")
+            by_id = {item["id"]: item for item in result["arrows"]}
+
+            self.assertEqual(by_id["locked_flow"]["path_percent"], [[0.2, 0.17], [0.78, 0.17]])
+            self.assertTrue(by_id["locked_flow"]["reference_locked"])
+            self.assertTrue(by_id["locked_flow"]["reference_path_preserved"])
+
+            fallback = by_id["fallback_flow"]
+            self.assertFalse(fallback["reference_locked"])
+            self.assertEqual(fallback["route_generation_status"], "fallback_route_selected")
+            self.assertEqual(fallback["routing_algorithm"], "reference-constrained-orthogonal-v1")
+            self.assertGreaterEqual(len(fallback["path_percent"]), 3)
+            obstacle_box = by_id.get("obstacle", {}).get("bbox_percent") or {"x": 0.42, "y": 0.38, "w": 0.14, "h": 0.20}
+            self.assertFalse(any(_segment_bbox_overlap(a, b, obstacle_box) for a, b in _segments(fallback["path_percent"])))
+
+            routes = json.loads((out / "selected_arrow_routes.json").read_text(encoding="utf-8"))["routes"]
+            route_by_id = {item["id"]: item for item in routes}
+            self.assertEqual(route_by_id["fallback_flow"]["route_generation_status"], "fallback_route_selected")
+            self.assertGreater(route_by_id["fallback_flow"]["candidate_count"], 1)
 
 
 if __name__ == "__main__":

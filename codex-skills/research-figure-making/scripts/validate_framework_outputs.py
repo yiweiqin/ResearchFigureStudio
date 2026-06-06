@@ -511,6 +511,9 @@ def validate_program(path: Path) -> int:
         for key in ("semantic_role", "route_style", "line_cap", "arrowhead_size"):
             if not str(arrow.get(key, "")).strip():
                 fail(f"figure_program.json arrow/control {aid} missing {key}")
+        for key in ("routing_algorithm", "route_generation_status"):
+            if not str(arrow.get(key, "")).strip():
+                fail(f"figure_program.json arrow/control {aid} missing {key}")
         if arrow.get("reference_locked") and arrow.get("reference_path_preserved") is not True:
             fail(f"figure_program.json arrow/control {aid} overrides a locked reference path")
         if str(arrow.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
@@ -541,6 +544,10 @@ def validate_arrow_style_profile(path: Path) -> None:
         fail("arrow_style_profile.json must contain style_rules")
     if "reference" not in str(data.get("routing_principle", "")).lower():
         fail("arrow_style_profile.json routing_principle must explicitly preserve the reference image")
+    if not str(data.get("routing_algorithm", "")).strip():
+        fail("arrow_style_profile.json must record routing_algorithm")
+    if "fallback" not in str(data.get("fallback_routing_policy", "")).lower():
+        fail("arrow_style_profile.json must record fallback_routing_policy")
 
 
 def validate_selected_arrow_routes(path: Path) -> int:
@@ -554,7 +561,7 @@ def validate_selected_arrow_routes(path: Path) -> int:
         if not isinstance(item, dict):
             fail(f"selected_arrow_routes item at index {index} must be an object")
         rid = item.get("id", index)
-        for key in ("source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap"):
+        for key in ("source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap", "routing_algorithm", "route_generation_status"):
             if key not in item or not str(item.get(key, "")).strip():
                 fail(f"selected_arrow_routes item {rid} missing {key}")
         if item.get("reference_locked") and item.get("reference_path_preserved") is not True:
@@ -806,6 +813,8 @@ def validate_composition_quality(path: Path) -> int:
             fail(f"composition_quality_report arrow {aid} missing route_style")
         if not str(item.get("line_cap", "")).strip():
             fail(f"composition_quality_report arrow {aid} missing line_cap")
+        if not str(item.get("routing_algorithm", "")).strip():
+            fail(f"composition_quality_report arrow {aid} missing routing_algorithm")
         try:
             segment_count = int(item.get("segment_count", 0))
         except (TypeError, ValueError):

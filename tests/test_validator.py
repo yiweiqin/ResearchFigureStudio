@@ -275,9 +275,9 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         },
     ]
     arrow_style_by_id = {
-        "flow_a": {"semantic_role": "module_flow", "route_style": "soft_straight", "bundle_id": "flow_01", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
-        "loop_a": {"semantic_role": "feedback_loop", "route_style": "dashed_spline_like", "bundle_id": "loop_slot_02_slot_03", "line_cap": "round", "line_pattern": "dash", "stroke_width_pt": 1.8, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
-        "multi_a": {"semantic_role": "module_flow", "route_style": "rounded_elbow", "bundle_id": "flow_03", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.65, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
+        "flow_a": {"semantic_role": "module_flow", "route_style": "soft_straight", "bundle_id": "flow_01", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True, "routing_algorithm": "preserve_reference_path", "route_generation_status": "reference_locked"},
+        "loop_a": {"semantic_role": "feedback_loop", "route_style": "dashed_spline_like", "bundle_id": "loop_slot_02_slot_03", "line_cap": "round", "line_pattern": "dash", "stroke_width_pt": 1.8, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True, "routing_algorithm": "preserve_reference_path", "route_generation_status": "reference_locked"},
+        "multi_a": {"semantic_role": "module_flow", "route_style": "rounded_elbow", "bundle_id": "flow_03", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.65, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True, "routing_algorithm": "preserve_reference_path", "route_generation_status": "reference_locked"},
     }
     for arrow in arrows:
         arrow.update(arrow_style_by_id[arrow["id"]])
@@ -380,6 +380,8 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
             "arrowhead_size": arrow["arrowhead_size"],
             "line_cap": arrow["line_cap"],
             "line_pattern": arrow["line_pattern"],
+            "routing_algorithm": arrow["routing_algorithm"],
+            "route_generation_status": arrow["route_generation_status"],
             "metrics": {"path_length": 0.1, "bend_count": max(0, len(arrow["path_percent"]) - 2), "crossing_count": 0, "obstacle_overlap_count": 0},
             "aesthetic_score": 95,
         })
@@ -388,6 +390,8 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         "mode": "reference",
         "reference_priority": "reference_image_hard_constraint",
         "routing_principle": "preserve reference-derived source-target logic and path geometry",
+        "routing_algorithm": "reference-constrained-orthogonal-v1",
+        "fallback_routing_policy": "only missing or fallback_reroute_allowed arrows may use obstacle-aware routing",
         "style_rules": {"module_flow": {"route_style": "soft_straight"}, "feedback_loop": {"route_style": "dashed_spline_like"}},
         "ppt_editability": "all arrows render as PPT connector shapes",
     })
@@ -468,7 +472,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
     (root / "prompts.md").write_text("# Summary\nPrompts.\n", encoding="utf-8")
     _write_json(root / "asset_quality_report.json", {"summary": "Asset quality.", "assets": asset_items})
     _write_json(root / "asset_complexity_report.json", {"summary": "Asset complexity.", "assets": complexity_items})
-    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items, "arrows": [{"arrow_id": item["id"], "segment_count": max(1, len(item["path_percent"]) - 1), "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset", "route_style": item["route_style"], "line_cap": item["line_cap"]} for item in arrows]})
+    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items, "arrows": [{"arrow_id": item["id"], "segment_count": max(1, len(item["path_percent"]) - 1), "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset", "route_style": item["route_style"], "line_cap": item["line_cap"], "routing_algorithm": item["routing_algorithm"]} for item in arrows]})
     _write_json(root / "asset_visual_review.json", {"summary": "Asset review.", "status": "pass", "issues": []})
     (root / "alignment_review.md").write_text("# Summary\nAlignment.\n", encoding="utf-8")
     (root / "critic_report.md").write_text("# Summary\nCritic.\n", encoding="utf-8")

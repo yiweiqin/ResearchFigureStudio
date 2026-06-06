@@ -187,6 +187,10 @@ Minimum top-level keys:
   `arrow_quality_report.json` must be produced before PPT compilation. They may
   soften connector caps, choose widths, assign line bundles, and report
   crossing/bend/overlap quality, but they must preserve reference-locked paths.
+  Orthogonal obstacle-aware routing may synthesize paths only when the path is
+  missing or the arrow is explicitly marked
+  `route_policy=fallback_reroute_allowed`; every route must record
+  `routing_algorithm` and `route_generation_status`.
 - `assets` must be slot-level blocks, not one full generated diagram. Asset IDs
   and slot IDs must not contain arrow/control semantics such as `arrow`,
   `transition_arrow`, `dashed_arc`, `dashed_arrows`, or `graph_connector`.

@@ -12,6 +12,7 @@ The current workflow is optimized for AI/ML/NLP system figures:
 - `slot_visual_spec.json` for dense mini-scene/image-block planning
 - AutoFigure-inspired control candidates and overlays for arrow/source-target binding
 - reference-preserving arrow styling/routing reports for softer editable PPT connectors
+- reference-constrained orthogonal fallback routing for missing or explicitly fallback-allowed connectors
 - multi-candidate image generation through placeholder, Gemini, or Yunwu image2-compatible APIs
 - deterministic PPTX composition with editable labels, panels, arrows, connectors, and formulas
 - strict validation for no single full diagram, no semantic crop, no vector-only fallback, low blank space, and non-trivial image-block complexity
@@ -38,9 +39,11 @@ The current implementation now has an initial AutoFigure-inspired
 `reference_control_candidates.json` plus `slot_overlay.png` /
 `reference_control_overlay.png` workflow, plus reference-preserving
 `arrow_style_profile.json`, `selected_arrow_routes.json`, and
-`arrow_quality_report.json`. It is still fragile for complex scientific
-diagrams: source-target binding, multi-segment routes, avoiding overlap, dashed
-loops, and preserving reference-image logic need stronger methods.
+`arrow_quality_report.json`. It now includes a conservative orthogonal fallback
+router for missing or explicitly fallback-allowed connectors. It is still
+fragile for complex scientific diagrams: source-target binding, truly curved
+routes, dense bundle routing, dashed loops, and preserving reference-image logic
+need stronger methods.
 
 If you have experience with vision-language layout parsing, diagram structure
 reconstruction, PowerPoint object routing, graph drawing, or editable scientific
@@ -152,6 +155,7 @@ Key rules:
 - Arrows, connector lines, dashed loops, panel frames, labels, formulas, and critical text are PPT editable objects, not image assets.
 - Arrow/control localization is reference-driven: CV detects candidates, overlays label them, optional VLM binding assigns source/target semantics, and the PPT compiler renders editable connectors.
 - Arrow styling is reference-preserving: it may soften line caps, assign bundle IDs, vary widths/dashes, and report aesthetics, but it must not replace reference-image flow logic with a generic router.
+- Obstacle-aware routing is fallback-only: it may synthesize orthogonal paths for missing routes or `route_policy=fallback_reroute_allowed`, but it must not rewrite reference-locked paths.
 - Normal non-legend slots should be dense mini scientific scenes/cards with layered objects and micro-details, not simple centered icons.
 - Generated images are inserted with no semantic cropping.
 

@@ -263,6 +263,8 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
             "line_pattern": "dash" if dashed else "solid",
             "stroke_width_pt": line_width,
             "arrowhead_size": arrowhead_size,
+            "routing_algorithm": arrow.get("routing_algorithm"),
+            "route_generation_status": arrow.get("route_generation_status"),
             "segment_count": segment_count,
             "point_count": len(points),
             "editable_in": "pptx",

@@ -221,6 +221,10 @@ def validate_output(out_dir: str | Path) -> dict:
             errors.append("arrow_style_profile.json must contain style_rules")
         if "reference" not in str(arrow_style.get("routing_principle", "")).lower():
             errors.append("arrow_style_profile.json routing_principle must explicitly preserve the reference image")
+        if not str(arrow_style.get("routing_algorithm", "")).strip():
+            errors.append("arrow_style_profile.json must record routing_algorithm")
+        if "fallback" not in str(arrow_style.get("fallback_routing_policy", "")).lower():
+            errors.append("arrow_style_profile.json must record fallback_routing_policy")
     except Exception as exc:
         errors.append(f"Invalid arrow_style_profile.json: {exc}")
 
@@ -231,7 +235,7 @@ def validate_output(out_dir: str | Path) -> dict:
             errors.append("selected_arrow_routes.json routes must be a list")
         for item in routes if isinstance(routes, list) else []:
             rid = item.get("id")
-            for key in ["source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap"]:
+            for key in ["source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap", "routing_algorithm", "route_generation_status"]:
                 if key not in item or not str(item.get(key, "")).strip():
                     errors.append(f"selected_arrow_routes item {rid} missing {key}")
             if item.get("reference_locked") and item.get("reference_path_preserved") is not True:
@@ -355,6 +359,10 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"Arrow/control {arrow.get('id')} missing semantic_role")
             if not str(arrow.get("route_style", "")).strip():
                 errors.append(f"Arrow/control {arrow.get('id')} missing route_style")
+            if not str(arrow.get("routing_algorithm", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing routing_algorithm")
+            if not str(arrow.get("route_generation_status", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing route_generation_status")
             if arrow.get("reference_locked") and arrow.get("reference_path_preserved") is not True:
                 errors.append(f"Arrow/control {arrow.get('id')} overrides a locked reference path")
         style = program.get("style", {}) if isinstance(program.get("style"), dict) else {}
@@ -537,6 +545,8 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"Composition arrow {aid} missing route_style")
             if not str(item.get("line_cap", "")).strip():
                 errors.append(f"Composition arrow {aid} missing line_cap")
+            if not str(item.get("routing_algorithm", "")).strip():
+                errors.append(f"Composition arrow {aid} missing routing_algorithm")
     except Exception as exc:
         errors.append(f"Invalid composition_quality_report.json: {exc}")
 

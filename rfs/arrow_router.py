@@ -5,6 +5,8 @@ from typing import Any
 
 from .utils import write_json
 
+ROUTER_VERSION = "reference-constrained-orthogonal-v1"
+
 
 def _bbox_center(bbox: dict[str, Any]) -> list[float]:
     return [
@@ -52,6 +54,31 @@ def _edge_path(source: dict | None, target: dict | None) -> list[list[float]]:
     s = _anchor_point(source, s_anchor)
     t = _anchor_point(target, t_anchor)
     return [s, t] if s and t else []
+
+
+def _clean_path(points: list[list[float] | None]) -> list[list[float]]:
+    cleaned: list[list[float]] = []
+    for point in points:
+        if not point or len(point) < 2:
+            continue
+        x = min(1.0, max(0.0, float(point[0])))
+        y = min(1.0, max(0.0, float(point[1])))
+        rounded = [round(x, 4), round(y, 4)]
+        if not cleaned or abs(cleaned[-1][0] - rounded[0]) > 0.001 or abs(cleaned[-1][1] - rounded[1]) > 0.001:
+            cleaned.append(rounded)
+    if len(cleaned) <= 2:
+        return cleaned
+    simplified = [cleaned[0]]
+    for index in range(1, len(cleaned) - 1):
+        prev = simplified[-1]
+        cur = cleaned[index]
+        nxt = cleaned[index + 1]
+        same_x = abs(prev[0] - cur[0]) < 0.001 and abs(cur[0] - nxt[0]) < 0.001
+        same_y = abs(prev[1] - cur[1]) < 0.001 and abs(cur[1] - nxt[1]) < 0.001
+        if not (same_x or same_y):
+            simplified.append(cur)
+    simplified.append(cleaned[-1])
+    return simplified
 
 
 def _segments(points: list[list[float]]) -> list[tuple[list[float], list[float]]]:
@@ -111,6 +138,129 @@ def _segment_bbox_overlap(a: list[float], b: list[float], bbox: dict[str, Any], 
         ([x0, y1], [x0, y0]),
     ]
     return any(_segments_cross(a, b, e0, e1) for e0, e1 in edges)
+
+
+def _candidate_lanes(source: dict, target: dict, obstacles: dict[str, dict], axis: str, limit: int = 18) -> list[float]:
+    sbox = source["bbox_percent"]
+    tbox = target["bbox_percent"]
+    if axis == "x":
+        base = [
+            float(sbox["x"]),
+            float(sbox["x"]) + float(sbox["w"]),
+            float(sbox["x"]) + float(sbox["w"]) / 2,
+            float(tbox["x"]),
+            float(tbox["x"]) + float(tbox["w"]),
+            float(tbox["x"]) + float(tbox["w"]) / 2,
+        ]
+        for obj in obstacles.values():
+            bbox = obj.get("bbox_percent") if isinstance(obj.get("bbox_percent"), dict) else None
+            if not bbox:
+                continue
+            base.extend([float(bbox["x"]) - 0.014, float(bbox["x"]) + float(bbox["w"]) + 0.014])
+    else:
+        base = [
+            float(sbox["y"]),
+            float(sbox["y"]) + float(sbox["h"]),
+            float(sbox["y"]) + float(sbox["h"]) / 2,
+            float(tbox["y"]),
+            float(tbox["y"]) + float(tbox["h"]),
+            float(tbox["y"]) + float(tbox["h"]) / 2,
+        ]
+        for obj in obstacles.values():
+            bbox = obj.get("bbox_percent") if isinstance(obj.get("bbox_percent"), dict) else None
+            if not bbox:
+                continue
+            base.extend([float(bbox["y"]) - 0.014, float(bbox["y"]) + float(bbox["h"]) + 0.014])
+    midpoint = (sum(base[:6]) / 6) if len(base) >= 6 else 0.5
+    lanes = sorted({round(min(0.985, max(0.015, value)), 4) for value in base}, key=lambda value: abs(value - midpoint))
+    return sorted(lanes[:limit])
+
+
+def _crossing_count(points: list[list[float]], existing_segments: list[tuple[list[float], list[float]]]) -> int:
+    count = 0
+    for a, b in _segments(points):
+        for c, d in existing_segments:
+            if _segments_cross(a, b, c, d):
+                count += 1
+    return count
+
+
+def _obstacle_overlaps(points: list[list[float]], obstacles: dict[str, dict]) -> list[str]:
+    overlaps = []
+    for obj_id, obj in obstacles.items():
+        bbox = obj.get("bbox_percent") if isinstance(obj.get("bbox_percent"), dict) else None
+        if not bbox:
+            continue
+        if any(_segment_bbox_overlap(a, b, bbox) for a, b in _segments(points)):
+            overlaps.append(obj_id)
+    return overlaps
+
+
+def _score_candidate(points: list[list[float]], obstacles: dict[str, dict], existing_segments: list[tuple[list[float], list[float]]]) -> tuple[float, dict[str, Any]]:
+    overlaps = _obstacle_overlaps(points, obstacles)
+    crossings = _crossing_count(points, existing_segments)
+    bends = max(0, len(points) - 2)
+    length = _path_length(points)
+    near_edge_penalty = sum(1 for x, y in points if x < 0.012 or x > 0.988 or y < 0.012 or y > 0.988)
+    score = len(overlaps) * 1000 + crossings * 80 + bends * 8 + length * 16 + near_edge_penalty * 10
+    return score, {
+        "candidate_score": round(score, 4),
+        "obstacle_overlap_count": len(overlaps),
+        "obstacle_overlap_ids": overlaps[:12],
+        "crossing_count": crossings,
+        "bend_count": bends,
+        "path_length": length,
+    }
+
+
+def _best_fallback_path(
+    source: dict | None,
+    target: dict | None,
+    obstacles: dict[str, dict],
+    existing_segments: list[tuple[list[float], list[float]]],
+) -> tuple[list[list[float]], dict[str, Any]]:
+    if not source or not target:
+        return [], {"routing_algorithm": ROUTER_VERSION, "route_generation_status": "missing_source_or_target"}
+    direct = _edge_path(source, target)
+    if len(direct) < 2:
+        return [], {"routing_algorithm": ROUTER_VERSION, "route_generation_status": "missing_anchor_points"}
+
+    sx, sy = direct[0]
+    tx, ty = direct[-1]
+    x_lanes = _candidate_lanes(source, target, obstacles, "x")
+    y_lanes = _candidate_lanes(source, target, obstacles, "y")
+    candidates = [_clean_path(direct)]
+    candidates.extend(_clean_path([direct[0], [x, sy], [x, ty], direct[-1]]) for x in x_lanes)
+    candidates.extend(_clean_path([direct[0], [sx, y], [tx, y], direct[-1]]) for y in y_lanes)
+    # Two-lane orthogonal paths can move around large central obstacles without
+    # changing the source-target semantics from the reference-derived program.
+    for x in x_lanes[:12]:
+        for y in y_lanes[:12]:
+            candidates.append(_clean_path([direct[0], [x, sy], [x, y], [tx, y], direct[-1]]))
+            candidates.append(_clean_path([direct[0], [sx, y], [x, y], [x, ty], direct[-1]]))
+
+    best_path: list[list[float]] = direct
+    best_meta: dict[str, Any] = {}
+    best_score = float("inf")
+    seen: set[tuple[tuple[float, float], ...]] = set()
+    for candidate in candidates:
+        if len(candidate) < 2:
+            continue
+        key = tuple((point[0], point[1]) for point in candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        score, meta = _score_candidate(candidate, obstacles, existing_segments)
+        if score < best_score:
+            best_score = score
+            best_path = candidate
+            best_meta = meta
+    best_meta.update({
+        "routing_algorithm": ROUTER_VERSION,
+        "route_generation_status": "fallback_route_selected",
+        "candidate_count": len(seen),
+    })
+    return best_path, best_meta
 
 
 def _infer_role(arrow: dict, out_counts: dict[str, int], in_counts: dict[str, int], panel_ids: set[str]) -> str:
@@ -215,6 +365,7 @@ def style_and_route_arrows(
     panels = program.get("panels", []) if isinstance(program.get("panels"), list) else []
     slots = program.get("slots", []) if isinstance(program.get("slots"), list) else []
     objects = {str(item.get("id")): item for item in panels + slots if isinstance(item, dict) and item.get("id")}
+    slot_objects = {str(item.get("id")): item for item in slots if isinstance(item, dict) and item.get("id")}
     panel_ids = {str(panel.get("id")) for panel in panels if isinstance(panel, dict)}
     arrows = [dict(item) for item in program.get("arrows", []) if isinstance(item, dict)]
     out_counts: dict[str, int] = {}
@@ -225,8 +376,15 @@ def style_and_route_arrows(
         out_counts[source] = out_counts.get(source, 0) + 1
         in_counts[target] = in_counts.get(target, 0) + 1
 
+    reference_segments: list[tuple[list[float], list[float]]] = []
+    for original in arrows:
+        original_points = original.get("path_percent") if isinstance(original.get("path_percent"), list) else []
+        if _reference_locked(original) and len(original_points) >= 2:
+            reference_segments.extend(_segments(_clean_path(original_points)))
+
     grouped: dict[str, list[dict]] = {}
     enriched = []
+    committed_fallback_segments: list[tuple[list[float], list[float]]] = []
     for index, arrow in enumerate(arrows, start=1):
         source = str(arrow.get("source_id") or arrow.get("source") or "")
         target = str(arrow.get("target_id") or arrow.get("target") or "")
@@ -236,9 +394,19 @@ def style_and_route_arrows(
         arrow["target"] = target
         points = arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else []
         locked = _reference_locked(arrow)
-        if len(points) < 2 and mode in {"reference", "aesthetic"}:
-            points = _edge_path(objects.get(source), objects.get(target))
+        route_meta: dict[str, Any] = {"routing_algorithm": "preserve_reference_path", "route_generation_status": "reference_locked"}
+        fallback_allowed = str(arrow.get("route_policy", "")).lower() == "fallback_reroute_allowed"
+        if (len(points) < 2 or (fallback_allowed and not locked)) and mode in {"reference", "aesthetic"}:
+            obstacles = {obj_id: obj for obj_id, obj in slot_objects.items() if obj_id not in {source, target}}
+            points, route_meta = _best_fallback_path(
+                objects.get(source),
+                objects.get(target),
+                obstacles,
+                reference_segments + committed_fallback_segments,
+            )
             locked = False
+        else:
+            points = _clean_path(points)
         arrow["path_percent"] = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in points if isinstance(p, list) and len(p) >= 2]
         role = _infer_role(arrow, out_counts, in_counts, panel_ids)
         style = _style_for_role(role, arrow)
@@ -249,6 +417,12 @@ def style_and_route_arrows(
         arrow.setdefault("reference_locked", locked)
         arrow.setdefault("reference_path_preserved", locked)
         arrow.setdefault("route_policy", "preserve_reference_path" if locked else "synthesize_missing_path_only")
+        arrow.setdefault("routing_algorithm", route_meta.get("routing_algorithm", ROUTER_VERSION))
+        arrow.setdefault("route_generation_status", route_meta.get("route_generation_status", "fallback_route_selected" if not locked else "reference_locked"))
+        if "candidate_count" in route_meta:
+            arrow.setdefault("candidate_count", route_meta["candidate_count"])
+        if "candidate_score" in route_meta:
+            arrow.setdefault("candidate_score", route_meta["candidate_score"])
         arrow.setdefault("corner_radius_percent", 0.018 if arrow.get("route_style") in {"rounded_elbow", "bundled_elbow"} else 0.0)
         if role == "branch":
             bundle_id = f"from_{source}"
@@ -261,6 +435,8 @@ def style_and_route_arrows(
         arrow.setdefault("bundle_id", bundle_id)
         grouped.setdefault(bundle_id, []).append(arrow)
         enriched.append(arrow)
+        if not locked and len(arrow["path_percent"]) >= 2:
+            committed_fallback_segments.extend(_segments(arrow["path_percent"]))
 
     for bundle_id, items in grouped.items():
         items.sort(key=lambda item: (item.get("target_id", ""), item.get("id", "")))
@@ -268,7 +444,7 @@ def style_and_route_arrows(
             arrow.setdefault("lane_index", lane_index)
             arrow.setdefault("lane_count", len(items))
 
-    metrics, total_crossings = _route_metrics(enriched, objects)
+    metrics, total_crossings = _route_metrics(enriched, slot_objects)
     routes = []
     for arrow in enriched:
         aid = str(arrow.get("id"))
@@ -296,6 +472,10 @@ def style_and_route_arrows(
             "arrowhead_size": arrow.get("arrowhead_size"),
             "line_cap": arrow.get("line_cap"),
             "line_pattern": arrow.get("line_pattern", "solid"),
+            "routing_algorithm": arrow.get("routing_algorithm"),
+            "route_generation_status": arrow.get("route_generation_status"),
+            "candidate_count": arrow.get("candidate_count"),
+            "candidate_score": arrow.get("candidate_score"),
             "metrics": m,
             "aesthetic_score": arrow["aesthetic_score"],
         })
@@ -305,6 +485,8 @@ def style_and_route_arrows(
         "mode": mode,
         "reference_priority": "reference_image_hard_constraint",
         "routing_principle": "preserve reference-derived source-target logic and path geometry; only synthesize missing fallback paths",
+        "routing_algorithm": ROUTER_VERSION,
+        "fallback_routing_policy": "only arrows with missing paths or route_policy=fallback_reroute_allowed may use obstacle-aware orthogonal routing",
         "style_rules": {
             "main_flow": {"route_style": "soft_straight", "stroke_width_pt": 2.2, "arrowhead_size": "med"},
             "branch": {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm"},
@@ -313,7 +495,7 @@ def style_and_route_arrows(
             "module_flow": {"route_style": "soft_straight", "stroke_width_pt": 1.45, "arrowhead_size": "sm"},
         },
         "ppt_editability": "all arrows render as PPT connector shapes, not raster assets",
-        "rounded_line_policy": "use round line caps and editable connector segments; full curved routing is future work",
+        "rounded_line_policy": "use round line caps and editable connector segments; reference-locked paths are not geometrically rewritten",
     }
     selected_routes = {
         "summary": "Selected reference-preserving arrow routes and style assignments.",
@@ -328,6 +510,7 @@ def style_and_route_arrows(
         "arrow_count": len(routes),
         "total_crossing_count": total_crossings,
         "total_obstacle_overlap_count": sum(int(route["metrics"].get("obstacle_overlap_count", 0)) for route in routes),
+        "fallback_route_count": sum(1 for route in routes if route.get("route_generation_status") == "fallback_route_selected"),
         "average_aesthetic_score": round(sum(float(route["aesthetic_score"]) for route in routes) / max(len(routes), 1), 2),
         "reference_path_overrides": [route["id"] for route in routes if route.get("reference_locked") and not route.get("reference_path_preserved")],
         "routes": routes,

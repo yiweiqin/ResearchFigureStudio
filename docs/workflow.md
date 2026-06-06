@@ -9,7 +9,7 @@ The workflow is designed to keep scientific content, layout, image generation, a
 3. Analyze the reference image and create 25-50 non-arrow image slot targets.
 4. Detect arrow/control candidates, write `reference_control_candidates.json`, and render `slot_overlay.png` plus `reference_control_overlay.png` for review or VLM binding.
 5. Bind controls to source/target slots with `--control-localizer-mode hybrid` when API access exists, or deterministic heuristic fallback otherwise.
-6. Create `arrow_style_profile.json`, `selected_arrow_routes.json`, and `arrow_quality_report.json`; this stage may soften and classify arrows, but it must preserve reference-image flow logic.
+6. Create `arrow_style_profile.json`, `selected_arrow_routes.json`, and `arrow_quality_report.json`; this stage may soften and classify arrows, and may use orthogonal obstacle-aware fallback routing only for missing or explicitly fallback-allowed paths, but it must preserve reference-image flow logic.
 7. Create the style sheet before any image prompt is written.
 8. Create `layout_plan.json`; use VLM only for normalized coordinate estimation when enabled.
 9. Create `figure_program.json`; this is the only layout source for the PPT compiler.
@@ -71,3 +71,4 @@ Validation should fail if any of these occur:
 - critical labels or formulas baked into generated images
 - arrows, connectors, transitions, or dashed loops baked into generated image assets instead of editable PPT connector shapes
 - arrow styling/routing that overrides reference-locked paths without an explicit documented reason
+- fallback obstacle routing applied to a reference-locked path

@@ -93,7 +93,9 @@ Use `--arrow-style-mode reference` by default. This stage may soften PPT
 connector line caps, vary stroke widths, assign bundle/lane metadata, and score
 crossing/bend/overlap quality, but the reference image remains the hard
 constraint. It must not replace reference-derived flow logic with a generic
-graph router.
+graph router. Orthogonal obstacle-aware routing is allowed only for missing
+paths or arrows explicitly marked `route_policy=fallback_reroute_allowed`; it
+must never rewrite reference-locked `path_percent` values.
 
 Before execution, read these references in this order:
 
@@ -138,7 +140,9 @@ Execution checklist:
    Then write `arrow_style_profile.json`, `selected_arrow_routes.json`, and
    `arrow_quality_report.json`. These files must state
    `reference_image_hard_constraint`, preserve locked reference paths, and only
-   synthesize missing fallback paths.
+   synthesize missing or explicitly fallback-allowed paths. If fallback routing
+   is used, record `routing_algorithm`, `route_generation_status`, candidate
+   count, and obstacle/crossing metrics.
 3. Create a slot inventory before using image2. Default to 25-50 image slots for
    a normal paper system figure. This count means non-arrow image slots only;
    arrows, connector lines, dashed loops, panel frames, and titles must not be
@@ -312,7 +316,9 @@ rendered as an editable PPT connector. Validation must fail when
 `arrow_style_profile.json`, `selected_arrow_routes.json`, or
 `arrow_quality_report.json` are missing, or when an arrow style stage overrides
 a locked reference path without a documented reason. Validation must also fail
-when image slots lack local reference crops, local color token ids, or
+when fallback obstacle routing is applied to a reference-locked path, or when
+route artifacts omit `routing_algorithm` / `route_generation_status`.
+Validation must also fail when image slots lack local reference crops, local color token ids, or
 `reference_style_profile.json` grounding.
 
 ## Core Workflow
