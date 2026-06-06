@@ -269,12 +269,15 @@ def _infer_role(arrow: dict, out_counts: dict[str, int], in_counts: dict[str, in
     target = str(arrow.get("target_id") or arrow.get("target") or "")
     if "loop" in kind or "dashed" in kind:
         return "feedback_loop"
-    if source in panel_ids or target in panel_ids:
-        return "main_flow"
+    # Branch/convergence semantics should win over panel membership. Some RFS
+    # programs use panel-like IDs for central modules, and treating those first
+    # collapses every connector into the same main-flow style.
     if out_counts.get(source, 0) > 1:
         return "branch"
     if in_counts.get(target, 0) > 1:
         return "convergence"
+    if source in panel_ids or target in panel_ids:
+        return "main_flow"
     return "module_flow"
 
 
@@ -410,9 +413,12 @@ def style_and_route_arrows(
         arrow["path_percent"] = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in points if isinstance(p, list) and len(p) >= 2]
         role = _infer_role(arrow, out_counts, in_counts, panel_ids)
         style = _style_for_role(role, arrow)
+        recompute_generated_style = str(arrow.get("aesthetic_policy", "")).startswith("reference_first")
         for key, value in style.items():
-            arrow.setdefault(key, value)
-        arrow.setdefault("semantic_role", role)
+            if recompute_generated_style or key not in arrow or not str(arrow.get(key, "")).strip():
+                arrow[key] = value
+        if recompute_generated_style or not str(arrow.get("semantic_role", "")).strip():
+            arrow["semantic_role"] = role
         arrow.setdefault("aesthetic_policy", "reference_first_soft_editable_ppt_connector")
         arrow.setdefault("reference_locked", locked)
         arrow.setdefault("reference_path_preserved", locked)
