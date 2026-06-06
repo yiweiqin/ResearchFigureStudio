@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .utils import write_json
+
+
+def _bbox_center(bbox: dict[str, Any]) -> list[float]:
+    return [
+        round(float(bbox["x"]) + float(bbox["w"]) / 2, 4),
+        round(float(bbox["y"]) + float(bbox["h"]) / 2, 4),
+    ]
+
+
+def _anchor_point(obj: dict | None, anchor: str) -> list[float] | None:
+    if not obj or not isinstance(obj.get("bbox_percent"), dict):
+        return None
+    bbox = obj["bbox_percent"]
+    x = float(bbox["x"])
+    y = float(bbox["y"])
+    w = float(bbox["w"])
+    h = float(bbox["h"])
+    points = {
+        "left_mid": [x, y + h / 2],
+        "right_mid": [x + w, y + h / 2],
+        "top_mid": [x + w / 2, y],
+        "bottom_mid": [x + w / 2, y + h],
+        "center": [x + w / 2, y + h / 2],
+    }
+    point = points.get(anchor) or points["center"]
+    return [round(point[0], 4), round(point[1], 4)]
+
+
+def _edge_path(source: dict | None, target: dict | None) -> list[list[float]]:
+    if not source or not target:
+        return []
+    sbox = source.get("bbox_percent") if isinstance(source.get("bbox_percent"), dict) else None
+    tbox = target.get("bbox_percent") if isinstance(target.get("bbox_percent"), dict) else None
+    if not sbox or not tbox:
+        return []
+    sx, sy = _bbox_center(sbox)
+    tx, ty = _bbox_center(tbox)
+    dx = tx - sx
+    dy = ty - sy
+    if abs(dx) >= abs(dy):
+        s_anchor = "right_mid" if dx >= 0 else "left_mid"
+        t_anchor = "left_mid" if dx >= 0 else "right_mid"
+    else:
+        s_anchor = "bottom_mid" if dy >= 0 else "top_mid"
+        t_anchor = "top_mid" if dy >= 0 else "bottom_mid"
+    s = _anchor_point(source, s_anchor)
+    t = _anchor_point(target, t_anchor)
+    return [s, t] if s and t else []
+
+
+def _segments(points: list[list[float]]) -> list[tuple[list[float], list[float]]]:
+    return [(points[i], points[i + 1]) for i in range(max(0, len(points) - 1))]
+
+
+def _path_length(points: list[list[float]]) -> float:
+    total = 0.0
+    for a, b in _segments(points):
+        total += ((float(a[0]) - float(b[0])) ** 2 + (float(a[1]) - float(b[1])) ** 2) ** 0.5
+    return round(total, 4)
+
+
+def _orientation(a: list[float], b: list[float], c: list[float]) -> float:
+    return (float(b[1]) - float(a[1])) * (float(c[0]) - float(b[0])) - (float(b[0]) - float(a[0])) * (float(c[1]) - float(b[1]))
+
+
+def _share_endpoint(a1: list[float], a2: list[float], b1: list[float], b2: list[float]) -> bool:
+    pairs = ((a1, b1), (a1, b2), (a2, b1), (a2, b2))
+    return any(abs(p[0] - q[0]) < 0.002 and abs(p[1] - q[1]) < 0.002 for p, q in pairs)
+
+
+def _segments_cross(a1: list[float], a2: list[float], b1: list[float], b2: list[float]) -> bool:
+    if _share_endpoint(a1, a2, b1, b2):
+        return False
+    # Fast reject by segment bounding boxes.
+    if max(min(a1[0], a2[0]), min(b1[0], b2[0])) > min(max(a1[0], a2[0]), max(b1[0], b2[0])):
+        return False
+    if max(min(a1[1], a2[1]), min(b1[1], b2[1])) > min(max(a1[1], a2[1]), max(b1[1], b2[1])):
+        return False
+    o1 = _orientation(a1, a2, b1)
+    o2 = _orientation(a1, a2, b2)
+    o3 = _orientation(b1, b2, a1)
+    o4 = _orientation(b1, b2, a2)
+    return o1 * o2 < 0 and o3 * o4 < 0
+
+
+def _point_inside_bbox(point: list[float], bbox: dict[str, Any], pad: float = 0.0) -> bool:
+    x = float(bbox["x"]) - pad
+    y = float(bbox["y"]) - pad
+    w = float(bbox["w"]) + pad * 2
+    h = float(bbox["h"]) + pad * 2
+    return x <= float(point[0]) <= x + w and y <= float(point[1]) <= y + h
+
+
+def _segment_bbox_overlap(a: list[float], b: list[float], bbox: dict[str, Any], pad: float = 0.004) -> bool:
+    if _point_inside_bbox(a, bbox, pad=pad) or _point_inside_bbox(b, bbox, pad=pad):
+        return True
+    x0 = float(bbox["x"]) - pad
+    y0 = float(bbox["y"]) - pad
+    x1 = float(bbox["x"]) + float(bbox["w"]) + pad
+    y1 = float(bbox["y"]) + float(bbox["h"]) + pad
+    edges = [
+        ([x0, y0], [x1, y0]),
+        ([x1, y0], [x1, y1]),
+        ([x1, y1], [x0, y1]),
+        ([x0, y1], [x0, y0]),
+    ]
+    return any(_segments_cross(a, b, e0, e1) for e0, e1 in edges)
+
+
+def _infer_role(arrow: dict, out_counts: dict[str, int], in_counts: dict[str, int], panel_ids: set[str]) -> str:
+    kind = str(arrow.get("control_kind") or arrow.get("type") or "").lower()
+    source = str(arrow.get("source_id") or arrow.get("source") or "")
+    target = str(arrow.get("target_id") or arrow.get("target") or "")
+    if "loop" in kind or "dashed" in kind:
+        return "feedback_loop"
+    if source in panel_ids or target in panel_ids:
+        return "main_flow"
+    if out_counts.get(source, 0) > 1:
+        return "branch"
+    if in_counts.get(target, 0) > 1:
+        return "convergence"
+    return "module_flow"
+
+
+def _style_for_role(role: str, arrow: dict) -> dict[str, Any]:
+    kind = str(arrow.get("control_kind") or arrow.get("type") or "").lower()
+    if role == "main_flow":
+        return {"route_style": "soft_straight", "stroke_width_pt": 2.2, "arrowhead_size": "med", "line_cap": "round"}
+    if role == "branch":
+        return {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm", "line_cap": "round"}
+    if role == "convergence":
+        return {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm", "line_cap": "round"}
+    if role == "feedback_loop":
+        return {"route_style": "dashed_spline_like", "stroke_width_pt": 1.8, "arrowhead_size": "sm", "line_cap": "round", "line_pattern": "dash"}
+    if "elbow" in kind:
+        return {"route_style": "rounded_elbow", "stroke_width_pt": 1.65, "arrowhead_size": "sm", "line_cap": "round"}
+    return {"route_style": "soft_straight", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "line_cap": "round"}
+
+
+def _reference_locked(arrow: dict) -> bool:
+    path = arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else []
+    if len(path) < 2:
+        return False
+    source = str(arrow.get("binding_source") or arrow.get("detected_by") or "").lower()
+    if any(term in source for term in ("reference", "opencv", "vlm", "explicit", "candidate", "layout")):
+        return True
+    # In reference-primary mode, existing normalized paths are treated as a
+    # reference contract unless explicitly marked as fallback.
+    return str(arrow.get("route_policy", "")).lower() != "fallback_reroute_allowed"
+
+
+def _route_metrics(arrows: list[dict], objects: dict[str, dict]) -> tuple[dict[str, dict], int]:
+    metrics: dict[str, dict] = {}
+    all_segments: list[tuple[str, list[float], list[float]]] = []
+    for arrow in arrows:
+        points = arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else []
+        sid = str(arrow.get("source_id") or arrow.get("source") or "")
+        tid = str(arrow.get("target_id") or arrow.get("target") or "")
+        obstacles = []
+        for obj_id, obj in objects.items():
+            if obj_id in {sid, tid} or not isinstance(obj.get("bbox_percent"), dict):
+                continue
+            if any(_segment_bbox_overlap(a, b, obj["bbox_percent"]) for a, b in _segments(points)):
+                obstacles.append(obj_id)
+        metrics[str(arrow.get("id"))] = {
+            "path_length": _path_length(points),
+            "bend_count": max(0, len(points) - 2),
+            "obstacle_overlap_count": len(obstacles),
+            "obstacle_overlap_ids": obstacles[:12],
+            "point_count": len(points),
+        }
+        for a, b in _segments(points):
+            all_segments.append((str(arrow.get("id")), a, b))
+
+    crossing_count = 0
+    crossings_by_arrow = {str(arrow.get("id")): 0 for arrow in arrows}
+    for idx, (aid, a1, a2) in enumerate(all_segments):
+        for bid, b1, b2 in all_segments[idx + 1:]:
+            if aid == bid:
+                continue
+            if _segments_cross(a1, a2, b1, b2):
+                crossing_count += 1
+                crossings_by_arrow[aid] = crossings_by_arrow.get(aid, 0) + 1
+                crossings_by_arrow[bid] = crossings_by_arrow.get(bid, 0) + 1
+    for aid, count in crossings_by_arrow.items():
+        if aid in metrics:
+            metrics[aid]["crossing_count"] = count
+    return metrics, crossing_count
+
+
+def style_and_route_arrows(
+    program: dict,
+    out_dir: str | Path,
+    mode: str = "reference",
+) -> dict:
+    """Add reference-preserving arrow aesthetics and QA artifacts.
+
+    The reference image remains the hard constraint. Existing reference-derived
+    routes are not freely rerouted; this stage mostly adds style, bundling
+    metadata, and diagnostics. Only missing/fallback paths are synthesized.
+    """
+    out = Path(out_dir)
+    if str(mode).lower() == "off":
+        write_json(out / "arrow_style_profile.json", {"summary": "Arrow styling skipped.", "mode": "off"})
+        write_json(out / "selected_arrow_routes.json", {"summary": "Arrow routing skipped.", "mode": "off", "routes": []})
+        write_json(out / "arrow_quality_report.json", {"summary": "Arrow quality skipped.", "mode": "off", "status": "skipped"})
+        return program
+
+    panels = program.get("panels", []) if isinstance(program.get("panels"), list) else []
+    slots = program.get("slots", []) if isinstance(program.get("slots"), list) else []
+    objects = {str(item.get("id")): item for item in panels + slots if isinstance(item, dict) and item.get("id")}
+    panel_ids = {str(panel.get("id")) for panel in panels if isinstance(panel, dict)}
+    arrows = [dict(item) for item in program.get("arrows", []) if isinstance(item, dict)]
+    out_counts: dict[str, int] = {}
+    in_counts: dict[str, int] = {}
+    for arrow in arrows:
+        source = str(arrow.get("source_id") or arrow.get("source") or "")
+        target = str(arrow.get("target_id") or arrow.get("target") or "")
+        out_counts[source] = out_counts.get(source, 0) + 1
+        in_counts[target] = in_counts.get(target, 0) + 1
+
+    grouped: dict[str, list[dict]] = {}
+    enriched = []
+    for index, arrow in enumerate(arrows, start=1):
+        source = str(arrow.get("source_id") or arrow.get("source") or "")
+        target = str(arrow.get("target_id") or arrow.get("target") or "")
+        arrow["source_id"] = source
+        arrow["target_id"] = target
+        arrow["source"] = source
+        arrow["target"] = target
+        points = arrow.get("path_percent") if isinstance(arrow.get("path_percent"), list) else []
+        locked = _reference_locked(arrow)
+        if len(points) < 2 and mode in {"reference", "aesthetic"}:
+            points = _edge_path(objects.get(source), objects.get(target))
+            locked = False
+        arrow["path_percent"] = [[round(float(p[0]), 4), round(float(p[1]), 4)] for p in points if isinstance(p, list) and len(p) >= 2]
+        role = _infer_role(arrow, out_counts, in_counts, panel_ids)
+        style = _style_for_role(role, arrow)
+        for key, value in style.items():
+            arrow.setdefault(key, value)
+        arrow.setdefault("semantic_role", role)
+        arrow.setdefault("aesthetic_policy", "reference_first_soft_editable_ppt_connector")
+        arrow.setdefault("reference_locked", locked)
+        arrow.setdefault("reference_path_preserved", locked)
+        arrow.setdefault("route_policy", "preserve_reference_path" if locked else "synthesize_missing_path_only")
+        arrow.setdefault("corner_radius_percent", 0.018 if arrow.get("route_style") in {"rounded_elbow", "bundled_elbow"} else 0.0)
+        if role == "branch":
+            bundle_id = f"from_{source}"
+        elif role == "convergence":
+            bundle_id = f"to_{target}"
+        elif role == "feedback_loop":
+            bundle_id = f"loop_{source}_{target}"
+        else:
+            bundle_id = f"flow_{index:02d}"
+        arrow.setdefault("bundle_id", bundle_id)
+        grouped.setdefault(bundle_id, []).append(arrow)
+        enriched.append(arrow)
+
+    for bundle_id, items in grouped.items():
+        items.sort(key=lambda item: (item.get("target_id", ""), item.get("id", "")))
+        for lane_index, arrow in enumerate(items):
+            arrow.setdefault("lane_index", lane_index)
+            arrow.setdefault("lane_count", len(items))
+
+    metrics, total_crossings = _route_metrics(enriched, objects)
+    routes = []
+    for arrow in enriched:
+        aid = str(arrow.get("id"))
+        m = metrics.get(aid, {})
+        clutter_score = (
+            int(m.get("crossing_count", 0)) * 12
+            + int(m.get("bend_count", 0)) * 3
+            + int(m.get("obstacle_overlap_count", 0)) * 18
+        )
+        arrow["aesthetic_score"] = max(0, 100 - clutter_score)
+        routes.append({
+            "id": aid,
+            "source_id": arrow.get("source_id"),
+            "target_id": arrow.get("target_id"),
+            "semantic_role": arrow.get("semantic_role"),
+            "route_style": arrow.get("route_style"),
+            "bundle_id": arrow.get("bundle_id"),
+            "lane_index": arrow.get("lane_index"),
+            "lane_count": arrow.get("lane_count"),
+            "reference_locked": arrow.get("reference_locked"),
+            "reference_path_preserved": arrow.get("reference_path_preserved"),
+            "path_percent": arrow.get("path_percent"),
+            "style_token_id": arrow.get("style_token_id"),
+            "stroke_width_pt": arrow.get("stroke_width_pt"),
+            "arrowhead_size": arrow.get("arrowhead_size"),
+            "line_cap": arrow.get("line_cap"),
+            "line_pattern": arrow.get("line_pattern", "solid"),
+            "metrics": m,
+            "aesthetic_score": arrow["aesthetic_score"],
+        })
+
+    arrow_style_profile = {
+        "summary": "Reference-first arrow styling profile for editable PPT connectors.",
+        "mode": mode,
+        "reference_priority": "reference_image_hard_constraint",
+        "routing_principle": "preserve reference-derived source-target logic and path geometry; only synthesize missing fallback paths",
+        "style_rules": {
+            "main_flow": {"route_style": "soft_straight", "stroke_width_pt": 2.2, "arrowhead_size": "med"},
+            "branch": {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm"},
+            "convergence": {"route_style": "bundled_elbow", "stroke_width_pt": 1.55, "arrowhead_size": "sm"},
+            "feedback_loop": {"route_style": "dashed_spline_like", "stroke_width_pt": 1.8, "arrowhead_size": "sm"},
+            "module_flow": {"route_style": "soft_straight", "stroke_width_pt": 1.45, "arrowhead_size": "sm"},
+        },
+        "ppt_editability": "all arrows render as PPT connector shapes, not raster assets",
+        "rounded_line_policy": "use round line caps and editable connector segments; full curved routing is future work",
+    }
+    selected_routes = {
+        "summary": "Selected reference-preserving arrow routes and style assignments.",
+        "mode": mode,
+        "route_count": len(routes),
+        "routes": routes,
+    }
+    quality_report = {
+        "summary": "Arrow routing and styling quality report.",
+        "mode": mode,
+        "status": "pass" if all(route["aesthetic_score"] >= 35 for route in routes) else "needs_review",
+        "arrow_count": len(routes),
+        "total_crossing_count": total_crossings,
+        "total_obstacle_overlap_count": sum(int(route["metrics"].get("obstacle_overlap_count", 0)) for route in routes),
+        "average_aesthetic_score": round(sum(float(route["aesthetic_score"]) for route in routes) / max(len(routes), 1), 2),
+        "reference_path_overrides": [route["id"] for route in routes if route.get("reference_locked") and not route.get("reference_path_preserved")],
+        "routes": routes,
+    }
+    program["arrows"] = enriched
+    program["control_shapes"] = [dict(item) for item in enriched]
+    program.setdefault("style", {})["arrow_style_profile_path"] = "arrow_style_profile.json"
+    write_json(out / "arrow_style_profile.json", arrow_style_profile)
+    write_json(out / "selected_arrow_routes.json", selected_routes)
+    write_json(out / "arrow_quality_report.json", quality_report)
+    write_json(out / "figure_program.json", program)
+    return program

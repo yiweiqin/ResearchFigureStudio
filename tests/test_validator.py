@@ -274,6 +274,13 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
             "control_kind": "elbow_connector",
         },
     ]
+    arrow_style_by_id = {
+        "flow_a": {"semantic_role": "module_flow", "route_style": "soft_straight", "bundle_id": "flow_01", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.45, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
+        "loop_a": {"semantic_role": "feedback_loop", "route_style": "dashed_spline_like", "bundle_id": "loop_slot_02_slot_03", "line_cap": "round", "line_pattern": "dash", "stroke_width_pt": 1.8, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
+        "multi_a": {"semantic_role": "module_flow", "route_style": "rounded_elbow", "bundle_id": "flow_03", "line_cap": "round", "line_pattern": "solid", "stroke_width_pt": 1.65, "arrowhead_size": "sm", "reference_locked": True, "reference_path_preserved": True},
+    }
+    for arrow in arrows:
+        arrow.update(arrow_style_by_id[arrow["id"]])
     control_items = []
     for arrow in arrows:
         xs = [point[0] for point in arrow["path_percent"]]
@@ -354,6 +361,53 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         "controls": control_items,
         "ppt_arrows": control_items,
     })
+    selected_routes = []
+    for arrow in arrows:
+        selected_routes.append({
+            "id": arrow["id"],
+            "source_id": arrow["source_id"],
+            "target_id": arrow["target_id"],
+            "semantic_role": arrow["semantic_role"],
+            "route_style": arrow["route_style"],
+            "bundle_id": arrow["bundle_id"],
+            "lane_index": 0,
+            "lane_count": 1,
+            "reference_locked": True,
+            "reference_path_preserved": True,
+            "path_percent": arrow["path_percent"],
+            "style_token_id": arrow["style_token_id"],
+            "stroke_width_pt": arrow["stroke_width_pt"],
+            "arrowhead_size": arrow["arrowhead_size"],
+            "line_cap": arrow["line_cap"],
+            "line_pattern": arrow["line_pattern"],
+            "metrics": {"path_length": 0.1, "bend_count": max(0, len(arrow["path_percent"]) - 2), "crossing_count": 0, "obstacle_overlap_count": 0},
+            "aesthetic_score": 95,
+        })
+    _write_json(root / "arrow_style_profile.json", {
+        "summary": "Reference-first arrow styling profile.",
+        "mode": "reference",
+        "reference_priority": "reference_image_hard_constraint",
+        "routing_principle": "preserve reference-derived source-target logic and path geometry",
+        "style_rules": {"module_flow": {"route_style": "soft_straight"}, "feedback_loop": {"route_style": "dashed_spline_like"}},
+        "ppt_editability": "all arrows render as PPT connector shapes",
+    })
+    _write_json(root / "selected_arrow_routes.json", {
+        "summary": "Selected reference-preserving arrow routes.",
+        "mode": "reference",
+        "route_count": len(selected_routes),
+        "routes": selected_routes,
+    })
+    _write_json(root / "arrow_quality_report.json", {
+        "summary": "Arrow quality report.",
+        "mode": "reference",
+        "status": "pass",
+        "arrow_count": len(selected_routes),
+        "total_crossing_count": 0,
+        "total_obstacle_overlap_count": 0,
+        "average_aesthetic_score": 95,
+        "reference_path_overrides": [],
+        "routes": selected_routes,
+    })
     _write_json(root / "slot_inventory.json", {
         "summary": "Slot inventory.",
         "slot_count": asset_count,
@@ -382,7 +436,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
         "summary": "Figure program.",
         "canvas": {},
         "locator": {"mode": "heuristic", "reference_path": "inputs/reference.png"},
-        "style": {"reference_palette": reference_palette, "slot_frame_policy": "frameless_slot", "color_tokens": color_tokens, "reference_style_profile_path": "reference_style_profile.json"},
+        "style": {"reference_palette": reference_palette, "slot_frame_policy": "frameless_slot", "color_tokens": color_tokens, "reference_style_profile_path": "reference_style_profile.json", "arrow_style_profile_path": "arrow_style_profile.json"},
         "panels": panels,
         "slots": slots,
         "assets": [{"id": item["asset_id"], "slot_id": item["slot_id"], "reference_crop_path": f"reference_slot_crops/{item['slot_id']}.png", "visual_spec_id": f"visual_spec_{item['slot_id']}"} for item in asset_items],
@@ -414,7 +468,7 @@ def _make_valid_output(root: Path, asset_count: int = 25) -> None:
     (root / "prompts.md").write_text("# Summary\nPrompts.\n", encoding="utf-8")
     _write_json(root / "asset_quality_report.json", {"summary": "Asset quality.", "assets": asset_items})
     _write_json(root / "asset_complexity_report.json", {"summary": "Asset complexity.", "assets": complexity_items})
-    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items, "arrows": [{"arrow_id": item["id"], "segment_count": max(1, len(item["path_percent"]) - 1), "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset"} for item in arrows]})
+    _write_json(root / "composition_quality_report.json", {"summary": "Composition quality.", "slots": composition_items, "arrows": [{"arrow_id": item["id"], "segment_count": max(1, len(item["path_percent"]) - 1), "editable_in": "pptx", "render_policy": "ppt_shape_not_image_asset", "route_style": item["route_style"], "line_cap": item["line_cap"]} for item in arrows]})
     _write_json(root / "asset_visual_review.json", {"summary": "Asset review.", "status": "pass", "issues": []})
     (root / "alignment_review.md").write_text("# Summary\nAlignment.\n", encoding="utf-8")
     (root / "critic_report.md").write_text("# Summary\nCritic.\n", encoding="utf-8")

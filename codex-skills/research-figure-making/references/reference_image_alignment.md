@@ -70,6 +70,10 @@ Do not preserve reference-image mistakes:
      `source_id`, `target_id`, `source_anchor`, `target_anchor`,
      multi-point `path_percent`, `style_token_id`, `editable_in: pptx`, and
      `render_policy: ppt_shape_not_image_asset`
+   - write `arrow_style_profile.json`, `selected_arrow_routes.json`, and
+     `arrow_quality_report.json` before PPT compilation. This stage should
+     improve softness and visual variation with reference-derived styles, but
+     must not replace the reference image's source-target logic or locked paths
    - write `reference_style_profile.json` with reference-derived color tokens,
      style summary, illustration mode, line weight, shadows, corner radius,
      texture, icon detail level, visual density, and text policy

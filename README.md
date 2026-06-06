@@ -11,6 +11,7 @@ The current workflow is optimized for AI/ML/NLP system figures:
 - 25-50 non-arrow image slots
 - `slot_visual_spec.json` for dense mini-scene/image-block planning
 - AutoFigure-inspired control candidates and overlays for arrow/source-target binding
+- reference-preserving arrow styling/routing reports for softer editable PPT connectors
 - multi-candidate image generation through placeholder, Gemini, or Yunwu image2-compatible APIs
 - deterministic PPTX composition with editable labels, panels, arrows, connectors, and formulas
 - strict validation for no single full diagram, no semantic crop, no vector-only fallback, low blank space, and non-trivial image-block complexity
@@ -35,10 +36,11 @@ be treated as a finished top-tier-paper figure generator.
 The most important open problem is reliable arrow and connector localization.
 The current implementation now has an initial AutoFigure-inspired
 `reference_control_candidates.json` plus `slot_overlay.png` /
-`reference_control_overlay.png` workflow, but it is still fragile for complex
-scientific diagrams: source-target binding, multi-segment routes, avoiding
-overlap, dashed loops, and preserving reference-image logic need stronger
-methods.
+`reference_control_overlay.png` workflow, plus reference-preserving
+`arrow_style_profile.json`, `selected_arrow_routes.json`, and
+`arrow_quality_report.json`. It is still fragile for complex scientific
+diagrams: source-target binding, multi-segment routes, avoiding overlap, dashed
+loops, and preserving reference-image logic need stronger methods.
 
 If you have experience with vision-language layout parsing, diagram structure
 reconstruction, PowerPoint object routing, graph drawing, or editable scientific
@@ -76,6 +78,7 @@ rfs make-framework `
   --candidates-per-slot 2 `
   --locator-mode heuristic `
   --control-localizer-mode heuristic `
+  --arrow-style-mode reference `
   --prompt-plan-mode heuristic `
   --asset-mode placeholder `
   --asset-workers 4 `
@@ -116,6 +119,7 @@ rfs make-framework `
   --candidates-per-slot 4 `
   --locator-mode vlm `
   --control-localizer-mode hybrid `
+  --arrow-style-mode reference `
   --prompt-plan-mode vlm `
   --prompt-plan-workers 8 `
   --asset-mode image2 `
@@ -133,6 +137,7 @@ Use lower worker counts if your API provider rate-limits requests.
 ```text
 input archive -> paper brief -> reference_geometry.json/reference_control_candidates.json ->
 slot_overlay.png/reference_control_overlay.png -> reference_controls.json ->
+arrow_style_profile.json/selected_arrow_routes.json/arrow_quality_report.json ->
 reference_style_profile.json/style_sheet.md -> layout_plan.json -> figure_program.json ->
 slot_visual_spec.json -> reference_slot_prompt_brief.json -> slot_prompt_plan.json ->
 multi-candidate slot assets -> asset_quality_report.json -> asset_complexity_report.json ->
@@ -146,6 +151,7 @@ Key rules:
 - The paper provides scientific terminology and concept mapping; it should not override the reference image into a generic template.
 - Arrows, connector lines, dashed loops, panel frames, labels, formulas, and critical text are PPT editable objects, not image assets.
 - Arrow/control localization is reference-driven: CV detects candidates, overlays label them, optional VLM binding assigns source/target semantics, and the PPT compiler renders editable connectors.
+- Arrow styling is reference-preserving: it may soften line caps, assign bundle IDs, vary widths/dashes, and report aesthetics, but it must not replace reference-image flow logic with a generic router.
 - Normal non-legend slots should be dense mini scientific scenes/cards with layered objects and micro-details, not simple centered icons.
 - Generated images are inserted with no semantic cropping.
 
@@ -160,6 +166,9 @@ A valid image-rich framework run should include:
 - `slot_overlay.png`
 - `reference_control_overlay.png`
 - `reference_controls.json`
+- `arrow_style_profile.json`
+- `selected_arrow_routes.json`
+- `arrow_quality_report.json`
 - `reference_style_profile.json`
 - `style_sheet.md`
 - `layout_plan.json`

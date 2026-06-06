@@ -38,7 +38,8 @@ Minimum top-level keys:
   captions, panel IDs, and formulas
 - `arrows`: PPT-editable connectors with `source_id`, `target_id`,
   `source_anchor`, `target_anchor`, multi-point `path_percent`,
-  `style_token_id`, `editable_in: "pptx"`, and
+  `style_token_id`, `semantic_role`, `route_style`, `bundle_id`,
+  `line_cap`, `arrowhead_size`, `editable_in: "pptx"`, and
   `render_policy: "ppt_shape_not_image_asset"`; arrows, connector lines,
   dashed loops, and transition arrows must never be generated image assets
 - `control_shapes`: measured non-image controls from `reference_controls.json`
@@ -137,6 +138,13 @@ Minimum top-level keys:
       "control_kind": "elbow_connector",
       "path_percent": [[0.16, 0.24], [0.24, 0.24], [0.24, 0.38], [0.32, 0.38]],
       "style_token_id": "arrow_orange_001",
+      "semantic_role": "branch",
+      "route_style": "bundled_elbow",
+      "bundle_id": "from_slot_scene_card",
+      "line_cap": "round",
+      "arrowhead_size": "sm",
+      "reference_locked": true,
+      "reference_path_preserved": true,
       "editable_in": "pptx",
       "render_policy": "ppt_shape_not_image_asset"
     }
@@ -175,6 +183,10 @@ Minimum top-level keys:
   exists. Heuristic arrows are a fallback only. Every arrow must include
   non-empty source/target IDs, source/target anchors, at least two normalized
   `path_percent` points, and a reference color token.
+- `arrow_style_profile.json`, `selected_arrow_routes.json`, and
+  `arrow_quality_report.json` must be produced before PPT compilation. They may
+  soften connector caps, choose widths, assign line bundles, and report
+  crossing/bend/overlap quality, but they must preserve reference-locked paths.
 - `assets` must be slot-level blocks, not one full generated diagram. Asset IDs
   and slot IDs must not contain arrow/control semantics such as `arrow`,
   `transition_arrow`, `dashed_arc`, `dashed_arrows`, or `graph_connector`.

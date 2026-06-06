@@ -54,6 +54,7 @@ def _doctor() -> dict:
             "No LiveFigure code is imported or required by the main workflow.",
             "Use --locator-mode vlm to borrow the reference-image positioning idea as JSON coordinates.",
             "Use --control-localizer-mode hybrid to create AutoFigure-inspired arrow/control candidates, overlays, and editable PPT bindings.",
+            "Use --arrow-style-mode reference to keep the reference image as the hard arrow-layout constraint while adding softer editable PPT connector styling.",
             "Default --prompt-plan-mode vlm uses one VLM call per slot to generate reference-aware image_prompt_core entries; --prompt-plan-workers controls parallelism.",
             "Use --asset-mode image2 for Yunwu OpenAI-compatible image generation; logical image-2 maps to gpt-image-2 unless RFS_IMAGE_MODEL overrides it.",
             "Use --asset-mode placeholder for offline engineering validation only.",
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     make.add_argument("--locator-mode", choices=["heuristic", "vlm"], default="heuristic", help="Layout coordinate source. Use vlm to locate slots from the reference image.")
     make.add_argument("--locator-model", help="Optional VLM model for --locator-mode vlm. Defaults to RFS_LOCATOR_MODEL/MODEL_VLM.")
     make.add_argument("--control-localizer-mode", choices=["off", "heuristic", "hybrid"], default="hybrid", help="Arrow/connector localization mode. Default hybrid uses CV candidates plus optional VLM binding; falls back to heuristic without API keys.")
+    make.add_argument("--arrow-style-mode", choices=["off", "reference", "aesthetic"], default="reference", help="Arrow styling/routing mode. Default reference preserves reference-image routes and adds softer PPT styling/QA metadata.")
     make.add_argument("--prompt-plan-mode", choices=["heuristic", "vlm", "vlm-batch"], default="vlm", help="Reference-aware per-slot prompt planning mode. Default vlm uses one VLM call per slot; vlm-batch uses one batch VLM call; heuristic is offline only.")
     make.add_argument("--prompt-plan-model", help="Optional VLM model for --prompt-plan-mode vlm/vlm-batch. Defaults to RFS_PROMPT_PLANNER_MODEL/MODEL_VLM.")
     make.add_argument("--prompt-plan-workers", type=int, default=4, help="Parallel VLM workers for per-slot prompt planning, clamped to 1-12. Default: 4.")
@@ -103,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_human(data: dict) -> None:
     if "ok" in data:
         print(f"ok: {data['ok']}")
-    for key in ["out_dir", "pptx", "pdf", "png", "asset_count", "slot_count", "slot_source", "asset_mode", "candidates_per_slot", "asset_workers", "asset_retries", "asset_review_mode", "locator_mode", "control_localizer_mode", "prompt_plan_mode", "prompt_plan_workers", "complexity_profile", "critic_mode", "critic_iterations"]:
+    for key in ["out_dir", "pptx", "pdf", "png", "asset_count", "slot_count", "slot_source", "asset_mode", "candidates_per_slot", "asset_workers", "asset_retries", "asset_review_mode", "locator_mode", "control_localizer_mode", "arrow_style_mode", "prompt_plan_mode", "prompt_plan_workers", "complexity_profile", "critic_mode", "critic_iterations"]:
         if key in data:
             print(f"{key}: {data[key]}")
     if data.get("validation"):
@@ -149,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                 locator_mode=args.locator_mode,
                 locator_model=args.locator_model,
                 control_localizer_mode=args.control_localizer_mode,
+                arrow_style_mode=args.arrow_style_mode,
                 prompt_plan_mode=args.prompt_plan_mode,
                 prompt_plan_model=args.prompt_plan_model,
                 prompt_plan_workers=args.prompt_plan_workers,

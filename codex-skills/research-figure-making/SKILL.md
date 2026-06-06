@@ -61,7 +61,7 @@ When `D:\ResearchFigureStudio` and the `rfs` CLI are available, use them as the
 default implementation for image-rich framework figures:
 
 ```powershell
-rfs make-framework --paper <paper> --reference <reference_image> --out <output_dir> --slot-count 40 --slot-source reference-primary --complexity-profile reference-dense --candidates-per-slot 4 --locator-mode vlm --control-localizer-mode hybrid --prompt-plan-mode vlm --prompt-plan-workers 8 --asset-mode image2 --asset-workers 6 --asset-retries 3 --asset-review-mode heuristic --critic-mode heuristic
+rfs make-framework --paper <paper> --reference <reference_image> --out <output_dir> --slot-count 40 --slot-source reference-primary --complexity-profile reference-dense --candidates-per-slot 4 --locator-mode vlm --control-localizer-mode hybrid --arrow-style-mode reference --prompt-plan-mode vlm --prompt-plan-workers 8 --asset-mode image2 --asset-workers 6 --asset-retries 3 --asset-review-mode heuristic --critic-mode heuristic
 ```
 
 Use `--asset-mode image2` for real image generation through the Yunwu
@@ -89,6 +89,11 @@ localization. This AutoFigure-inspired stage writes
 from those overlays, while the fallback heuristic keeps the workflow offline.
 The VLM may patch arrow IDs, anchors, and normalized paths only; it must not
 write PPT code, rasterize arrows, or redraw the full figure.
+Use `--arrow-style-mode reference` by default. This stage may soften PPT
+connector line caps, vary stroke widths, assign bundle/lane metadata, and score
+crossing/bend/overlap quality, but the reference image remains the hard
+constraint. It must not replace reference-derived flow logic with a generic
+graph router.
 
 Before execution, read these references in this order:
 
@@ -130,6 +135,10 @@ Execution checklist:
    Bound controls must record geometry, `source_id`, `target_id`,
    `source_anchor`, `target_anchor`, multi-point `path_percent`, color token,
    and `render_policy: ppt_shape_not_image_asset`.
+   Then write `arrow_style_profile.json`, `selected_arrow_routes.json`, and
+   `arrow_quality_report.json`. These files must state
+   `reference_image_hard_constraint`, preserve locked reference paths, and only
+   synthesize missing fallback paths.
 3. Create a slot inventory before using image2. Default to 25-50 image slots for
    a normal paper system figure. This count means non-arrow image slots only;
    arrows, connector lines, dashed loops, panel frames, and titles must not be
@@ -207,7 +216,8 @@ Hard workflow order:
 
 `input archive -> paper brief -> reference slot/control analysis -> reference_geometry.json ->
 reference_control_candidates.json -> slot_overlay.png/reference_control_overlay.png ->
-reference_controls.json -> reference_style_profile.json/style sheet ->
+reference_controls.json -> arrow_style_profile.json/selected_arrow_routes.json/arrow_quality_report.json ->
+reference_style_profile.json/style sheet ->
 layout_plan.json -> figure_program.json -> slot_visual_spec.json ->
 reference_slot_prompt_brief.json -> slot_prompt_plan.json -> image2/Gemini slot prompts -> generated
 assets/asset_quality_report/asset_complexity_report/composition_quality_report/asset_visual_review/contact sheets ->
@@ -249,6 +259,9 @@ Required output files for image-rich framework figures:
 - `slot_overlay.png`
 - `reference_control_overlay.png`
 - `reference_controls.json`
+- `arrow_style_profile.json`
+- `selected_arrow_routes.json`
+- `arrow_quality_report.json`
 - `reference_style_profile.json`
 - `style_sheet.md` or `style_sheet.json`
 - `input_manifest.json`
@@ -295,8 +308,11 @@ style tokens. Validation must also fail when `reference_control_candidates.json`
 or the slot/control overlay images are missing, when a bound control lacks
 `source_id`, `target_id`, `source_anchor`, `target_anchor`, or at least two
 `path_percent` points, or when composition reports that a control was not
-rendered as an editable PPT connector. Validation must also fail when image
-slots lack local reference crops, local color token ids, or
+rendered as an editable PPT connector. Validation must fail when
+`arrow_style_profile.json`, `selected_arrow_routes.json`, or
+`arrow_quality_report.json` are missing, or when an arrow style stage overrides
+a locked reference path without a documented reason. Validation must also fail
+when image slots lack local reference crops, local color token ids, or
 `reference_style_profile.json` grounding.
 
 ## Core Workflow

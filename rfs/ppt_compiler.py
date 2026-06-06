@@ -24,6 +24,14 @@ def _apply_arrow(connector, size: str = "sm") -> None:
     ln.append(parse_xml(f'<a:tailEnd xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" type="triangle" w="{size}" len="{size}"/>'))
 
 
+def _apply_line_cap(connector, cap: str = "round") -> None:
+    value = {"round": "rnd", "square": "sq"}.get(str(cap).lower())
+    if not value:
+        return
+    ln = connector.line._get_or_add_ln()
+    ln.set("cap", value)
+
+
 def _set_text(shape, text: str, font_size: int = 10, bold: bool = False, color: str = "#163B4D", align=PP_ALIGN.CENTER) -> None:
     tf = shape.text_frame
     tf.clear()
@@ -227,20 +235,34 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
         arrow_color = str(token.get("hex")) if token else "#1F6F8B"
         control_kind = str(arrow.get("control_kind") or arrow.get("type", "")).lower()
         dashed = control_kind in {"dashed_loop", "dashed", "loop"}
+        if str(arrow.get("line_pattern", "")).lower() in {"dash", "dashed"}:
+            dashed = True
         line_width = float(arrow.get("stroke_width_pt") or style.get("arrow_weight_pt") or 1.7)
+        arrowhead_size = str(arrow.get("arrowhead_size") or "sm").lower()
+        if arrowhead_size not in {"sm", "med", "lg"}:
+            arrowhead_size = "sm"
         segment_count = 0
         for idx, ((x1, y1), (x2, y2)) in enumerate(zip(points[:-1], points[1:])):
             connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
             connector.line.color.rgb = _rgb(arrow_color)
             connector.line.width = Pt(line_width)
+            _apply_line_cap(connector, str(arrow.get("line_cap") or "round"))
             if dashed:
                 connector.line.dash_style = MSO_LINE_DASH_STYLE.DASH
             if idx == len(points) - 2:
-                _apply_arrow(connector, "sm")
+                _apply_arrow(connector, arrowhead_size)
             segment_count += 1
         rendered.append({
             "arrow_id": arrow.get("id"),
             "control_kind": control_kind or "straight_arrow",
+            "semantic_role": arrow.get("semantic_role"),
+            "route_style": arrow.get("route_style"),
+            "bundle_id": arrow.get("bundle_id"),
+            "lane_index": arrow.get("lane_index"),
+            "line_cap": arrow.get("line_cap", "round"),
+            "line_pattern": "dash" if dashed else "solid",
+            "stroke_width_pt": line_width,
+            "arrowhead_size": arrowhead_size,
             "segment_count": segment_count,
             "point_count": len(points),
             "editable_in": "pptx",

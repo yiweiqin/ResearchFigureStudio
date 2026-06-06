@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .asset_generator import generate_assets
 from .asset_reviewer import review_assets
+from .arrow_router import style_and_route_arrows
 from .exporter import export_outputs
 from .input_archive import archive_inputs
 from .input_loader import load_text
@@ -57,6 +58,7 @@ def _write_critic_report(out_dir: Path, validation: dict, asset_mode: str, locat
         f"- Asset mode: {asset_mode}",
         f"- Locator mode: {locator_mode}",
         f"- Control localizer mode: {control_localizer_mode}",
+        "- Arrow style mode: reference-first",
         f"- Generated asset count: {validation.get('asset_count')}",
         "",
         "## Checks",
@@ -95,6 +97,7 @@ def make_framework(
     locator_mode: str = "heuristic",
     locator_model: str | None = None,
     control_localizer_mode: str = "hybrid",
+    arrow_style_mode: str = "reference",
     prompt_plan_mode: str = "vlm",
     prompt_plan_model: str | None = None,
     prompt_plan_workers: int = 4,
@@ -122,6 +125,7 @@ def make_framework(
     style = build_style_sheet(paper_brief, inventory, out_dir)
     layout_plan = locate_layout(archived_reference, inventory, style, out_dir, mode=locator_mode, model=locator_model)
     program = build_figure_program(paper_brief, inventory, style, out_dir, layout_plan=layout_plan)
+    program = style_and_route_arrows(program, out_dir, mode=arrow_style_mode)
     _slot_prompt_plan, program = plan_slot_prompts(
         archived_reference,
         paper_brief,
@@ -134,6 +138,7 @@ def make_framework(
         workers=prompt_plan_workers,
         complexity_profile=complexity_profile,
     )
+    program = style_and_route_arrows(program, out_dir, mode=arrow_style_mode)
     generate_assets(
         program,
         style,
@@ -168,6 +173,7 @@ def make_framework(
             break
         write_json(out_dir / "layout_plan.json", layout_plan)
         program = build_figure_program(paper_brief, inventory, style, out_dir, layout_plan=layout_plan)
+        program = style_and_route_arrows(program, out_dir, mode=arrow_style_mode)
         pptx = compile_ppt(program, out_dir)
         if export:
             export_result = export_outputs(pptx, out_dir)
@@ -200,6 +206,7 @@ def make_framework(
         "asset_review_mode": asset_review_mode,
         "locator_mode": locator_mode,
         "control_localizer_mode": control_localizer_mode,
+        "arrow_style_mode": arrow_style_mode,
         "prompt_plan_mode": prompt_plan_mode,
         "prompt_plan_workers": prompt_plan_workers,
         "complexity_profile": complexity_profile,

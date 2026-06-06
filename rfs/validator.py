@@ -11,6 +11,9 @@ REQUIRED = [
     "slot_overlay.png",
     "reference_control_overlay.png",
     "reference_controls.json",
+    "arrow_style_profile.json",
+    "selected_arrow_routes.json",
+    "arrow_quality_report.json",
     "slot_inventory.json",
     "reference_style_profile.json",
     "style_sheet.md",
@@ -211,6 +214,47 @@ def validate_output(out_dir: str | Path) -> dict:
         errors.append(f"Invalid reference_controls.json: {exc}")
 
     try:
+        arrow_style = json.loads((root / "arrow_style_profile.json").read_text(encoding="utf-8"))
+        if str(arrow_style.get("reference_priority", "")).lower() != "reference_image_hard_constraint":
+            errors.append("arrow_style_profile.json must keep reference_image_hard_constraint")
+        if not isinstance(arrow_style.get("style_rules"), dict) or not arrow_style.get("style_rules"):
+            errors.append("arrow_style_profile.json must contain style_rules")
+        if "reference" not in str(arrow_style.get("routing_principle", "")).lower():
+            errors.append("arrow_style_profile.json routing_principle must explicitly preserve the reference image")
+    except Exception as exc:
+        errors.append(f"Invalid arrow_style_profile.json: {exc}")
+
+    try:
+        routes_doc = json.loads((root / "selected_arrow_routes.json").read_text(encoding="utf-8"))
+        routes = routes_doc.get("routes", [])
+        if not isinstance(routes, list):
+            errors.append("selected_arrow_routes.json routes must be a list")
+        for item in routes if isinstance(routes, list) else []:
+            rid = item.get("id")
+            for key in ["source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap"]:
+                if key not in item or not str(item.get(key, "")).strip():
+                    errors.append(f"selected_arrow_routes item {rid} missing {key}")
+            if item.get("reference_locked") and item.get("reference_path_preserved") is not True:
+                errors.append(f"selected_arrow_routes item {rid} overrides a locked reference path")
+            if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+                errors.append(f"selected_arrow_routes item {rid} must have at least 2 path_percent points")
+    except Exception as exc:
+        errors.append(f"Invalid selected_arrow_routes.json: {exc}")
+
+    try:
+        arrow_quality = json.loads((root / "arrow_quality_report.json").read_text(encoding="utf-8"))
+        if str(arrow_quality.get("status", "")).lower() in {"fail", "failed", "blocked"}:
+            errors.append("arrow_quality_report.json reports failed arrow quality")
+        if arrow_quality.get("reference_path_overrides"):
+            errors.append("arrow_quality_report.json contains reference_path_overrides")
+        if "total_crossing_count" not in arrow_quality:
+            errors.append("arrow_quality_report.json missing total_crossing_count")
+        if "average_aesthetic_score" not in arrow_quality:
+            errors.append("arrow_quality_report.json missing average_aesthetic_score")
+    except Exception as exc:
+        errors.append(f"Invalid arrow_quality_report.json: {exc}")
+
+    try:
         style_profile = json.loads((root / "reference_style_profile.json").read_text(encoding="utf-8"))
         if not isinstance(style_profile.get("color_tokens"), list) or not style_profile.get("color_tokens"):
             errors.append("reference_style_profile.json must contain color_tokens")
@@ -307,11 +351,19 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"Arrow/control {arrow.get('id')} missing style_token_id")
             if str(arrow.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
                 errors.append(f"Arrow/control {arrow.get('id')} must render as PPT shape, not image asset")
+            if not str(arrow.get("semantic_role", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing semantic_role")
+            if not str(arrow.get("route_style", "")).strip():
+                errors.append(f"Arrow/control {arrow.get('id')} missing route_style")
+            if arrow.get("reference_locked") and arrow.get("reference_path_preserved") is not True:
+                errors.append(f"Arrow/control {arrow.get('id')} overrides a locked reference path")
         style = program.get("style", {}) if isinstance(program.get("style"), dict) else {}
         if not isinstance(style.get("color_tokens"), list) or not style.get("color_tokens"):
             errors.append("figure_program.json style must include color_tokens")
         if not str(style.get("reference_style_profile_path", "")).strip():
             errors.append("figure_program.json style must include reference_style_profile_path")
+        if not str(style.get("arrow_style_profile_path", "")).strip():
+            errors.append("figure_program.json style must include arrow_style_profile_path")
         palette = style.get("reference_palette") or style.get("palette") or []
         distinct = {str(c).upper() for c in palette if str(c).strip()}
         if len(distinct) < 4:
@@ -481,6 +533,10 @@ def validate_output(out_dir: str | Path) -> dict:
                 errors.append(f"Composition arrow {aid} must render as a PPT shape")
             if int(item.get("segment_count", 0)) < 1:
                 errors.append(f"Composition arrow {aid} rendered no connector segments")
+            if not str(item.get("route_style", "")).strip():
+                errors.append(f"Composition arrow {aid} missing route_style")
+            if not str(item.get("line_cap", "")).strip():
+                errors.append(f"Composition arrow {aid} missing line_cap")
     except Exception as exc:
         errors.append(f"Invalid composition_quality_report.json: {exc}")
 
@@ -506,7 +562,7 @@ def validate_output(out_dir: str | Path) -> dict:
         errors.append(f"Too few generated assets: {asset_count}")
 
     text_blob = ""
-    for name in ["prompts.md", "style_sheet.md", "reference_style_profile.json", "figure_program.json", "reference_geometry.json", "reference_controls.json", "slot_visual_spec.json", "reference_slot_prompt_brief.json", "slot_prompt_plan.json", "asset_quality_report.json", "asset_complexity_report.json", "composition_quality_report.json", "asset_visual_review.json", "alignment_review.md", "critic_report.md", "visual_critic_iter_0.json"]:
+    for name in ["prompts.md", "style_sheet.md", "reference_style_profile.json", "arrow_style_profile.json", "selected_arrow_routes.json", "arrow_quality_report.json", "figure_program.json", "reference_geometry.json", "reference_controls.json", "slot_visual_spec.json", "reference_slot_prompt_brief.json", "slot_prompt_plan.json", "asset_quality_report.json", "asset_complexity_report.json", "composition_quality_report.json", "asset_visual_review.json", "alignment_review.md", "critic_report.md", "visual_critic_iter_0.json"]:
         path = root / name
         if path.exists():
             text_blob += "\n" + path.read_text(encoding="utf-8", errors="ignore").lower()

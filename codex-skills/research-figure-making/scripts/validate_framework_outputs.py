@@ -508,6 +508,11 @@ def validate_program(path: Path) -> int:
                 fail(f"figure_program.json arrow/control {aid} missing {key}")
         if not isinstance(arrow.get("path_percent"), list) or len(arrow.get("path_percent", [])) < 2:
             fail(f"figure_program.json arrow/control {aid} must have at least 2 path_percent points")
+        for key in ("semantic_role", "route_style", "line_cap", "arrowhead_size"):
+            if not str(arrow.get(key, "")).strip():
+                fail(f"figure_program.json arrow/control {aid} missing {key}")
+        if arrow.get("reference_locked") and arrow.get("reference_path_preserved") is not True:
+            fail(f"figure_program.json arrow/control {aid} overrides a locked reference path")
         if str(arrow.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
             fail(f"figure_program.json arrow/control {aid} must render as PPT shape, not image asset")
 
@@ -516,12 +521,60 @@ def validate_program(path: Path) -> int:
         fail("figure_program.json style must include non-empty color_tokens")
     if not str(style.get("reference_style_profile_path", "")).strip():
         fail("figure_program.json style must include reference_style_profile_path")
+    if not str(style.get("arrow_style_profile_path", "")).strip():
+        fail("figure_program.json style must include arrow_style_profile_path")
     palette = style.get("reference_palette") or style.get("palette") or []
     distinct = {str(color).upper() for color in palette if str(color).strip()}
     if len(distinct) < 4:
         fail("figure_program.json style must preserve reference-derived palette tokens, not a hardcoded fallback template")
 
     return len(slots)
+
+
+def validate_arrow_style_profile(path: Path) -> None:
+    data = read_json(path)
+    if not isinstance(data, dict):
+        fail("arrow_style_profile.json must be a JSON object")
+    if str(data.get("reference_priority", "")).lower() != "reference_image_hard_constraint":
+        fail("arrow_style_profile.json must keep reference_image_hard_constraint")
+    if not isinstance(data.get("style_rules"), dict) or not data.get("style_rules"):
+        fail("arrow_style_profile.json must contain style_rules")
+    if "reference" not in str(data.get("routing_principle", "")).lower():
+        fail("arrow_style_profile.json routing_principle must explicitly preserve the reference image")
+
+
+def validate_selected_arrow_routes(path: Path) -> int:
+    data = read_json(path)
+    if not isinstance(data, dict):
+        fail("selected_arrow_routes.json must be a JSON object")
+    routes = data.get("routes")
+    if not isinstance(routes, list):
+        fail("selected_arrow_routes.json routes must be a list")
+    for index, item in enumerate(routes):
+        if not isinstance(item, dict):
+            fail(f"selected_arrow_routes item at index {index} must be an object")
+        rid = item.get("id", index)
+        for key in ("source_id", "target_id", "semantic_role", "route_style", "path_percent", "style_token_id", "stroke_width_pt", "arrowhead_size", "line_cap"):
+            if key not in item or not str(item.get(key, "")).strip():
+                fail(f"selected_arrow_routes item {rid} missing {key}")
+        if item.get("reference_locked") and item.get("reference_path_preserved") is not True:
+            fail(f"selected_arrow_routes item {rid} overrides a locked reference path")
+        if not isinstance(item.get("path_percent"), list) or len(item.get("path_percent", [])) < 2:
+            fail(f"selected_arrow_routes item {rid} must have at least 2 path_percent points")
+    return len(routes)
+
+
+def validate_arrow_quality_report(path: Path) -> None:
+    data = read_json(path)
+    if not isinstance(data, dict):
+        fail("arrow_quality_report.json must be a JSON object")
+    if str(data.get("status", "")).lower() in {"fail", "failed", "blocked"}:
+        fail("arrow_quality_report.json reports failed arrow quality")
+    if data.get("reference_path_overrides"):
+        fail("arrow_quality_report.json contains reference_path_overrides")
+    for key in ("total_crossing_count", "average_aesthetic_score"):
+        if key not in data:
+            fail(f"arrow_quality_report.json missing {key}")
 
 
 def validate_slot_prompt_brief(path: Path) -> int:
@@ -749,6 +802,10 @@ def validate_composition_quality(path: Path) -> int:
             fail(f"composition_quality_report arrow {aid} must be editable in PPTX")
         if str(item.get("render_policy", "")).lower() != "ppt_shape_not_image_asset":
             fail(f"composition_quality_report arrow {aid} must render as a PPT shape")
+        if not str(item.get("route_style", "")).strip():
+            fail(f"composition_quality_report arrow {aid} missing route_style")
+        if not str(item.get("line_cap", "")).strip():
+            fail(f"composition_quality_report arrow {aid} missing line_cap")
         try:
             segment_count = int(item.get("segment_count", 0))
         except (TypeError, ValueError):
@@ -819,6 +876,27 @@ def main(argv: list[str]) -> int:
     require_front_summary(reference_controls)
     controls_count = validate_reference_controls(reference_controls)
     ok(f"Validated reference_controls.json with {controls_count} controls")
+
+    arrow_style_profile = root / "arrow_style_profile.json"
+    if not arrow_style_profile.exists() or arrow_style_profile.stat().st_size == 0:
+        fail("Missing non-empty arrow_style_profile.json")
+    require_front_summary(arrow_style_profile)
+    validate_arrow_style_profile(arrow_style_profile)
+    ok("Validated arrow_style_profile.json")
+
+    selected_arrow_routes = root / "selected_arrow_routes.json"
+    if not selected_arrow_routes.exists() or selected_arrow_routes.stat().st_size == 0:
+        fail("Missing non-empty selected_arrow_routes.json")
+    require_front_summary(selected_arrow_routes)
+    route_count = validate_selected_arrow_routes(selected_arrow_routes)
+    ok(f"Validated selected_arrow_routes.json with {route_count} routes")
+
+    arrow_quality_report = root / "arrow_quality_report.json"
+    if not arrow_quality_report.exists() or arrow_quality_report.stat().st_size == 0:
+        fail("Missing non-empty arrow_quality_report.json")
+    require_front_summary(arrow_quality_report)
+    validate_arrow_quality_report(arrow_quality_report)
+    ok("Validated arrow_quality_report.json")
 
     slot_inventory = find_one(root, ("slot_inventory.json", "slot_inventory.md"))
     if not slot_inventory:
@@ -973,6 +1051,9 @@ def main(argv: list[str]) -> int:
         root / "reference_geometry.json",
         root / "reference_control_candidates.json",
         root / "reference_controls.json",
+        root / "arrow_style_profile.json",
+        root / "selected_arrow_routes.json",
+        root / "arrow_quality_report.json",
         root / "reference_style_profile.json",
         root / "composition_quality_report.json",
         root / "visual_critic_iter_0.json",
