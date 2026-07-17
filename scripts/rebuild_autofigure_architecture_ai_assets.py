@@ -23,7 +23,12 @@ from pptx.util import Inches, Pt
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE = Path(r"C:\Users\zhang\Documents\xwechat_files\wxid_h824xk1qpfoh22_adc2\temp\RWTemp\2026-06\860847045f7ccc2e7052eb182bab099b\8fc4985d14085a49b20f61b3d56d0bea.png")
+REFERENCE_CANDIDATES = [
+    Path(r"C:\Users\zhang\Documents\xwechat_files\wxid_h824xk1qpfoh22_adc2\temp\RWTemp\2026-06\860847045f7ccc2e7052eb182bab099b\8fc4985d14085a49b20f61b3d56d0bea.png"),
+    ROOT / "output" / "autofigure_reference_real_v10_layout" / "inputs" / "reference.png",
+    ROOT / "output" / "autofigure_reference_contract_v2" / "inputs" / "reference.png",
+]
+REFERENCE = next((path for path in REFERENCE_CANDIDATES if path.exists()), REFERENCE_CANDIDATES[0])
 OUT = ROOT / "output" / "autofigure_architecture_ai_rebuild"
 CROP_DIR = OUT / "reference_slot_crops"
 ASSET_DIR = OUT / "assets"
@@ -36,6 +41,11 @@ SLIDE_H = SLIDE_W * REF_H / REF_W
 
 FONT = "Arial"
 TEXT_SIZE_SCALE = 1.08
+INTERNAL_CONTENT_FILL_TARGET = 0.88
+INTERNAL_ACCEPTABLE_FILL_MIN = 0.80
+INTERNAL_ACCEPTABLE_FILL_MAX = 0.95
+INTERNAL_REGENERATE_FILL_THRESHOLD = 0.70
+INTERNAL_MAX_MARGIN_PERCENT = 0.10
 TEXT_STYLES = {
     "title": {"font": FONT, "size": 23.0, "bold": True},
     "subtitle": {"font": FONT, "size": 10.8, "bold": False},
@@ -54,6 +64,10 @@ SLOTS = [
         "asset_bbox": (68, 255, 205, 398),
         "prompt": "a stack of off-white paper documents with simple abstract pseudo-lines and two tiny pseudo-number marks, cute academic flat illustration, no readable text",
         "background_color_hex": "#EAF3FF",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "vlm_agent_robot",
@@ -61,6 +75,10 @@ SLOTS = [
         "asset_bbox": (294, 250, 454, 407),
         "prompt": "a cute round robot assistant head with small antennae and soft blue-gray casing, pastel academic diagram style, no text",
         "background_color_hex": "#EAF3FF",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "ai_designer",
@@ -68,6 +86,10 @@ SLOTS = [
         "asset_bbox": (650, 425, 790, 627),
         "prompt": "a cute AI designer character wearing a beret and holding a blueprint tablet, pastel orange academic illustration, no readable text",
         "background_color_hex": "#FFF1DF",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "ai_critic",
@@ -75,6 +97,10 @@ SLOTS = [
         "asset_bbox": (1062, 434, 1208, 632),
         "prompt": "a cute robot critic wearing round glasses and holding a clipboard, pastel academic illustration, no readable text",
         "background_color_hex": "#FFF1DF",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "synthesis_tools",
@@ -82,6 +108,10 @@ SLOTS = [
         "asset_bbox": (1375, 126, 1628, 250),
         "prompt": "a magic wand and cheerful painter palette with soft sparkles, pastel scientific illustration, no text",
         "background_color_hex": "#ECF7E9",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "erase_text_tool",
@@ -89,6 +119,10 @@ SLOTS = [
         "asset_bbox": (1290, 486, 1425, 606),
         "prompt": "a pink eraser removing blurred tiny pseudo-letters, cute academic diagram illustration, no readable text",
         "background_color_hex": "#ECF7E9",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "ocr_verify",
@@ -96,6 +130,10 @@ SLOTS = [
         "asset_bbox": (1566, 490, 1718, 608),
         "prompt": "a magnifying glass inspecting pseudo-numbers with a green check badge and short gray pseudo-lines, clean pastel academic illustration, no readable text",
         "background_color_hex": "#ECF7E9",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
     {
         "id": "final_autofigure_card",
@@ -103,6 +141,10 @@ SLOTS = [
         "asset_bbox": (1408, 686, 1588, 808),
         "prompt": "a small polished scientific figure card with abstract pie chart, smooth shapes, tiny pseudo-lines and pleasing pastel colors, no readable text",
         "background_color_hex": "#ECF7E9",
+        "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
+        "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
+        "layout_bbox_locked": True,
+        "no_crop_postprocess": True,
     },
 ]
 
@@ -432,6 +474,84 @@ def harmonize_asset_background(asset_path: Path, background_hex: str) -> dict:
     }
 
 
+def measure_internal_content_fill(image_path: Path, background_hex: str) -> dict:
+    image = Image.open(image_path).convert("RGB")
+    width, height = image.size
+    target_bg = hex_to_tuple(background_hex)
+    edge_bg = estimate_edge_background(image)
+    pixels = image.load()
+    tolerance = 54
+    xs: list[int] = []
+    ys: list[int] = []
+    for py_ in range(height):
+        for px_ in range(width):
+            color = pixels[px_, py_]
+            target_dist = abs(color[0] - target_bg[0]) + abs(color[1] - target_bg[1]) + abs(color[2] - target_bg[2])
+            edge_dist = abs(color[0] - edge_bg[0]) + abs(color[1] - edge_bg[1]) + abs(color[2] - edge_bg[2])
+            if min(target_dist, edge_dist) > tolerance:
+                xs.append(px_)
+                ys.append(py_)
+    if not xs:
+        return {
+            "candidate_path": str(image_path),
+            "foreground_bbox_px": None,
+            "foreground_bbox_fill_percent": 0.0,
+            "margin_left_percent": 1.0,
+            "margin_right_percent": 1.0,
+            "margin_top_percent": 1.0,
+            "margin_bottom_percent": 1.0,
+            "estimated_edge_background": tuple_to_hex(edge_bg),
+            "crop_applied": False,
+            "warning": "no_foreground_detected",
+        }
+    left, right = min(xs), max(xs)
+    top, bottom = min(ys), max(ys)
+    bbox_width = right - left + 1
+    bbox_height = bottom - top + 1
+    margins = {
+        "margin_left_percent": round(left / width, 4),
+        "margin_right_percent": round((width - 1 - right) / width, 4),
+        "margin_top_percent": round(top / height, 4),
+        "margin_bottom_percent": round((height - 1 - bottom) / height, 4),
+    }
+    return {
+        "candidate_path": str(image_path),
+        "foreground_bbox_px": [left, top, right, bottom],
+        "foreground_bbox_fill_percent": round((bbox_width * bbox_height) / (width * height), 4),
+        **margins,
+        "max_margin_percent": max(margins.values()),
+        "estimated_edge_background": tuple_to_hex(edge_bg),
+        "crop_applied": False,
+    }
+
+
+def score_internal_fill(metrics: dict) -> float:
+    fill = float(metrics.get("foreground_bbox_fill_percent") or 0.0)
+    max_margin = float(metrics.get("max_margin_percent") or 1.0)
+    cutoff_penalty = 0.0
+    for key in ["margin_left_percent", "margin_right_percent", "margin_top_percent", "margin_bottom_percent"]:
+        value = float(metrics.get(key) or 0.0)
+        if value < 0.015:
+            cutoff_penalty += 0.08
+    if INTERNAL_ACCEPTABLE_FILL_MIN <= fill <= INTERNAL_ACCEPTABLE_FILL_MAX:
+        fill_score = 1.0 - abs(fill - INTERNAL_CONTENT_FILL_TARGET)
+    elif fill < INTERNAL_ACCEPTABLE_FILL_MIN:
+        fill_score = fill / INTERNAL_ACCEPTABLE_FILL_MIN
+    else:
+        fill_score = max(0.0, 1.0 - (fill - INTERNAL_ACCEPTABLE_FILL_MAX) * 3.0)
+    margin_score = max(0.0, 1.0 - max(0.0, max_margin - INTERNAL_MAX_MARGIN_PERCENT) * 2.0)
+    return round(fill_score * 0.78 + margin_score * 0.22 - cutoff_penalty, 4)
+
+
+def evaluate_candidate(slot: dict, candidate_path: Path) -> dict:
+    metrics = measure_internal_content_fill(candidate_path, slot["background_color_hex"])
+    fill = float(metrics.get("foreground_bbox_fill_percent") or 0.0)
+    metrics["score"] = score_internal_fill(metrics)
+    metrics["pass"] = INTERNAL_ACCEPTABLE_FILL_MIN <= fill <= INTERNAL_ACCEPTABLE_FILL_MAX
+    metrics["needs_regeneration"] = fill < INTERNAL_REGENERATE_FILL_THRESHOLD
+    return metrics
+
+
 def edge_connected_background_mask(image: Image.Image, background: tuple[int, int, int], tolerance: int = 42) -> Image.Image:
     rgb_image = image.convert("RGB")
     width, height = rgb_image.size
@@ -481,6 +601,13 @@ def latest_candidate_for_slot(slot_id: str) -> Path | None:
     return candidates[-1] if candidates else None
 
 
+def candidate_paths_for_slot(slot_id: str) -> list[Path]:
+    slot_dir = CANDIDATE_DIR / slot_id
+    if not slot_dir.exists():
+        return []
+    return sorted(slot_dir.glob("candidate_*.png"))
+
+
 def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
     url = os.getenv("GEMINI_GEN_IMG_URL")
@@ -489,12 +616,27 @@ def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
     crop_path = Path(slot["crop_path"])
     mime = mimetypes.guess_type(crop_path.name)[0] or "image/png"
     image_b64 = base64.b64encode(crop_path.read_bytes()).decode("ascii")
+    framing_strength = "extreme close-up" if candidate_index > 2 else ("very close-up" if candidate_index > 1 else "close-up")
+    fill_instruction = (
+        "For this candidate, prioritize maximum internal content fill: the subject should nearly touch the safe margins on all sides while staying fully visible. "
+        if candidate_index > 2
+        else ""
+    )
     prompt = (
-        "Use the provided crop as a visual reference. Recreate only the main object(s) from this crop as a clean standalone raster asset for a PowerPoint scientific architecture figure. "
+        "Use the provided crop only as a visual reference for object identity and style, not for its scale, framing, empty margins, or amount of background. "
+        "Ignore the crop's whitespace and recreate only the main object(s) as a clean standalone raster asset for a PowerPoint scientific architecture figure. "
         f"Asset id: {slot['id']}. Main request: {slot['prompt']}. "
         "Preserve the crop's object identity, approximate pose, pastel academic illustration style, soft shadows, rounded friendly shapes, and color family. "
         "Do not include any readable words, letters, numbers, stage title, labels, arrows, diagram frame, panel border, or white card background. "
-        f"Keep the object large and centered with minimal empty margin. Use a perfectly flat background color matching {slot['background_color_hex']} so the asset blends into its stage panel. "
+        f"Create a {framing_strength} standalone icon where the main subject fills most of the square image canvas. "
+        "The effective subject content should occupy 80-95% of the image area, with only a narrow uniform background margin. "
+        f"{fill_instruction}"
+        "Use a zoomed-in composition, larger scale, and fuller silhouette. The subject's bounding box should cover at least 85% of the canvas width and at least 85% of the canvas height. "
+        "For wide objects, rotate, stack, overlap, or arrange the elements diagonally so the overall silhouette fills both width and height of the square canvas. "
+        "For character icons, use a close-up bust or large upper-body framing so the character body/head dominates the canvas rather than showing a tiny full-body figure. "
+        "Do not create a tiny object centered in a large colored background. Avoid wide empty margins, decorative blank space, and large unused fields. "
+        "Do not crop off the subject; keep all important details visible inside the canvas. "
+        f"Use a perfectly flat background color matching {slot['background_color_hex']} so the asset blends into its stage panel. "
         "No watermark, no logo, no extra unrelated objects."
     )
     payload = {
@@ -526,48 +668,61 @@ def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
 
 def generate_one_asset_with_retries(slot: dict, retries: int = 3) -> dict:
     final_path = ASSET_DIR / f"{slot['id']}.png"
-    if final_path.exists() and os.getenv("RFS_REUSE_ASSETS", "1") == "1":
-        candidate_path = latest_candidate_for_slot(slot["id"])
-        if candidate_path is not None:
-            shutil.copyfile(candidate_path, final_path)
+    errors = []
+    candidate_metrics: list[dict] = []
+    existing_candidates = candidate_paths_for_slot(slot["id"]) if os.getenv("RFS_REUSE_ASSETS", "1") == "1" else []
+    for candidate_path in existing_candidates:
+        candidate_metrics.append(evaluate_candidate(slot, candidate_path))
+
+    best_existing = max(candidate_metrics, key=lambda item: item["score"], default=None)
+    should_generate_more = best_existing is None or not best_existing["pass"] or best_existing["needs_regeneration"]
+    next_index = len(existing_candidates) + 1
+    if should_generate_more:
+        for attempt in range(next_index, next_index + retries):
+            try:
+                candidate_path = gemini_generate_from_crop(slot, attempt)
+                candidate_metrics.append(evaluate_candidate(slot, candidate_path))
+            except Exception as exc:
+                errors.append(str(exc))
+                time.sleep(min(2 * (attempt - next_index + 1), 6))
+            current_best = max(candidate_metrics, key=lambda item: item["score"], default=None)
+            if current_best and current_best["pass"]:
+                break
+
+    best = max(candidate_metrics, key=lambda item: item["score"], default=None)
+    if best is not None:
+        candidate_path = Path(best["candidate_path"])
+        shutil.copyfile(candidate_path, final_path)
         background_report = harmonize_asset_background(final_path, slot["background_color_hex"])
+        fill = float(best.get("foreground_bbox_fill_percent") or 0.0)
+        if best["pass"]:
+            selected_reason = "selected_candidate_with_internal_fill_80_95_percent"
+        elif fill < INTERNAL_ACCEPTABLE_FILL_MIN:
+            selected_reason = "selected_best_available_but_subject_still_too_small"
+        else:
+            selected_reason = "selected_best_available_but_possible_edge_cutoff_risk"
         return {
             "slot_id": slot["id"],
-            "status": "ok",
-            "asset_source": "reused_existing",
-            "candidate": str(candidate_path) if candidate_path is not None else None,
+            "status": "ok" if best["pass"] else "ok_with_internal_fill_warning",
+            "asset_source": "candidate_selected",
+            "candidate": str(candidate_path),
             "asset": str(final_path),
+            "candidate_metrics": sorted(candidate_metrics, key=lambda item: item["score"], reverse=True),
+            "selected_internal_fill": {**best, "selected_reason": selected_reason},
             "background": background_report,
         }
-
-    errors = []
-    for attempt in range(1, retries + 1):
-        try:
-            candidate_path = gemini_generate_from_crop(slot, attempt)
-            Image.open(candidate_path).convert("RGB").save(final_path)
-            background_report = harmonize_asset_background(final_path, slot["background_color_hex"])
-            return {
-                "slot_id": slot["id"],
-                "status": "ok",
-                "asset_source": "generated",
-                "candidate": str(candidate_path),
-                "asset": str(final_path),
-                "attempt": attempt,
-                "background": background_report,
-            }
-        except Exception as exc:
-            errors.append(str(exc))
-            time.sleep(min(2 * attempt, 6))
 
     fallback = ASSET_DIR / f"{slot['id']}.png"
     # Keep the pipeline deliverable if API has a repeated transient failure, but make the fallback explicit.
     Image.open(slot["crop_path"]).convert("RGB").save(fallback)
     background_report = harmonize_asset_background(fallback, slot["background_color_hex"])
+    fallback_metrics = evaluate_candidate(slot, fallback)
     return {
         "slot_id": slot["id"],
         "status": "fallback_to_reference_crop",
         "errors": errors,
         "asset": str(fallback),
+        "selected_internal_fill": {**fallback_metrics, "selected_reason": "fallback_reference_crop_after_generation_failure"},
         "background": background_report,
     }
 
@@ -732,6 +887,24 @@ def export_preview(pptx_path: Path) -> None:
 
 def write_metadata(asset_report: dict) -> None:
     controls = [normalize_control(control) for control in CONTROL_SPECS]
+    internal_fill_report = {
+        "summary": "Internal effective-content fill report for small AI icon assets. No local crop, auto-crop, PowerPoint crop, or layout enlargement is applied.",
+        "policy": {
+            "icon_type": "functional_icon_or_small_mark",
+            "target_fill_range": [INTERNAL_ACCEPTABLE_FILL_MIN, INTERNAL_ACCEPTABLE_FILL_MAX],
+            "target_fill_center": INTERNAL_CONTENT_FILL_TARGET,
+            "regenerate_below": INTERNAL_REGENERATE_FILL_THRESHOLD,
+            "no_crop_postprocess": True,
+            "layout_bbox_locked": True,
+        },
+        "assets": [
+            {
+                "slot_id": item["slot_id"],
+                **item.get("selected_internal_fill", {}),
+            }
+            for item in asset_report.get("assets", [])
+        ],
+    }
     background_report = {
         "summary": "Background harmonization report for generated/reused AI assets.",
         "policy": "match_slot_local_background",
@@ -754,6 +927,10 @@ def write_metadata(asset_report: dict) -> None:
                 "reference_crop_path": slot["crop_path"],
                 "asset_path": str(ASSET_DIR / f"{slot['id']}.png"),
                 "background_color_hex": slot["background_color_hex"],
+                "internal_content_fill_target": slot["internal_content_fill_target"],
+                "internal_max_margin_percent": slot["internal_max_margin_percent"],
+                "layout_bbox_locked": slot["layout_bbox_locked"],
+                "no_crop_postprocess": slot["no_crop_postprocess"],
                 "prompt": slot["prompt"],
             }
             for slot in SLOTS
@@ -761,6 +938,7 @@ def write_metadata(asset_report: dict) -> None:
     }
     (OUT / "slot_inventory.json").write_text(json.dumps(inventory, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "asset_generation_report.json").write_text(json.dumps(asset_report, indent=2, ensure_ascii=False), encoding="utf-8")
+    (OUT / "asset_internal_fill_report.json").write_text(json.dumps(internal_fill_report, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "asset_background_report.json").write_text(json.dumps(background_report, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "reference_control_candidates.json").write_text(json.dumps({
         "summary": "Reference-derived candidate arrows, connector lines, and dashed loops for the AutoFigure Architecture rebuild.",
@@ -869,6 +1047,12 @@ def write_metadata(asset_report: dict) -> None:
         "raster_asset_layers": [slot["id"] for slot in SLOTS],
         "controls": controls,
         "asset_background_policy": "match_slot_local_background",
+        "asset_internal_fill_policy": {
+            "target_fill_range": [INTERNAL_ACCEPTABLE_FILL_MIN, INTERNAL_ACCEPTABLE_FILL_MAX],
+            "target_fill_center": INTERNAL_CONTENT_FILL_TARGET,
+            "no_crop_postprocess": True,
+            "layout_bbox_locked": True,
+        },
         "text_style_tokens": TEXT_STYLES,
         "text_size_scale": TEXT_SIZE_SCALE,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -888,7 +1072,11 @@ def write_metadata(asset_report: dict) -> None:
         "- reference_control_overlay.png visualizes the current reference-locked control layer for manual QA.\n\n"
         "## Background and Text Calibration\n"
         "- Each generated or reused AI asset is harmonized to the local slot background color recorded in slot_inventory.json.\n"
-        f"- Editable PPT text uses TEXT_SIZE_SCALE={TEXT_SIZE_SCALE} as a first-pass visual calibration factor.\n",
+        f"- Editable PPT text uses TEXT_SIZE_SCALE={TEXT_SIZE_SCALE} as a first-pass visual calibration factor.\n\n"
+        "## Internal Icon Fill\n"
+        f"- Small icon assets target {INTERNAL_ACCEPTABLE_FILL_MIN:.0%}-{INTERNAL_ACCEPTABLE_FILL_MAX:.0%} internal effective-content fill.\n"
+        "- Candidate selection is based on asset_internal_fill_report.json.\n"
+        "- No local crop, automatic crop, PowerPoint crop, or PPT layout enlargement is used.\n",
         encoding="utf-8",
     )
 
@@ -897,7 +1085,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     crop_reference_slots()
     write_reference_overlays()
-    asset_report = generate_assets_parallel(workers=6)
+    asset_report = generate_assets_parallel(workers=6, retries=5)
     write_metadata(asset_report)
     pptx_path = draw_ppt()
     export_preview(pptx_path)
