@@ -103,6 +103,7 @@ asset_economy_report.json
 asset_ratio_fit_report.json
 figure_program.json
 composition_quality_report.json
+rebuild_vlm_validation_report.json
 editable_composition.pptx
 rebuild_preview.png or preview_export_error.txt
 ```
@@ -133,6 +134,37 @@ To keep existing analysis contracts but rerun OCR, asset specs, and placeholder/
 ```powershell
 rfs rebuild-editable --reference input.png --out output\demo --skip-analysis --asset-mode placeholder
 ```
+
+## VLM Evaluation
+
+Use the paired evaluator before spending image-generation credits. It runs one
+heuristic case and one hybrid VLM case, both using `--asset-mode crop` by
+default:
+
+```powershell
+rfs rebuild-editable-eval --reference input.png --out output\eval --asset-mode crop --export-preview
+```
+
+The evaluator writes:
+
+```text
+rebuild_vlm_eval_summary.json
+case_heuristic/
+case_vlm/
+```
+
+Compare the two cases using:
+
+```text
+reference_geometry_overlay.png
+reference_controls_overlay.png
+rebuild_vlm_validation_report.json
+rebuild_preview.png
+editable_composition.pptx
+```
+
+Only run a full `--asset-mode api` rebuild after the VLM case clearly improves
+layout, control binding, and slot semantics.
 
 ## Cost Control
 

@@ -74,7 +74,9 @@ Return schema:
 Heuristic base layout:
 {json.dumps(base_layout, ensure_ascii=False)}
 """.strip()
-    return call_vlm_json(prompt, [reference_path], model=model)
+    result = call_vlm_json(prompt, [reference_path], model=model)
+    result["_vlm_model"] = model
+    return result
 
 
 def vlm_control_adapter_factory(out_dir: str | Path) -> Callable[[str | Path, list[dict], list[dict]], dict]:
@@ -112,7 +114,9 @@ Slots:
 Heuristic control candidates:
 {json.dumps(_brief_controls(heuristic_controls), ensure_ascii=False)}
 """.strip()
-        return call_vlm_json(prompt, image_paths, model=model)
+        result = call_vlm_json(prompt, image_paths, model=model)
+        result["_vlm_model"] = model
+        return result
 
     return adapter
 
@@ -153,7 +157,9 @@ Controls:
 OCR text geometry:
 {json.dumps(text_geometry or {}, ensure_ascii=False)}
 """.strip()
-    return call_vlm_json(prompt, [reference_path], model=model)
+    result = call_vlm_json(prompt, [reference_path], model=model)
+    result["_vlm_model"] = model
+    return result
 
 
 def build_rebuild_vlm_adapters(out_dir: str | Path) -> dict[str, Callable | None]:

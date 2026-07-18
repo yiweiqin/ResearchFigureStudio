@@ -16,6 +16,7 @@ from .control_localizer import localize_reference_controls
 from .layout_planner import dominant_palette, estimate_background, plan_reference_layout
 from .layout_semantic_planner import plan_slot_semantics
 from .ppt_compiler import compile_ppt
+from .rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from .text_layer import build_text_layer
 from .utils import ensure_dir, write_json, write_text
 
@@ -767,6 +768,7 @@ def rebuild_editable(
         write_json(out_path / "ocr_text_quality_report.json", {"summary": "Text extraction skipped.", "mode": "off", "status": "skipped"})
 
     text_geometry = _load_json_or_empty(out_path / "reference_text_geometry.json")
+    semantic_report = _load_json_or_empty(out_path / "slot_semantic_report.json") if skip_analysis else {}
     if not skip_analysis:
         semantic_slots, semantic_report = plan_slot_semantics(
             archived_reference,
@@ -780,6 +782,9 @@ def rebuild_editable(
         reference_geometry["slots"] = semantic_slots
         write_json(out_path / "reference_geometry.json", reference_geometry)
         write_json(out_path / "slot_semantic_report.json", semantic_report)
+    elif not semantic_report:
+        semantic_report = {"summary": "Semantic planning skipped by --skip-analysis.", "semantic_vlm_status": "skipped", "slots": []}
+        write_json(out_path / "slot_semantic_report.json", semantic_report)
     write_json(out_path / "slot_inventory.json", {"summary": "Visual asset slot inventory.", "slots": program["slots"]})
 
     specs = _make_asset_specs(program, archived_reference, out_path)
@@ -790,6 +795,7 @@ def rebuild_editable(
     elif isinstance(regenerate_slots, list):
         regen = {str(item).strip() for item in regenerate_slots if str(item).strip()}
     asset_reports, asset_summary = _generate_assets(specs, program, out_path, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration)
+    vlm_validation_report = build_rebuild_vlm_validation_report(out_path, reference_geometry, reference_controls, semantic_report, asset_summary)
 
     write_json(out_path / "figure_program.json", program)
     pptx_path = compile_ppt(program, out_path)
@@ -835,6 +841,7 @@ def rebuild_editable(
             "reference_controls": str(out_path / "reference_controls.json"),
             "slot_inventory": str(out_path / "slot_inventory.json"),
             "slot_semantic_report": str(out_path / "slot_semantic_report.json"),
+            "rebuild_vlm_validation_report": str(out_path / "rebuild_vlm_validation_report.json"),
             "asset_generation_specs": str(out_path / "asset_generation_specs.json"),
             "asset_generation_report": str(out_path / "asset_generation_report.json"),
             "asset_economy_report": str(out_path / "asset_economy_report.json"),

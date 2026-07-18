@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ def resolve_vlm_model(*env_names: str, explicit_model: str | None = None) -> str
     return os.getenv("MODEL_VLM", "").strip() or DEFAULT_VLM_MODEL
 
 
-def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None = None, timeout: int = 180) -> dict:
+def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None = None, timeout: int = 180, retries: int = 1) -> dict:
     api_base = os.getenv("API_BASE", "").rstrip("/")
     api_key = os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_base or not api_key:
@@ -60,12 +61,20 @@ def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None 
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
     }
-    response = requests.post(
-        f"{api_base}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        data=json.dumps(payload),
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    content_text = response.json()["choices"][0]["message"]["content"]
-    return extract_json(content_text)
+    last_error: Exception | None = None
+    for attempt in range(max(1, int(retries) + 1)):
+        try:
+            response = requests.post(
+                f"{api_base}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                data=json.dumps(payload),
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            content_text = response.json()["choices"][0]["message"]["content"]
+            return extract_json(content_text)
+        except Exception as exc:
+            last_error = exc
+            if attempt < max(1, int(retries) + 1) - 1:
+                time.sleep(1.5)
+    raise last_error or RuntimeError("VLM call failed")

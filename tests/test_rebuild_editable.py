@@ -9,6 +9,8 @@ from PIL import Image, ImageDraw
 
 from rfs.cli import main
 from rfs.editable_rebuild import economy_acceptance_decision, rebuild_editable
+from rfs.rebuild_eval import evaluate_rebuild_vlm
+from rfs.rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from rfs.rebuild_vlm_adapters import build_rebuild_vlm_adapters, vlm_layout_adapter, vlm_semantic_adapter
 
 
@@ -44,6 +46,7 @@ class RebuildEditableTests(unittest.TestCase):
                 "input_manifest.json",
                 "reference_geometry.json",
                 "reference_geometry_overlay.png",
+                "rebuild_vlm_validation_report.json",
                 "reference_text_geometry.json",
                 "reference_controls.json",
                 "reference_controls_overlay.png",
@@ -202,6 +205,29 @@ class RebuildEditableTests(unittest.TestCase):
             self.assertEqual(report_before["api_requests_attempted"], report_after["api_requests_attempted"])
             self.assertTrue((out / "editable_composition.pptx").exists())
 
+    def test_vlm_validation_report_flags_bad_contracts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            geometry = {
+                "layout_mode": "hybrid",
+                "vlm_status": "used",
+                "panels": [{"id": "panel_a", "bbox_percent": {"x": 0, "y": 0, "w": 1, "h": 1}}],
+                "slots": [
+                    {"id": "slot_a", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "bbox_was_clamped": True},
+                    {"id": "slot_a", "bbox_percent": {"x": 1.2, "y": 0.1, "w": 0.2, "h": 0.2}},
+                ],
+                "cards": [],
+                "legend_regions": [],
+            }
+            controls = {"mode": "hybrid", "vlm_status": "used", "arrows": [{"id": "bad_arrow", "source_id": "missing", "target_id": "slot_a", "path_percent": [[0.1, 0.1]]}]}
+            semantic = {"semantic_vlm_status": "used", "slots": [{"slot_id": "slot_a", "asset_type": "not_real", "prompt_subject": ""}]}
+            report = build_rebuild_vlm_validation_report(out, geometry, controls, semantic, {"asset_mode": "crop", "api_requests_attempted": 0})
+            self.assertEqual(report["status"], "warning")
+            self.assertIn("slot_a", report["layout"]["duplicate_slot_ids"])
+            self.assertIn("slot_a", report["layout"]["clamped_bbox_ids"])
+            self.assertIn("bad_arrow", report["control"]["invalid_arrow_ids"])
+            self.assertIn("slot_a", report["semantic"]["invalid_asset_type_ids"])
+
     def test_real_vlm_layout_adapter_uses_shared_client_and_model_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -230,6 +256,59 @@ class RebuildEditableTests(unittest.TestCase):
             spec = json.loads((out / "asset_generation_specs.json").read_text(encoding="utf-8"))["specs"][0]
             self.assertEqual(spec["asset_type"], "character")
             self.assertIn("friendly robot agent", spec["prompt"])
+
+    def test_invalid_semantic_asset_type_falls_back_to_generic_and_reports_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "rebuild"
+
+            def fake_layout(_path, _base):
+                return {"slots": [{"id": "slot_unknown", "asset_id": "slot_unknown", "bbox_percent": {"x": 0.35, "y": 0.20, "w": 0.18, "h": 0.30}}]}
+
+            def fake_semantic(_path, _slots, _panels, _controls, _text_geometry):
+                return {"slots": [{"slot_id": "slot_unknown", "asset_type": "nonsense_type", "prompt_subject": "unknown object"}]}
+
+            rebuild_editable(reference, out, asset_mode="placeholder", text_mode="off", vlm_layout_adapter=fake_layout, semantic_adapter=fake_semantic)
+            inventory = json.loads((out / "slot_inventory.json").read_text(encoding="utf-8"))
+            self.assertEqual(inventory["slots"][0]["asset_type"], "generic")
+            semantic = json.loads((out / "slot_semantic_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(semantic["invalid_asset_type_count"], 1)
+
+    def test_invalid_vlm_control_arrow_is_dropped_and_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "rebuild"
+
+            def fake_layout(_path, _base):
+                return {"slots": [
+                    {"id": "slot_a", "asset_id": "slot_a", "bbox_percent": {"x": 0.1, "y": 0.2, "w": 0.2, "h": 0.2}},
+                    {"id": "slot_b", "asset_id": "slot_b", "bbox_percent": {"x": 0.6, "y": 0.2, "w": 0.2, "h": 0.2}},
+                ]}
+
+            def fake_controls(_path, _slots, _heuristic):
+                return {"arrows": [
+                    {"id": "invalid", "source_id": "missing", "target_id": "slot_b", "path_percent": [[0.1, 0.1], [0.2, 0.2]]},
+                    {"id": "valid", "source_id": "slot_a", "target_id": "slot_b", "path_percent": [[0.3, 0.3], [0.6, 0.3]]},
+                ]}
+
+            rebuild_editable(reference, out, asset_mode="placeholder", text_mode="off", vlm_layout_adapter=fake_layout, control_adapter=fake_controls)
+            controls = json.loads((out / "reference_controls.json").read_text(encoding="utf-8"))
+            self.assertEqual([arrow["id"] for arrow in controls["arrows"]], ["valid"])
+            self.assertTrue(any("invalid_vlm_control" in warning for warning in controls["warnings"]))
+
+    def test_rebuild_editable_eval_runs_crop_without_image_api_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            with patch.dict("os.environ", {"API_BASE": "", "API_KEY": "", "GEMINI_API_KEY": ""}, clear=False):
+                summary = evaluate_rebuild_vlm(reference, root / "eval", asset_mode="crop", text_mode="off", export_preview=False)
+            self.assertTrue(summary["ok"])
+            self.assertFalse(summary["image_generation_api_expected"])
+            self.assertEqual(summary["cases"]["heuristic"]["api_requests_attempted"], 0)
+            self.assertEqual(summary["cases"]["vlm"]["api_requests_attempted"], 0)
+            self.assertTrue((root / "eval" / "rebuild_vlm_eval_summary.json").exists())
 
     def test_rebuild_vlm_adapter_factory_requires_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:

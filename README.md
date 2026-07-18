@@ -187,6 +187,26 @@ rfs rebuild-editable `
   --compile-only
 ```
 
+To validate whether VLM planning is improving a given reference image, run the
+paired evaluator. It creates `case_heuristic` and `case_vlm` outputs under the
+same directory and defaults to `--asset-mode crop` so it does not spend image
+generation credits:
+
+```powershell
+rfs rebuild-editable-eval `
+  --reference "C:\path\figure.png" `
+  --out "output\editable_rebuild_eval" `
+  --asset-mode crop `
+  --export-preview
+```
+
+Review `rebuild_vlm_eval_summary.json`,
+`case_heuristic/reference_geometry_overlay.png`, and
+`case_vlm/reference_geometry_overlay.png` before running a full
+`--asset-mode api` rebuild. Each rebuild also writes
+`rebuild_vlm_validation_report.json` with layout/control/semantic validation
+counts, fallback status, and API request counts.
+
 Recommended real run:
 
 ```powershell

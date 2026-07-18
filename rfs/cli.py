@@ -11,6 +11,7 @@ from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
 from .presentations_qa import run_presentations_qa
 from .rebuild_vlm_adapters import build_rebuild_vlm_adapters
+from .rebuild_eval import evaluate_rebuild_vlm
 from .utils import env_present, mask_secret
 from .validator import validate_output
 from .workflow import make_framework
@@ -134,6 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     rebuild.add_argument("--json", action="store_true", help="Emit JSON.")
 
+    rebuild_eval = sub.add_parser("rebuild-editable-eval", help="Compare heuristic and hybrid VLM rebuild-editable outputs for one reference image.")
+    rebuild_eval.add_argument("--reference", required=True, help="Reference image path.")
+    rebuild_eval.add_argument("--out", required=True, help="Evaluation output directory.")
+    rebuild_eval.add_argument("--asset-mode", choices=["api", "crop", "placeholder"], default="crop", help="Asset mode for both cases. Default: crop to avoid image generation cost.")
+    rebuild_eval.add_argument("--text-mode", choices=["ocr", "manual", "off"], default="ocr", help="Text extraction mode for both cases. Default: ocr.")
+    rebuild_eval.add_argument("--export-preview", action="store_true", help="Export PNG previews when PowerPoint is available.")
+    rebuild_eval.add_argument("--json", action="store_true", help="Emit JSON.")
+
     coevolve = sub.add_parser("coevolve-image", help="Refine a complete scientific image through Creator Agent and Online/Frozen Judges.")
     coevolve.add_argument("--ground-truth", required=True, help="Structured Ground Truth JSON containing paper facts and human aesthetic preferences.")
     coevolve.add_argument("--out", required=True, help="Output directory for rounds, training trajectories, and approved_image.png.")
@@ -255,6 +264,14 @@ def main(argv: list[str] | None = None) -> int:
                 vlm_layout_adapter=rebuild_adapters["layout"] if args.layout_mode in {"vlm", "hybrid"} else None,
                 control_adapter=rebuild_adapters["control"] if args.control_mode in {"vlm", "hybrid"} else None,
                 semantic_adapter=rebuild_adapters["semantic"] if args.layout_mode in {"vlm", "hybrid"} or args.control_mode in {"vlm", "hybrid"} else None,
+            )
+        elif args.command == "rebuild-editable-eval":
+            result = evaluate_rebuild_vlm(
+                reference=args.reference,
+                out=args.out,
+                asset_mode=args.asset_mode,
+                text_mode=args.text_mode,
+                export_preview=args.export_preview,
             )
         elif args.command == "coevolve-image":
             result = run_image_coevolution(
