@@ -125,10 +125,20 @@ def plan_slot_semantics(
     regions = _text_regions(text_geometry)
     warnings = []
     adapter_by_id = {}
+    semantic_vlm_status = "not_requested"
+    semantic_vlm_model = None
+    invalid_asset_type_count = 0
     if semantic_adapter:
         try:
-            adapter_by_id = _apply_adapter(slots, semantic_adapter(reference_path, slots, panels, controls, text_geometry))
+            adapter_result = semantic_adapter(reference_path, slots, panels, controls, text_geometry)
+            if isinstance(adapter_result, dict) and adapter_result.get("_vlm_model"):
+                semantic_vlm_model = str(adapter_result.get("_vlm_model"))
+            adapter_by_id = _apply_adapter(slots, adapter_result)
+            semantic_vlm_status = "used" if adapter_by_id else "fallback"
+            if not adapter_by_id:
+                warnings.append("semantic_adapter_returned_no_valid_slots")
         except Exception as exc:
+            semantic_vlm_status = "fallback"
             warnings.append(f"semantic_adapter_failed:{exc}")
     planned = []
     for slot in slots:
@@ -145,6 +155,7 @@ def plan_slot_semantics(
             asset_type = str(override.get("asset_type") or asset_type)
             if asset_type not in ASSET_TYPES:
                 warnings.append(f"unknown_asset_type:{slot_id}:{asset_type}")
+                invalid_asset_type_count += 1
                 asset_type = "generic"
             semantic_role = str(override.get("semantic_role") or semantic_role)
             prompt_subject = str(override.get("prompt_subject") or prompt_subject)
@@ -164,8 +175,11 @@ def plan_slot_semantics(
     return planned, {
         "summary": "Slot semantic planning report.",
         "status": "ok",
+        "semantic_vlm_status": semantic_vlm_status,
+        "vlm_model": semantic_vlm_model,
         "slot_count": len(planned),
         "text_region_count": len(regions),
+        "invalid_asset_type_count": invalid_asset_type_count,
         "warnings": warnings,
         "slots": [{
             "slot_id": item["id"],

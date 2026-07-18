@@ -209,6 +209,9 @@ def localize_reference_controls(
                 if normalized:
                     arrows = normalized
                     vlm_status = "used"
+                    invalid_count = max(0, len(raw_arrows or []) - len(normalized))
+                    if invalid_count:
+                        warnings.append(f"{invalid_count}_invalid_vlm_control_arrow(s)_dropped")
                 else:
                     vlm_status = "fallback"
                     warnings.append("control_adapter_returned_no_valid_arrows")
@@ -228,6 +231,7 @@ def localize_reference_controls(
         "mode": mode,
         "status": "ok",
         "vlm_status": vlm_status,
+        "vlm_model": str(raw.get("_vlm_model")) if mode in {"vlm", "hybrid"} and isinstance(locals().get("raw"), dict) and raw.get("_vlm_model") else None,
         "warnings": warnings,
         "arrows": arrows,
     }

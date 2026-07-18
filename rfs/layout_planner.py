@@ -140,7 +140,13 @@ def _normalize_items(items: list, prefix: str, canvas_id: str = "reference_canva
         else:
             record.setdefault("title", item.get("label") or item_id)
             record.setdefault("editable_in", "pptx")
+        raw_bbox = dict(record["bbox_percent"])
         record["bbox_percent"] = clamp_bbox(record["bbox_percent"])
+        try:
+            raw_normalized = {key: round(float(raw_bbox[key]), 4) for key in ("x", "y", "w", "h")}
+        except Exception:
+            raw_normalized = {}
+        record["bbox_was_clamped"] = record["bbox_percent"] != raw_normalized
         record.setdefault("confidence", 0.8)
         record.setdefault("detected_by", "vlm")
         normalized.append(record)
@@ -161,6 +167,9 @@ def _merge_vlm_layout(base: dict, vlm: dict) -> dict:
     merged["legend_regions"] = legends
     merged["confidence"] = float(vlm.get("confidence") or 0.75)
     merged["vlm_status"] = "used"
+    if vlm.get("_vlm_model"):
+        merged["vlm_model"] = str(vlm.get("_vlm_model"))
+    merged.setdefault("warnings", [])
     return merged
 
 
