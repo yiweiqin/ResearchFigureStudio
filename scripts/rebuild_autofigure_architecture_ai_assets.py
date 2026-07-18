@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import math
 import mimetypes
@@ -46,6 +47,14 @@ INTERNAL_ACCEPTABLE_FILL_MIN = 0.80
 INTERNAL_ACCEPTABLE_FILL_MAX = 0.95
 INTERNAL_REGENERATE_FILL_THRESHOLD = 0.70
 INTERNAL_MAX_MARGIN_PERCENT = 0.10
+SLOT_FIT_WASTE_ACCEPTABLE_MAX = 0.16
+GENERATION_ASPECT_RATIO_VALUES = {
+    "1:1": 1.0,
+    "3:4": 3 / 4,
+    "4:3": 4 / 3,
+    "9:16": 9 / 16,
+    "16:9": 16 / 9,
+}
 TEXT_STYLES = {
     "title": {"font": FONT, "size": 23.0, "bold": True},
     "subtitle": {"font": FONT, "size": 10.8, "bold": False},
@@ -63,6 +72,7 @@ SLOTS = [
         "bbox": (66, 254, 200, 400),
         "asset_bbox": (68, 255, 205, 398),
         "prompt": "a stack of off-white paper documents with simple abstract pseudo-lines and two tiny pseudo-number marks, cute academic flat illustration, no readable text",
+        "fill_guidance": "Make the paper stack very large, nearly full height, with page corners close to all four safe margins. Avoid tiny centered sheets and avoid showing broad blue background around the documents.",
         "background_color_hex": "#EAF3FF",
         "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
         "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
@@ -96,6 +106,7 @@ SLOTS = [
         "bbox": (1059, 438, 1212, 632),
         "asset_bbox": (1062, 434, 1208, 632),
         "prompt": "a cute robot critic wearing round glasses and holding a clipboard, pastel academic illustration, no readable text",
+        "fill_guidance": "Use a large close-up robot critic with head, torso, glasses, and clipboard filling the portrait canvas. The robot should nearly touch the side safe margins and bottom safe margin.",
         "background_color_hex": "#FFF1DF",
         "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
         "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
@@ -117,7 +128,8 @@ SLOTS = [
         "id": "erase_text_tool",
         "bbox": (1288, 493, 1420, 604),
         "asset_bbox": (1290, 486, 1425, 606),
-        "prompt": "a pink eraser removing blurred tiny pseudo-letters, cute academic diagram illustration, no readable text",
+        "prompt": "one large front-facing rounded pink eraser icon, cute academic diagram illustration, no readable text, no letters, no numbers, no pseudo-letters",
+        "fill_guidance": "Make one oversized front-facing rounded eraser dominate the square canvas, with its body occupying roughly 85-90% of the canvas width and height. Use a broad blocky eraser shape rather than a thin diagonal object. Keep the eraser close to all safe margins without cutting it off. Do not add ABC, letters, numbers, words, pseudo-text, distant dust, particles, side objects, or broad empty background.",
         "background_color_hex": "#ECF7E9",
         "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
         "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
@@ -129,6 +141,7 @@ SLOTS = [
         "bbox": (1570, 492, 1712, 604),
         "asset_bbox": (1566, 490, 1718, 608),
         "prompt": "a magnifying glass inspecting pseudo-numbers with a green check badge and short gray pseudo-lines, clean pastel academic illustration, no readable text",
+        "fill_guidance": "Make the magnifying glass lens very large, occupying most of the canvas height, with the handle and check badge tightly grouped into one compact foreground silhouette. Avoid broad side margins and keep decorative side lines minimal.",
         "background_color_hex": "#ECF7E9",
         "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
         "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
@@ -140,6 +153,7 @@ SLOTS = [
         "bbox": (1402, 682, 1590, 812),
         "asset_bbox": (1408, 686, 1588, 808),
         "prompt": "a small polished scientific figure card with abstract pie chart, smooth shapes, tiny pseudo-lines and pleasing pastel colors, no readable text",
+        "fill_guidance": "Make the figure card itself large and nearly full canvas, with its rounded rectangle edges close to the safe margins. Internal charts should be big enough to count as foreground, not tiny decorations.",
         "background_color_hex": "#ECF7E9",
         "internal_content_fill_target": INTERNAL_CONTENT_FILL_TARGET,
         "internal_max_margin_percent": INTERNAL_MAX_MARGIN_PERCENT,
@@ -545,11 +559,389 @@ def score_internal_fill(metrics: dict) -> float:
 
 def evaluate_candidate(slot: dict, candidate_path: Path) -> dict:
     metrics = measure_internal_content_fill(candidate_path, slot["background_color_hex"])
+    metrics.update(compute_slot_fit_metrics(candidate_path, slot))
     fill = float(metrics.get("foreground_bbox_fill_percent") or 0.0)
-    metrics["score"] = score_internal_fill(metrics)
-    metrics["pass"] = INTERNAL_ACCEPTABLE_FILL_MIN <= fill <= INTERNAL_ACCEPTABLE_FILL_MAX
-    metrics["needs_regeneration"] = fill < INTERNAL_REGENERATE_FILL_THRESHOLD
+    slot_fit_waste = float(metrics.get("slot_fit_waste_percent") or 1.0)
+    edge_touch_count = sum(
+        1 for key in ["margin_left_percent", "margin_right_percent", "margin_top_percent", "margin_bottom_percent"]
+        if float(metrics.get(key) or 0.0) < 0.01
+    )
+    metrics["edge_touch_count"] = edge_touch_count
+    metrics["background_or_edge_artifact_risk"] = fill > 0.97 and edge_touch_count >= 2
+    internal_score = score_internal_fill(metrics)
+    slot_fit_score = max(0.0, 1.0 - slot_fit_waste)
+    metrics["score"] = round(internal_score * 0.72 + slot_fit_score * 0.28, 4)
+    metrics["internal_fill_score"] = internal_score
+    metrics["slot_fit_score"] = round(slot_fit_score, 4)
+    metrics["pass"] = (
+        INTERNAL_ACCEPTABLE_FILL_MIN <= fill <= INTERNAL_ACCEPTABLE_FILL_MAX
+        and slot_fit_waste <= SLOT_FIT_WASTE_ACCEPTABLE_MAX
+        and not metrics["background_or_edge_artifact_risk"]
+    )
+    metrics["needs_regeneration"] = (
+        fill < INTERNAL_REGENERATE_FILL_THRESHOLD
+        or fill > INTERNAL_ACCEPTABLE_FILL_MAX
+        or slot_fit_waste > SLOT_FIT_WASTE_ACCEPTABLE_MAX
+        or metrics["background_or_edge_artifact_risk"]
+    )
     return metrics
+
+
+def select_best_candidate(candidate_metrics: list[dict]) -> dict | None:
+    if not candidate_metrics:
+        return None
+    slot_fit_candidates = [
+        item for item in candidate_metrics
+        if float(item.get("slot_fit_waste_percent") or 1.0) <= SLOT_FIT_WASTE_ACCEPTABLE_MAX
+    ]
+    if slot_fit_candidates:
+        artifact_free_candidates = [
+            item for item in slot_fit_candidates
+            if not item.get("background_or_edge_artifact_risk")
+        ]
+        candidates = artifact_free_candidates or slot_fit_candidates
+        def slot_fit_key(item: dict) -> tuple[float, float, float, float]:
+            fill = float(item.get("foreground_bbox_fill_percent") or 0.0)
+            edge_touch_count = int(item.get("edge_touch_count") or 0)
+            overfill_penalty = max(0.0, fill - INTERNAL_ACCEPTABLE_FILL_MAX) * 4.0
+            fill_priority = min(fill, INTERNAL_ACCEPTABLE_FILL_MAX) - overfill_penalty
+            return (
+                1.0 if INTERNAL_ACCEPTABLE_FILL_MIN <= fill <= INTERNAL_ACCEPTABLE_FILL_MAX else 0.0,
+                fill_priority,
+                -float(edge_touch_count),
+                float(item.get("score") or 0.0),
+            )
+        return max(candidates, key=slot_fit_key)
+    return max(candidate_metrics, key=lambda item: item["score"])
+
+
+ECONOMY_ACCEPTANCE_PROFILES = {
+    "character": {"min_fill": 0.80, "max_fill": 0.95},
+    "document_stack": {"min_fill": 0.75, "max_fill": 0.95},
+    "tool_combo": {"min_fill": 0.75, "max_fill": 0.95},
+    "chart_card": {"min_fill": 0.75, "max_fill": 0.95},
+    "inspection": {"min_fill": 0.70, "max_fill": 0.95},
+    "thin_tool": {"min_fill": 0.50, "max_fill": 0.95},
+}
+
+
+SLOT_ECONOMY_TYPES = {
+    "input_text_stack": "document_stack",
+    "vlm_agent_robot": "character",
+    "ai_designer": "character",
+    "ai_critic": "character",
+    "synthesis_tools": "tool_combo",
+    "erase_text_tool": "thin_tool",
+    "ocr_verify": "inspection",
+    "final_autofigure_card": "chart_card",
+}
+
+
+ASSET_TYPE_PROMPT_TEMPLATES = {
+    "character": {
+        "subject_framing": "large bust or upper-body character framing",
+        "composition": "The character must be zoomed in so the head and upper body dominate the canvas, with the foreground bbox spanning at least 80% of both canvas width and canvas height. Do not show a small full-body figure floating in the center.",
+        "allowed_auxiliary_objects": "Only one small carried prop is allowed when it identifies the role.",
+    },
+    "document_stack": {
+        "subject_framing": "large stacked-document framing",
+        "composition": "The document stack must be oversized and zoomed in, with page corners close to all four safe margins and the stack spanning at least 80% of canvas width and height.",
+        "allowed_auxiliary_objects": "No auxiliary objects.",
+    },
+    "tool_combo": {
+        "subject_framing": "compact grouped tool framing",
+        "composition": "Make the wand and palette large, overlapping, and tightly grouped into one foreground cluster that spans most of the landscape canvas. Do not leave the tools as tiny separated objects.",
+        "allowed_auxiliary_objects": "Only tiny sparkles attached to the main cluster are allowed.",
+    },
+    "chart_card": {
+        "subject_framing": "large card-object framing",
+        "composition": "The chart card rectangle itself should be large, with card edges close to the safe margins and internal chart marks large enough to count as foreground.",
+        "allowed_auxiliary_objects": "No objects outside the chart card.",
+    },
+    "inspection": {
+        "subject_framing": "large compact inspection-symbol framing",
+        "composition": "The magnifying lens should be oversized and the handle and verification badge should be tightly grouped into one compact foreground silhouette that fills the 4:3 canvas.",
+        "allowed_auxiliary_objects": "Only short side lines close to the lens are allowed.",
+    },
+    "thin_tool": {
+        "subject_framing": "oversized single-tool framing",
+        "composition": "Use a broad front-facing version of the tool when possible so it fills the canvas visually without relying on scattered particles.",
+        "allowed_auxiliary_objects": "No auxiliary objects.",
+    },
+}
+
+
+def build_asset_generation_spec(slot: dict, candidate_index: int = 1) -> dict:
+    slot_type = SLOT_ECONOMY_TYPES.get(slot["id"], "character")
+    profile = ECONOMY_ACCEPTANCE_PROFILES[slot_type]
+    template = ASSET_TYPE_PROMPT_TEMPLATES[slot_type]
+    aspect_ratio = choose_generation_aspect_ratio(slot)
+    return {
+        "slot_id": slot["id"],
+        "object_type": slot_type,
+        "target_aspect_ratio": aspect_ratio,
+        "slot_aspect_ratio": slot_aspect_ratio(slot),
+        "target_fill_range": [profile["min_fill"], profile["max_fill"]],
+        "target_fill_percent_text": f"{int(profile['min_fill'] * 100)}-{int(profile['max_fill'] * 100)}%",
+        "max_margin_percent": 0.12,
+        "background_color_hex": slot["background_color_hex"],
+        "subject_framing": template["subject_framing"],
+        "composition": template["composition"],
+        "allowed_auxiliary_objects": template["allowed_auxiliary_objects"],
+        "main_request": slot["prompt"],
+        "slot_guidance": slot.get("fill_guidance", ""),
+        "forbidden": [
+            "readable text",
+            "letters",
+            "numbers",
+            "labels",
+            "watermark",
+            "large empty background",
+            "wide margins",
+            "distant detached decorations",
+            "black or transparent corner artifacts",
+        ],
+        "candidate_index": candidate_index,
+    }
+
+
+def prompt_from_asset_generation_spec(spec: dict) -> str:
+    forbidden = ", ".join(spec["forbidden"])
+    return (
+        "Use the provided crop only as a visual reference for object identity and style, not for its scale, framing, empty margins, or amount of background. "
+        "Before generating, internally plan the icon layout from this generation specification and satisfy every framing constraint. "
+        f"Asset id: {spec['slot_id']}. Object type: {spec['object_type']}. Main request: {spec['main_request']}. "
+        f"Canvas aspect ratio: {spec['target_aspect_ratio']}. Target effective foreground fill: {spec['target_fill_percent_text']}. "
+        f"Maximum intended uniform background margin: {int(spec['max_margin_percent'] * 100)}%. "
+        f"Subject framing: {spec['subject_framing']}. Composition: {spec['composition']} "
+        f"Auxiliary object rule: {spec['allowed_auxiliary_objects']} "
+        f"{spec['slot_guidance']} "
+        "Preserve the crop's object identity, approximate pose, pastel academic illustration style, soft shadows, rounded friendly shapes, and color family. "
+        "Create a standalone PowerPoint scientific architecture icon where the main subject fills the image canvas according to the target fill range. "
+        "The background should be only a narrow border around the subject, not a large field. Prefer a close-up crop-like composition over a full-scene composition. "
+        "If the first draft would contain broad empty background, internally zoom in before finalizing the image. "
+        "Keep all important details visible inside the canvas and avoid cutting off the subject. "
+        f"Use a perfectly flat background color matching {spec['background_color_hex']} so the asset blends into its stage panel. "
+        f"Do not include: {forbidden}. No extra unrelated objects."
+    )
+
+
+def economy_acceptance_decision(slot: dict, metrics: dict) -> dict:
+    slot_type = SLOT_ECONOMY_TYPES.get(slot["id"], "character")
+    profile = ECONOMY_ACCEPTANCE_PROFILES[slot_type]
+    fill = float(metrics.get("foreground_bbox_fill_percent") or 0.0)
+    slot_fit_waste = float(metrics.get("slot_fit_waste_percent") or 1.0)
+    artifact_risk = bool(metrics.get("background_or_edge_artifact_risk"))
+    accepted = (
+        profile["min_fill"] <= fill <= profile["max_fill"]
+        and slot_fit_waste <= SLOT_FIT_WASTE_ACCEPTABLE_MAX
+        and not artifact_risk
+    )
+    if accepted:
+        reason = f"{slot_type}_threshold_met"
+    elif artifact_risk:
+        reason = "reject_background_or_edge_artifact"
+    elif slot_fit_waste > SLOT_FIT_WASTE_ACCEPTABLE_MAX:
+        reason = "reject_slot_fit_waste"
+    elif fill < profile["min_fill"]:
+        reason = f"below_{slot_type}_min_fill"
+    else:
+        reason = f"above_{slot_type}_max_fill"
+    return {
+        "slot_type": slot_type,
+        "min_fill": profile["min_fill"],
+        "max_fill": profile["max_fill"],
+        "accepted": accepted,
+        "reason": reason,
+    }
+
+
+def run_asset_cost_experiment(retries: int, output_path: Path) -> dict:
+    crop_reference_slots()
+    existing_report_items: dict[str, dict] = {}
+    generation_report_path = OUT / "asset_generation_report.json"
+    if generation_report_path.exists():
+        try:
+            generation_report = json.loads(generation_report_path.read_text(encoding="utf-8"))
+            existing_report_items = {item["slot_id"]: item for item in generation_report.get("assets", [])}
+        except Exception:
+            existing_report_items = {}
+    items = []
+    strict_max_requests = 0
+    economy_max_requests = 0
+    for slot in SLOTS:
+        report_item = existing_report_items.get(slot["id"])
+        if report_item and report_item.get("candidate_metrics"):
+            candidate_metrics = report_item["candidate_metrics"]
+        else:
+            candidate_metrics = [evaluate_candidate(slot, path) for path in candidate_paths_for_slot(slot["id"])]
+        best = report_item.get("selected_internal_fill") if report_item and report_item.get("selected_internal_fill") else select_best_candidate(candidate_metrics)
+        if best is None:
+            strict_would_generate = True
+            economy_would_generate = True
+            economy_decision = {"accepted": False, "reason": "no_existing_candidate", "slot_type": SLOT_ECONOMY_TYPES.get(slot["id"], "character")}
+            selected = {}
+        else:
+            strict_would_generate = not best["pass"] or best["needs_regeneration"]
+            economy_decision = economy_acceptance_decision(slot, best)
+            economy_would_generate = not economy_decision["accepted"]
+            selected = {
+                "candidate_path": best.get("candidate_path"),
+                "foreground_bbox_fill_percent": best.get("foreground_bbox_fill_percent"),
+                "slot_fit_waste_percent": best.get("slot_fit_waste_percent"),
+                "generation_aspect_ratio": best.get("generation_aspect_ratio"),
+                "generated_image_size": best.get("generated_image_size"),
+                "background_or_edge_artifact_risk": best.get("background_or_edge_artifact_risk"),
+                "strict_pass": best.get("pass"),
+                "strict_needs_regeneration": best.get("needs_regeneration"),
+            }
+        if strict_would_generate:
+            strict_max_requests += retries
+        if economy_would_generate:
+            economy_max_requests += 1
+        items.append({
+            "slot_id": slot["id"],
+            "candidate_count": len(candidate_metrics),
+            "selected": selected,
+            "current_strict_policy": {
+                "would_generate_next_run": strict_would_generate,
+                "max_api_requests_next_run": retries if strict_would_generate else 0,
+            },
+            "economy_policy": {
+                **economy_decision,
+                "would_generate_next_run": economy_would_generate,
+                "max_api_requests_next_run": 1 if economy_would_generate else 0,
+            },
+        })
+    report = {
+        "summary": "Dry-run cost experiment. No image API calls are made; this compares next-run generation decisions using existing candidates.",
+        "baseline_policy": {
+            "name": "current_strict_80_95_policy",
+            "max_candidates_per_failed_slot": retries,
+        },
+        "economy_policy": {
+            "name": "type_aware_acceptance_with_one_candidate_retry",
+            "profiles": ECONOMY_ACCEPTANCE_PROFILES,
+            "max_candidates_per_failed_slot": 1,
+            "locks_existing_accepted_assets": True,
+        },
+        "estimated_next_run_api_requests": {
+            "current_strict_policy_max": strict_max_requests,
+            "economy_policy_max": economy_max_requests,
+            "estimated_requests_saved": strict_max_requests - economy_max_requests,
+            "estimated_saving_percent": round((strict_max_requests - economy_max_requests) / max(strict_max_requests, 1) * 100, 2),
+        },
+        "items": items,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
+
+
+def parse_slot_ids(slot_ids: str) -> list[str]:
+    if slot_ids.strip().lower() == "all":
+        return [slot["id"] for slot in SLOTS]
+    return [item.strip() for item in slot_ids.split(",") if item.strip()]
+
+
+def create_preflight_contact_sheet(items: list[dict], output_path: Path) -> None:
+    thumb = 180
+    label_h = 64
+    gap = 16
+    columns = 4
+    rows = max(1, math.ceil(len(items) / columns))
+    sheet = Image.new("RGB", (columns * (thumb + gap) + gap, rows * (thumb + label_h + gap) + gap), "#F3F1EC")
+    draw = ImageDraw.Draw(sheet)
+    for idx, item in enumerate(items):
+        col = idx % columns
+        row = idx // columns
+        x0 = gap + col * (thumb + gap)
+        y0 = gap + row * (thumb + label_h + gap)
+        if item.get("candidate_path") and Path(item["candidate_path"]).exists():
+            image = Image.open(item["candidate_path"]).convert("RGB")
+            image.thumbnail((thumb, thumb), Image.Resampling.LANCZOS)
+            sheet.paste(image, (x0 + (thumb - image.width) // 2, y0 + (thumb - image.height) // 2))
+        fill = item.get("metrics", {}).get("foreground_bbox_fill_percent")
+        accepted = item.get("economy_decision", {}).get("accepted")
+        label = f"{item['slot_id']}\nfill: {fill * 100:.1f}%" if isinstance(fill, (int, float)) else item["slot_id"]
+        label += f"\n{'accepted' if accepted else 'review'}"
+        draw.multiline_text((x0, y0 + thumb + 6), label, fill="#333333", spacing=3)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(output_path)
+
+
+def run_preflight_first_pass_experiment(slot_ids: str, output_dir: Path, workers: int = 4) -> dict:
+    crop_reference_slots()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    candidate_dir = output_dir / "candidates"
+    selected_ids = parse_slot_ids(slot_ids)
+    selected_slots = [slot_by_id(slot_id) for slot_id in selected_ids]
+    specs = [build_asset_generation_spec(slot, 1) for slot in selected_slots]
+    (output_dir / "asset_generation_specs.json").write_text(json.dumps({
+        "summary": "Preflight first-pass generation specs. These specs are used before any image API request.",
+        "slots": specs,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def run_one(slot: dict) -> dict:
+        try:
+            candidate_path = gemini_generate_from_crop(slot, 1, candidate_dir=candidate_dir)
+            background_report = harmonize_asset_background(candidate_path, slot["background_color_hex"])
+            metrics = evaluate_candidate(slot, candidate_path)
+            economy_decision = economy_acceptance_decision(slot, metrics)
+            return {
+                "slot_id": slot["id"],
+                "status": "ok",
+                "candidate_path": str(candidate_path),
+                "asset_generation_spec": build_asset_generation_spec(slot, 1),
+                "metrics": metrics,
+                "economy_decision": economy_decision,
+                "strict_decision": {
+                    "accepted": bool(metrics.get("pass")),
+                    "needs_regeneration": bool(metrics.get("needs_regeneration")),
+                },
+                "background": background_report,
+            }
+        except Exception as exc:
+            return {
+                "slot_id": slot["id"],
+                "status": "generation_failed",
+                "asset_generation_spec": build_asset_generation_spec(slot, 1),
+                "error": str(exc),
+                "economy_decision": {"accepted": False, "reason": "generation_failed"},
+                "strict_decision": {"accepted": False, "needs_regeneration": True},
+            }
+
+    items = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(run_one, slot): slot for slot in selected_slots}
+        for future in as_completed(futures):
+            items.append(future.result())
+    items.sort(key=lambda item: item["slot_id"])
+    accepted = [item for item in items if item.get("economy_decision", {}).get("accepted")]
+    strict_accepted = [item for item in items if item.get("strict_decision", {}).get("accepted")]
+    contact_sheet = output_dir / "preflight_first_pass_contact_sheet.png"
+    create_preflight_contact_sheet(items, contact_sheet)
+    report = {
+        "summary": "One-shot preflight generation experiment. Each selected slot gets one planned API generation in an isolated experiment directory; main assets and PPT are not overwritten.",
+        "selected_slots": selected_ids,
+        "workers": workers,
+        "main_assets_overwritten": False,
+        "main_ppt_overwritten": False,
+        "contact_sheet": str(contact_sheet),
+        "result": {
+            "generated_count": len([item for item in items if item["status"] == "ok"]),
+            "failed_count": len([item for item in items if item["status"] != "ok"]),
+            "economy_first_pass_accept_count": len(accepted),
+            "economy_first_pass_accept_rate": round(len(accepted) / max(len(items), 1), 4),
+            "strict_first_pass_accept_count": len(strict_accepted),
+            "strict_first_pass_accept_rate": round(len(strict_accepted) / max(len(items), 1), 4),
+            "estimated_requests_if_one_shot_then_manual_review": len(items),
+            "estimated_requests_if_strict_five_retry_for_nonpass": len(items) + (len(items) - len(strict_accepted)) * 4,
+        },
+        "items": items,
+    }
+    (output_dir / "preflight_first_pass_experiment_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
 
 
 def edge_connected_background_mask(image: Image.Image, background: tuple[int, int, int], tolerance: int = 42) -> Image.Image:
@@ -608,7 +1000,97 @@ def candidate_paths_for_slot(slot_id: str) -> list[Path]:
     return sorted(slot_dir.glob("candidate_*.png"))
 
 
-def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
+def candidate_meta_path(candidate_path: Path) -> Path:
+    return candidate_path.with_suffix(".generation.json")
+
+
+def slot_aspect_ratio(slot: dict) -> float:
+    left, top, right, bottom = slot["asset_bbox"]
+    return round((right - left) / max(bottom - top, 1), 4)
+
+
+def choose_generation_aspect_ratio(slot: dict) -> str:
+    override = slot.get("generation_aspect_ratio_override")
+    if override:
+        return override
+    ratio = slot_aspect_ratio(slot)
+    if ratio >= 1.55:
+        return "16:9"
+    if ratio >= 1.18:
+        return "4:3"
+    if ratio >= 0.85:
+        return "1:1"
+    if ratio >= 0.62:
+        return "3:4"
+    return "9:16"
+
+
+def aspect_ratio_prompt_instruction(aspect_ratio: str) -> str:
+    if aspect_ratio in {"16:9", "4:3"}:
+        return (
+            f"Use a {aspect_ratio} landscape canvas matched to the target slot. "
+            "Compose the subject horizontally so it naturally spans the canvas width without needing rotation, stacking, or artificial square filling. "
+            "Keep the top and bottom margins narrow but preserve all important details. "
+        )
+    if aspect_ratio in {"3:4", "9:16"}:
+        return (
+            f"Use a {aspect_ratio} portrait canvas matched to the target slot. "
+            "Compose the subject vertically so it fills the height while keeping left and right margins narrow. "
+            "Use a bust or full-height framing as appropriate, but avoid a tiny centered character with broad side margins. "
+        )
+    return (
+        "Use a square 1:1 canvas. "
+        "Compose the subject to fill the square naturally with narrow, even margins. "
+    )
+
+
+def compute_slot_fit_metrics(image_path: Path, slot: dict) -> dict:
+    with Image.open(image_path) as image:
+        image_width, image_height = image.size
+    image_ratio = image_width / max(image_height, 1)
+    slot_ratio = slot_aspect_ratio(slot)
+    left, top, right, bottom = slot["asset_bbox"]
+    slot_width = right - left
+    slot_height = bottom - top
+    if image_ratio > slot_ratio:
+        fit_width = slot_width
+        fit_height = slot_width / max(image_ratio, 0.0001)
+    else:
+        fit_height = slot_height
+        fit_width = slot_height * image_ratio
+    used_area = fit_width * fit_height
+    slot_area = max(slot_width * slot_height, 1)
+    waste = max(0.0, 1.0 - used_area / slot_area)
+    target_ratio = GENERATION_ASPECT_RATIO_VALUES[choose_generation_aspect_ratio(slot)]
+    ratio_error = abs(math.log(max(image_ratio, 0.0001) / target_ratio))
+    if waste <= SLOT_FIT_WASTE_ACCEPTABLE_MAX and ratio_error <= 0.18:
+        status = "matched"
+    elif waste <= SLOT_FIT_WASTE_ACCEPTABLE_MAX:
+        status = "slot_fit_ok_generated_ratio_drift"
+    else:
+        status = "mismatch"
+    generation_meta = {}
+    meta_path = candidate_meta_path(image_path)
+    if meta_path.exists():
+        try:
+            generation_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            generation_meta = {"generation_meta_warning": "failed_to_read_generation_meta"}
+    return {
+        "slot_aspect_ratio": slot_ratio,
+        "generation_aspect_ratio": choose_generation_aspect_ratio(slot),
+        "requested_generation_aspect_ratio": generation_meta.get("requested_generation_aspect_ratio", choose_generation_aspect_ratio(slot)),
+        "actual_generation_request_aspect_ratio": generation_meta.get("actual_generation_request_aspect_ratio"),
+        "generation_aspect_ratio_fallback_used": generation_meta.get("generation_aspect_ratio_fallback_used", False),
+        "generated_image_size": [image_width, image_height],
+        "generated_image_aspect_ratio": round(image_ratio, 4),
+        "slot_fit_waste_percent": round(waste, 4),
+        "aspect_ratio_match_status": status,
+        **({"generation_meta_warning": generation_meta["generation_meta_warning"]} if "generation_meta_warning" in generation_meta else {}),
+    }
+
+
+def gemini_generate_from_crop(slot: dict, candidate_index: int = 1, candidate_dir: Path | None = None) -> Path:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
     url = os.getenv("GEMINI_GEN_IMG_URL")
     if not api_key or not url:
@@ -616,29 +1098,9 @@ def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
     crop_path = Path(slot["crop_path"])
     mime = mimetypes.guess_type(crop_path.name)[0] or "image/png"
     image_b64 = base64.b64encode(crop_path.read_bytes()).decode("ascii")
-    framing_strength = "extreme close-up" if candidate_index > 2 else ("very close-up" if candidate_index > 1 else "close-up")
-    fill_instruction = (
-        "For this candidate, prioritize maximum internal content fill: the subject should nearly touch the safe margins on all sides while staying fully visible. "
-        if candidate_index > 2
-        else ""
-    )
-    prompt = (
-        "Use the provided crop only as a visual reference for object identity and style, not for its scale, framing, empty margins, or amount of background. "
-        "Ignore the crop's whitespace and recreate only the main object(s) as a clean standalone raster asset for a PowerPoint scientific architecture figure. "
-        f"Asset id: {slot['id']}. Main request: {slot['prompt']}. "
-        "Preserve the crop's object identity, approximate pose, pastel academic illustration style, soft shadows, rounded friendly shapes, and color family. "
-        "Do not include any readable words, letters, numbers, stage title, labels, arrows, diagram frame, panel border, or white card background. "
-        f"Create a {framing_strength} standalone icon where the main subject fills most of the square image canvas. "
-        "The effective subject content should occupy 80-95% of the image area, with only a narrow uniform background margin. "
-        f"{fill_instruction}"
-        "Use a zoomed-in composition, larger scale, and fuller silhouette. The subject's bounding box should cover at least 85% of the canvas width and at least 85% of the canvas height. "
-        "For wide objects, rotate, stack, overlap, or arrange the elements diagonally so the overall silhouette fills both width and height of the square canvas. "
-        "For character icons, use a close-up bust or large upper-body framing so the character body/head dominates the canvas rather than showing a tiny full-body figure. "
-        "Do not create a tiny object centered in a large colored background. Avoid wide empty margins, decorative blank space, and large unused fields. "
-        "Do not crop off the subject; keep all important details visible inside the canvas. "
-        f"Use a perfectly flat background color matching {slot['background_color_hex']} so the asset blends into its stage panel. "
-        "No watermark, no logo, no extra unrelated objects."
-    )
+    spec = build_asset_generation_spec(slot, candidate_index)
+    aspect_ratio = spec["target_aspect_ratio"]
+    prompt = prompt_from_asset_generation_spec(spec)
     payload = {
         "contents": [{
             "role": "user",
@@ -649,24 +1111,46 @@ def gemini_generate_from_crop(slot: dict, candidate_index: int = 1) -> Path:
         }],
         "generationConfig": {
             "responseModalities": ["IMAGE"],
-            "imageConfig": {"imageSize": "1K", "aspectRatio": "1:1"},
+            "imageConfig": {"imageSize": "1K", "aspectRatio": aspect_ratio},
         },
     }
-    out_path = CANDIDATE_DIR / slot["id"] / f"candidate_{candidate_index:02d}.png"
+    candidate_root = candidate_dir or CANDIDATE_DIR
+    out_path = candidate_root / slot["id"] / f"candidate_{candidate_index:02d}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    response = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, data=json.dumps(payload), timeout=240)
-    response.raise_for_status()
-    data = response.json()
-    for candidate in data.get("candidates", []):
-        for part in candidate.get("content", {}).get("parts", []):
-            inline = part.get("inlineData") or part.get("inline_data")
-            if inline and inline.get("data"):
-                out_path.write_bytes(base64.b64decode(inline["data"]))
-                return out_path
+    request_aspects = [aspect_ratio]
+    if aspect_ratio != "1:1":
+        request_aspects.append("1:1")
+    last_error: Exception | None = None
+    for request_aspect in request_aspects:
+        payload["generationConfig"]["imageConfig"]["aspectRatio"] = request_aspect
+        try:
+            response = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, data=json.dumps(payload), timeout=240)
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            last_error = exc
+            if request_aspect != "1:1":
+                continue
+            raise
+        data = response.json()
+        for candidate in data.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    out_path.write_bytes(base64.b64decode(inline["data"]))
+                    candidate_meta_path(out_path).write_text(json.dumps({
+                        "slot_id": slot["id"],
+                        "requested_generation_aspect_ratio": aspect_ratio,
+                        "actual_generation_request_aspect_ratio": request_aspect,
+                        "generation_aspect_ratio_fallback_used": request_aspect != aspect_ratio,
+                        "asset_generation_spec": spec,
+                    }, indent=2, ensure_ascii=False), encoding="utf-8")
+                    return out_path
+    if last_error:
+        raise last_error
     raise RuntimeError(f"No image returned for {slot['id']}")
 
 
-def generate_one_asset_with_retries(slot: dict, retries: int = 3) -> dict:
+def generate_one_asset_with_retries(slot: dict, retries: int = 1, economy_mode: bool = True) -> dict:
     final_path = ASSET_DIR / f"{slot['id']}.png"
     errors = []
     candidate_metrics: list[dict] = []
@@ -674,22 +1158,28 @@ def generate_one_asset_with_retries(slot: dict, retries: int = 3) -> dict:
     for candidate_path in existing_candidates:
         candidate_metrics.append(evaluate_candidate(slot, candidate_path))
 
-    best_existing = max(candidate_metrics, key=lambda item: item["score"], default=None)
-    should_generate_more = best_existing is None or not best_existing["pass"] or best_existing["needs_regeneration"]
+    best_existing = select_best_candidate(candidate_metrics)
+    existing_economy_decision = economy_acceptance_decision(slot, best_existing) if best_existing else {"accepted": False, "reason": "no_existing_candidate"}
+    should_generate_more = (
+        best_existing is None
+        or (not existing_economy_decision["accepted"] if economy_mode else (not best_existing["pass"] or best_existing["needs_regeneration"]))
+    )
     next_index = len(existing_candidates) + 1
+    api_requests_attempted = 0
     if should_generate_more:
         for attempt in range(next_index, next_index + retries):
             try:
+                api_requests_attempted += 1
                 candidate_path = gemini_generate_from_crop(slot, attempt)
                 candidate_metrics.append(evaluate_candidate(slot, candidate_path))
             except Exception as exc:
                 errors.append(str(exc))
                 time.sleep(min(2 * (attempt - next_index + 1), 6))
-            current_best = max(candidate_metrics, key=lambda item: item["score"], default=None)
-            if current_best and current_best["pass"]:
+            current_best = select_best_candidate(candidate_metrics)
+            if current_best and (economy_acceptance_decision(slot, current_best)["accepted"] if economy_mode else current_best["pass"]):
                 break
 
-    best = max(candidate_metrics, key=lambda item: item["score"], default=None)
+    best = select_best_candidate(candidate_metrics)
     if best is not None:
         candidate_path = Path(best["candidate_path"])
         shutil.copyfile(candidate_path, final_path)
@@ -701,15 +1191,22 @@ def generate_one_asset_with_retries(slot: dict, retries: int = 3) -> dict:
             selected_reason = "selected_best_available_but_subject_still_too_small"
         else:
             selected_reason = "selected_best_available_but_possible_edge_cutoff_risk"
+        economy_decision = economy_acceptance_decision(slot, best)
+        if economy_mode and economy_decision["accepted"] and not best["pass"]:
+            selected_reason = f"selected_by_economy_policy_{economy_decision['reason']}"
         return {
             "slot_id": slot["id"],
-            "status": "ok" if best["pass"] else "ok_with_internal_fill_warning",
+            "status": "ok" if best["pass"] else ("ok_by_economy_policy" if economy_decision["accepted"] else "ok_with_internal_fill_warning"),
             "asset_source": "candidate_selected",
             "candidate": str(candidate_path),
             "asset": str(final_path),
             "candidate_metrics": sorted(candidate_metrics, key=lambda item: item["score"], reverse=True),
             "selected_internal_fill": {**best, "selected_reason": selected_reason},
+            "economy_decision": economy_decision,
+            "economy_mode": economy_mode,
+            "api_requests_attempted": api_requests_attempted,
             "background": background_report,
+            **({"errors": errors} if errors else {}),
         }
 
     fallback = ASSET_DIR / f"{slot['id']}.png"
@@ -723,16 +1220,19 @@ def generate_one_asset_with_retries(slot: dict, retries: int = 3) -> dict:
         "errors": errors,
         "asset": str(fallback),
         "selected_internal_fill": {**fallback_metrics, "selected_reason": "fallback_reference_crop_after_generation_failure"},
+        "economy_decision": economy_acceptance_decision(slot, fallback_metrics),
+        "economy_mode": economy_mode,
+        "api_requests_attempted": api_requests_attempted,
         "background": background_report,
     }
 
 
-def generate_assets_parallel(workers: int = 6, retries: int = 3) -> dict:
+def generate_assets_parallel(workers: int = 6, retries: int = 1, economy_mode: bool = True) -> dict:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     reports = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(generate_one_asset_with_retries, slot, retries): slot for slot in SLOTS}
+        futures = {executor.submit(generate_one_asset_with_retries, slot, retries, economy_mode): slot for slot in SLOTS}
         for future in as_completed(futures):
             slot = futures[future]
             try:
@@ -741,8 +1241,26 @@ def generate_assets_parallel(workers: int = 6, retries: int = 3) -> dict:
                 fallback = ASSET_DIR / f"{slot['id']}.png"
                 Image.open(slot["crop_path"]).convert("RGB").save(fallback)
                 background_report = harmonize_asset_background(fallback, slot["background_color_hex"])
-                reports.append({"slot_id": slot["id"], "status": "fallback_to_reference_crop", "errors": [str(exc)], "asset": str(fallback), "background": background_report})
-    return {"summary": "AI asset generation report for AutoFigure Architecture rebuild.", "workers": workers, "retries": retries, "assets": sorted(reports, key=lambda item: item["slot_id"])}
+                fallback_metrics = evaluate_candidate(slot, fallback)
+                reports.append({
+                    "slot_id": slot["id"],
+                    "status": "fallback_to_reference_crop",
+                    "errors": [str(exc)],
+                    "asset": str(fallback),
+                    "selected_internal_fill": {**fallback_metrics, "selected_reason": "fallback_reference_crop_after_parallel_generation_failure"},
+                    "economy_decision": economy_acceptance_decision(slot, fallback_metrics),
+                    "economy_mode": economy_mode,
+                    "api_requests_attempted": 0,
+                    "background": background_report,
+                })
+    return {
+        "summary": "AI asset generation report for AutoFigure Architecture rebuild.",
+        "workers": workers,
+        "retries": retries,
+        "economy_mode": economy_mode,
+        "api_requests_attempted": sum(int(item.get("api_requests_attempted") or 0) for item in reports),
+        "assets": sorted(reports, key=lambda item: item["slot_id"]),
+    }
 
 
 def add_picture_contain(slide, image_path: Path, left_px, top_px, width_px, height_px):
@@ -916,6 +1434,62 @@ def write_metadata(asset_report: dict) -> None:
             for item in asset_report.get("assets", [])
         ],
     }
+    ratio_fit_report = {
+        "summary": "Slot-aware aspect-ratio fit report for generated icon assets. This distinguishes true small-subject problems from square-canvas letterboxing in non-square slots.",
+        "policy": {
+            "layout_bbox_locked": True,
+            "no_default_crop": True,
+            "slot_fit_waste_acceptable_max": SLOT_FIT_WASTE_ACCEPTABLE_MAX,
+            "aspect_ratio_selection": {
+                ">=1.55": "16:9",
+                "1.18-1.55": "4:3",
+                "0.85-1.18": "1:1",
+                "0.62-0.85": "3:4",
+                "<0.62": "9:16",
+            },
+        },
+        "assets": [
+            {
+                "slot_id": item["slot_id"],
+                "slot_aspect_ratio": item.get("selected_internal_fill", {}).get("slot_aspect_ratio"),
+                "generation_aspect_ratio": item.get("selected_internal_fill", {}).get("generation_aspect_ratio"),
+                "requested_generation_aspect_ratio": item.get("selected_internal_fill", {}).get("requested_generation_aspect_ratio"),
+                "actual_generation_request_aspect_ratio": item.get("selected_internal_fill", {}).get("actual_generation_request_aspect_ratio"),
+                "generation_aspect_ratio_fallback_used": item.get("selected_internal_fill", {}).get("generation_aspect_ratio_fallback_used", False),
+                "generated_image_size": item.get("selected_internal_fill", {}).get("generated_image_size"),
+                "generated_image_aspect_ratio": item.get("selected_internal_fill", {}).get("generated_image_aspect_ratio"),
+                "slot_fit_waste_percent": item.get("selected_internal_fill", {}).get("slot_fit_waste_percent"),
+                "foreground_bbox_fill_percent": item.get("selected_internal_fill", {}).get("foreground_bbox_fill_percent"),
+                "aspect_ratio_match_status": item.get("selected_internal_fill", {}).get("aspect_ratio_match_status"),
+                "selected_candidate": item.get("candidate"),
+                "status": item.get("status"),
+                "economy_decision": item.get("economy_decision"),
+                "api_requests_attempted": item.get("api_requests_attempted", 0),
+                "generation_errors": item.get("errors", []),
+            }
+            for item in asset_report.get("assets", [])
+        ],
+    }
+    economy_report = {
+        "summary": "Economy asset generation report. Accepted assets are locked and skipped; failed slots use bounded one-shot generation unless strict mode is explicitly requested.",
+        "economy_mode": asset_report.get("economy_mode"),
+        "retries": asset_report.get("retries"),
+        "api_requests_attempted": asset_report.get("api_requests_attempted", 0),
+        "profiles": ECONOMY_ACCEPTANCE_PROFILES,
+        "assets": [
+            {
+                "slot_id": item["slot_id"],
+                "status": item.get("status"),
+                "api_requests_attempted": item.get("api_requests_attempted", 0),
+                "economy_decision": item.get("economy_decision"),
+                "selected_candidate": item.get("candidate"),
+                "foreground_bbox_fill_percent": item.get("selected_internal_fill", {}).get("foreground_bbox_fill_percent"),
+                "slot_fit_waste_percent": item.get("selected_internal_fill", {}).get("slot_fit_waste_percent"),
+                "selected_reason": item.get("selected_internal_fill", {}).get("selected_reason"),
+            }
+            for item in asset_report.get("assets", [])
+        ],
+    }
     inventory = {
         "summary": "Slot inventory for AI-generated image assets in AutoFigure Architecture editable rebuild.",
         "reference": str(REFERENCE),
@@ -924,6 +1498,9 @@ def write_metadata(asset_report: dict) -> None:
                 "slot_id": slot["id"],
                 "bbox_percent": slot["bbox_percent"],
                 "asset_bbox_px": slot["asset_bbox"],
+                "slot_aspect_ratio": slot_aspect_ratio(slot),
+                "generation_aspect_ratio": choose_generation_aspect_ratio(slot),
+                "generation_aspect_ratio_override": slot.get("generation_aspect_ratio_override"),
                 "reference_crop_path": slot["crop_path"],
                 "asset_path": str(ASSET_DIR / f"{slot['id']}.png"),
                 "background_color_hex": slot["background_color_hex"],
@@ -932,6 +1509,7 @@ def write_metadata(asset_report: dict) -> None:
                 "layout_bbox_locked": slot["layout_bbox_locked"],
                 "no_crop_postprocess": slot["no_crop_postprocess"],
                 "prompt": slot["prompt"],
+                "fill_guidance": slot.get("fill_guidance"),
             }
             for slot in SLOTS
         ],
@@ -939,6 +1517,8 @@ def write_metadata(asset_report: dict) -> None:
     (OUT / "slot_inventory.json").write_text(json.dumps(inventory, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "asset_generation_report.json").write_text(json.dumps(asset_report, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "asset_internal_fill_report.json").write_text(json.dumps(internal_fill_report, indent=2, ensure_ascii=False), encoding="utf-8")
+    (OUT / "asset_ratio_fit_report.json").write_text(json.dumps(ratio_fit_report, indent=2, ensure_ascii=False), encoding="utf-8")
+    (OUT / "asset_economy_report.json").write_text(json.dumps(economy_report, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "asset_background_report.json").write_text(json.dumps(background_report, indent=2, ensure_ascii=False), encoding="utf-8")
     (OUT / "reference_control_candidates.json").write_text(json.dumps({
         "summary": "Reference-derived candidate arrows, connector lines, and dashed loops for the AutoFigure Architecture rebuild.",
@@ -1053,6 +1633,18 @@ def write_metadata(asset_report: dict) -> None:
             "no_crop_postprocess": True,
             "layout_bbox_locked": True,
         },
+        "asset_aspect_ratio_policy": {
+            "mode": "slot_aware_generation_canvas",
+            "slot_fit_waste_acceptable_max": SLOT_FIT_WASTE_ACCEPTABLE_MAX,
+            "supported_generation_aspect_ratios": list(GENERATION_ASPECT_RATIO_VALUES.keys()),
+            "report": str(OUT / "asset_ratio_fit_report.json"),
+        },
+        "asset_economy_policy": {
+            "enabled": asset_report.get("economy_mode"),
+            "api_requests_attempted": asset_report.get("api_requests_attempted", 0),
+            "type_aware_profiles": ECONOMY_ACCEPTANCE_PROFILES,
+            "report": str(OUT / "asset_economy_report.json"),
+        },
         "text_style_tokens": TEXT_STYLES,
         "text_size_scale": TEXT_SIZE_SCALE,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1066,6 +1658,7 @@ def write_metadata(asset_report: dict) -> None:
         "- Critical text is not trusted to the generated images; it is added as editable PPT text.\n\n"
         "## Generation\n"
         f"- Parallel workers: {asset_report.get('workers')}\n"
+        f"- Economy mode: {asset_report.get('economy_mode')}; image API requests attempted: {asset_report.get('api_requests_attempted', 0)}\n"
         "- If an API asset failed, the report marks it explicitly and uses the reference crop as a temporary fallback.\n\n"
         "## Control Layer\n"
         "- Arrows, connector lines, and dashed loops are now recorded in reference_controls.json and selected_arrow_routes.json before PPT rendering.\n"
@@ -1076,16 +1669,222 @@ def write_metadata(asset_report: dict) -> None:
         "## Internal Icon Fill\n"
         f"- Small icon assets target {INTERNAL_ACCEPTABLE_FILL_MIN:.0%}-{INTERNAL_ACCEPTABLE_FILL_MAX:.0%} internal effective-content fill.\n"
         "- Candidate selection is based on asset_internal_fill_report.json.\n"
+        "- Generation canvas aspect ratio is selected from each locked asset slot; see asset_ratio_fit_report.json.\n"
         "- No local crop, automatic crop, PowerPoint crop, or PPT layout enlargement is used.\n",
         encoding="utf-8",
     )
 
 
+def slot_by_id(slot_id: str) -> dict:
+    lookup = {slot["id"]: slot for slot in SLOTS}
+    if slot_id not in lookup:
+        raise ValueError(f"Unknown trim slot: {slot_id}")
+    return lookup[slot_id]
+
+
+def selected_candidate_from_internal_report(slot_id: str) -> Path | None:
+    report_path = OUT / "asset_internal_fill_report.json"
+    if not report_path.exists():
+        return None
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for item in data.get("assets", []):
+        if item.get("slot_id") == slot_id and item.get("candidate_path"):
+            path = Path(item["candidate_path"])
+            if path.exists():
+                return path
+    return None
+
+
+def source_icon_for_trim_experiment(slot: dict) -> Path:
+    return selected_candidate_from_internal_report(slot["id"]) or latest_candidate_for_slot(slot["id"]) or (ASSET_DIR / f"{slot['id']}.png")
+
+
+def trim_icon_candidate_for_experiment(slot: dict, source_path: Path, out_path: Path, padding_percent: float) -> dict:
+    before = measure_internal_content_fill(source_path, slot["background_color_hex"])
+    bbox = before.get("foreground_bbox_px")
+    if not bbox:
+        shutil.copyfile(source_path, out_path)
+        after = measure_internal_content_fill(out_path, slot["background_color_hex"])
+        return {
+            "slot_id": slot["id"],
+            "source_path": str(source_path),
+            "output_path": str(out_path),
+            "crop_applied": False,
+            "trim_rejected": True,
+            "risk_flags": ["invalid_foreground_bbox"],
+            "before": before,
+            "after": after,
+            "fill_gain": round((after.get("foreground_bbox_fill_percent") or 0) - (before.get("foreground_bbox_fill_percent") or 0), 4),
+            "recommendation": "reject",
+        }
+
+    image = Image.open(source_path).convert("RGB")
+    width, height = image.size
+    left, top, right, bottom = bbox
+    bbox_w = right - left + 1
+    bbox_h = bottom - top + 1
+    pad = int(max(bbox_w, bbox_h) * padding_percent)
+    crop_left = max(0, left - pad)
+    crop_top = max(0, top - pad)
+    crop_right = min(width - 1, right + pad)
+    crop_bottom = min(height - 1, bottom + pad)
+    crop_w = crop_right - crop_left + 1
+    crop_h = crop_bottom - crop_top + 1
+    risk_flags: list[str] = []
+    if crop_left / width < 0.02 or crop_top / height < 0.02 or (width - 1 - crop_right) / width < 0.02 or (height - 1 - crop_bottom) / height < 0.02:
+        risk_flags.append("edge_cutoff_risk")
+    if crop_w <= 8 or crop_h <= 8:
+        risk_flags.append("invalid_crop_box")
+
+    if "invalid_crop_box" in risk_flags:
+        shutil.copyfile(source_path, out_path)
+        crop_applied = False
+    else:
+        crop = image.crop((crop_left, crop_top, crop_right + 1, crop_bottom + 1))
+        scale = min(width / crop.width, height / crop.height)
+        fit_w = max(1, int(crop.width * scale))
+        fit_h = max(1, int(crop.height * scale))
+        resized = crop.resize((fit_w, fit_h), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (width, height), hex_to_tuple(slot["background_color_hex"]))
+        canvas.paste(resized, ((width - fit_w) // 2, (height - fit_h) // 2))
+        canvas.save(out_path)
+        crop_applied = True
+
+    after = measure_internal_content_fill(out_path, slot["background_color_hex"])
+    after_fill = float(after.get("foreground_bbox_fill_percent") or 0.0)
+    before_fill = float(before.get("foreground_bbox_fill_percent") or 0.0)
+    if after_fill > INTERNAL_ACCEPTABLE_FILL_MAX:
+        risk_flags.append("too_tight_risk")
+    fill_gain = round(after_fill - before_fill, 4)
+    if crop_applied and INTERNAL_ACCEPTABLE_FILL_MIN <= after_fill <= INTERNAL_ACCEPTABLE_FILL_MAX and fill_gain >= 0.10 and not risk_flags:
+        recommendation = "accept"
+    elif crop_applied and fill_gain > 0 and "invalid_crop_box" not in risk_flags:
+        recommendation = "needs_visual_review"
+    else:
+        recommendation = "reject"
+    return {
+        "slot_id": slot["id"],
+        "source_path": str(source_path),
+        "output_path": str(out_path),
+        "crop_applied": crop_applied,
+        "trim_rejected": recommendation == "reject",
+        "padding_percent": padding_percent,
+        "crop_box_px": [crop_left, crop_top, crop_right, crop_bottom],
+        "risk_flags": risk_flags,
+        "before": before,
+        "after": after,
+        "before_fill": before_fill,
+        "after_fill": after_fill,
+        "fill_gain": fill_gain,
+        "recommendation": recommendation,
+    }
+
+
+def create_trim_contact_sheet(rows: list[dict], output_path: Path) -> None:
+    thumb = 220
+    label_h = 54
+    gap = 18
+    width = thumb * 2 + gap * 3
+    height = (thumb + label_h + gap) * max(len(rows), 1) + gap
+    sheet = Image.new("RGB", (width, height), "#F3F1EC")
+    draw = ImageDraw.Draw(sheet)
+    for idx, row in enumerate(rows):
+        y0 = gap + idx * (thumb + label_h + gap)
+        before = Image.open(row["before_path"]).convert("RGB")
+        after = Image.open(row["after_path"]).convert("RGB")
+        before.thumbnail((thumb, thumb), Image.Resampling.LANCZOS)
+        after.thumbnail((thumb, thumb), Image.Resampling.LANCZOS)
+        x_before = gap + (thumb - before.width) // 2
+        x_after = gap * 2 + thumb + (thumb - after.width) // 2
+        sheet.paste(before, (x_before, y0 + (thumb - before.height) // 2))
+        sheet.paste(after, (x_after, y0 + (thumb - after.height) // 2))
+        label = f"{row['slot_id']} | {row['before_fill']:.3f} -> {row['after_fill']:.3f} | {row['recommendation']}"
+        draw.text((gap, y0 + thumb + 8), label, fill="#333333")
+        draw.text((gap, y0 - 2), "before", fill="#666666")
+        draw.text((gap * 2 + thumb, y0 - 2), "after", fill="#666666")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(output_path)
+
+
+def run_icon_trim_experiment(trim_slots: str, trim_padding_percent: float, trim_output_dir: Path) -> None:
+    trim_output_dir.mkdir(parents=True, exist_ok=True)
+    before_dir = trim_output_dir / "before"
+    after_dir = trim_output_dir / "after"
+    before_dir.mkdir(parents=True, exist_ok=True)
+    after_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    report_items = []
+    for slot_id in [item.strip() for item in trim_slots.split(",") if item.strip()]:
+        slot = slot_by_id(slot_id)
+        source_path = source_icon_for_trim_experiment(slot)
+        if not source_path.exists():
+            report_items.append({"slot_id": slot_id, "error": f"source image not found: {source_path}", "recommendation": "reject"})
+            continue
+        before_path = before_dir / f"{slot_id}.png"
+        after_path = after_dir / f"{slot_id}.png"
+        shutil.copyfile(source_path, before_path)
+        item = trim_icon_candidate_for_experiment(slot, before_path, after_path, trim_padding_percent)
+        report_items.append(item)
+        rows.append({
+            "slot_id": slot_id,
+            "before_path": str(before_path),
+            "after_path": str(after_path),
+            "before_fill": item["before_fill"],
+            "after_fill": item["after_fill"],
+            "recommendation": item["recommendation"],
+        })
+    contact_sheet = trim_output_dir / "contact_sheet_before_after.png"
+    create_trim_contact_sheet(rows, contact_sheet)
+    report = {
+        "summary": "Controlled icon trim experiment. Main assets and main PPT are not overwritten.",
+        "trim_slots": [item.strip() for item in trim_slots.split(",") if item.strip()],
+        "trim_padding_percent": trim_padding_percent,
+        "output_dir": str(trim_output_dir),
+        "main_assets_overwritten": False,
+        "main_ppt_overwritten": False,
+        "contact_sheet": str(contact_sheet),
+        "items": report_items,
+    }
+    (trim_output_dir / "icon_trim_experiment_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Rebuild AutoFigure Architecture as an editable PPTX.")
+    parser.add_argument("--icon-trim-experiment", action="store_true", help="Run a controlled icon trim A/B experiment without changing main assets or PPT.")
+    parser.add_argument("--trim-slots", default="input_text_stack,ai_designer", help="Comma-separated slot ids for icon trim experiment.")
+    parser.add_argument("--trim-padding-percent", type=float, default=0.08, help="Padding added around detected foreground bbox before experimental trim.")
+    parser.add_argument("--trim-output-dir", default=str(OUT / "icon_trim_experiment"), help="Output directory for trim experiment artifacts.")
+    parser.add_argument("--asset-cost-experiment", action="store_true", help="Dry-run the asset generation cost-saving policy without calling the image API.")
+    parser.add_argument("--asset-cost-experiment-output", default=str(OUT / "asset_cost_experiment_report.json"), help="Output JSON path for the cost-saving dry-run report.")
+    parser.add_argument("--asset-cost-baseline-retries", type=int, default=5, help="Baseline retries per failed slot used for cost comparison.")
+    parser.add_argument("--asset-preflight-first-pass-experiment", action="store_true", help="Generate one planned candidate per selected slot in an isolated experiment directory.")
+    parser.add_argument("--preflight-slots", default="all", help="Comma-separated slot ids, or 'all', for the first-pass preflight experiment.")
+    parser.add_argument("--preflight-output-dir", default=str(OUT / "preflight_first_pass_experiment"), help="Output directory for first-pass preflight experiment artifacts.")
+    parser.add_argument("--preflight-workers", type=int, default=4, help="Parallel workers for the first-pass preflight experiment.")
+    parser.add_argument("--asset-retries", type=int, default=1, help="Maximum image-generation attempts per slot that is not accepted by the active asset policy.")
+    parser.add_argument("--asset-workers", type=int, default=6, help="Parallel workers for main asset generation.")
+    parser.add_argument("--strict-asset-regeneration", action="store_true", help="Use strict 80-95 percent fill acceptance instead of economy type-aware acceptance.")
+    args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    if args.icon_trim_experiment:
+        run_icon_trim_experiment(args.trim_slots, args.trim_padding_percent, Path(args.trim_output_dir))
+        return
+    if args.asset_cost_experiment:
+        run_asset_cost_experiment(args.asset_cost_baseline_retries, Path(args.asset_cost_experiment_output))
+        return
+    if args.asset_preflight_first_pass_experiment:
+        run_preflight_first_pass_experiment(args.preflight_slots, Path(args.preflight_output_dir), args.preflight_workers)
+        return
     crop_reference_slots()
     write_reference_overlays()
-    asset_report = generate_assets_parallel(workers=6, retries=5)
+    asset_report = generate_assets_parallel(
+        workers=args.asset_workers,
+        retries=args.asset_retries,
+        economy_mode=not args.strict_asset_regeneration,
+    )
     write_metadata(asset_report)
     pptx_path = draw_ppt()
     export_preview(pptx_path)
