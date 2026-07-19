@@ -37,6 +37,32 @@ def _fixture(path: Path) -> Path:
 
 
 class RebuildEditableTests(unittest.TestCase):
+    def test_global_design_plan_artifacts_are_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "rebuild"
+
+            result = rebuild_editable(
+                reference,
+                out,
+                asset_mode="placeholder",
+                text_mode="off",
+                layout_mode="heuristic",
+                control_mode="heuristic",
+                design_plan_mode="heuristic",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["design_plan_effective_mode"], "heuristic")
+            for name in [
+                "reference_logic_plan.json",
+                "reference_layer_plan.json",
+                "reference_generation_plan.json",
+                "reference_flow_graph.json",
+            ]:
+                self.assertTrue((out / name).exists(), name)
+
     def test_cli_placeholder_run_writes_required_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

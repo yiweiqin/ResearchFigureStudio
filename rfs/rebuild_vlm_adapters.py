@@ -7,6 +7,33 @@ from typing import Callable
 from .vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
 
 
+def vlm_design_adapter(reference_path: str | Path, explicit_model: str | None = None) -> dict:
+    model = resolve_vlm_model("RFS_REBUILD_DESIGN_MODEL", "RFS_REBUILD_LAYOUT_MODEL", explicit_model=explicit_model)
+    prompt = """
+Analyze the complete reference diagram before local object detection. Return JSON only.
+
+Describe the narrative, reading order, editable layers, asset-source policy, and semantic flow graph.
+Do not write PowerPoint code. Do not bake text or connectors into raster assets.
+Use normalized bbox_percent coordinates in [0,1].
+
+Allowed layer kinds: background, panel, card, visual_slot, text, connector, legend, ignore.
+Allowed asset policies: reference_crop, api_generate, placeholder, ppt_shape, editable_text, ppt_connector, ignore.
+
+Return:
+{
+  "summary": "...",
+  "narrative": {"figure_type": "...", "main_story": "...", "key_message": "..."},
+  "reading_order": ["stable_object_id"],
+  "layers": [{"id":"slot_input","kind":"visual_slot","label":"Input","bbox_percent":{"x":0,"y":0,"w":0.1,"h":0.1},"asset_source_policy":"api_generate","asset_source_reason":"...","prompt_subject":"...","asset_type":"generic","semantic_role":"input","confidence":0.0}],
+  "asset_policies": [{"slot_id":"slot_input","policy":"api_generate","reason":"...","confidence":0.0}],
+  "flow_graph": {"nodes":[{"id":"slot_input","label":"Input","kind":"visual_slot","confidence":0.0}],"edges":[{"id":"flow_1","source_id":"slot_input","target_id":"slot_output","relation":"flows_to","expected_connector":"solid_arrow","confidence":0.0}]}
+}
+""".strip()
+    result = call_vlm_json(prompt, [reference_path], model=model)
+    result["_vlm_model"] = model
+    return result
+
+
 def _brief_slots(slots: list[dict]) -> list[dict]:
     return [{
         "id": item.get("id"),
@@ -164,8 +191,9 @@ OCR text geometry:
 
 def build_rebuild_vlm_adapters(out_dir: str | Path) -> dict[str, Callable | None]:
     if not vlm_credentials_available():
-        return {"layout": None, "control": None, "semantic": None}
+        return {"design": None, "layout": None, "control": None, "semantic": None}
     return {
+        "design": vlm_design_adapter,
         "layout": vlm_layout_adapter,
         "control": vlm_control_adapter_factory(out_dir),
         "semantic": vlm_semantic_adapter,

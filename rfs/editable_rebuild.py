@@ -16,6 +16,7 @@ from .control_localizer import localize_reference_controls
 from .layout_planner import dominant_palette, estimate_background, plan_reference_layout
 from .layout_semantic_planner import plan_slot_semantics
 from .ppt_compiler import compile_ppt
+from .rebuild_design_planner import plan_rebuild_design
 from .rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from .text_layer import build_text_layer
 from .utils import ensure_dir, write_json, write_text
@@ -922,6 +923,9 @@ def rebuild_editable(
     control_adapter: Callable | None = None,
     semantic_adapter: Callable | None = None,
     asset_policy: str = "legacy",
+    design_plan_mode: str = "vlm",
+    design_plan_model: str | None = None,
+    design_adapter: Callable | None = None,
 ) -> dict:
     reference_path = Path(reference)
     if not reference_path.exists():
@@ -941,9 +945,28 @@ def rebuild_editable(
         "control_mode": control_mode,
         "layout_mode": layout_mode,
         "asset_policy": asset_policy,
+        "design_plan_mode": design_plan_mode,
+        "design_plan_model": design_plan_model,
         "skip_analysis": skip_analysis,
         "compile_only": compile_only,
     })
+
+    if skip_analysis and (out_path / "reference_logic_plan.json").exists():
+        design_bundle = {
+            "logic": _load_json_or_empty(out_path / "reference_logic_plan.json"),
+            "layer_plan": _load_json_or_empty(out_path / "reference_layer_plan.json"),
+            "generation_plan": _load_json_or_empty(out_path / "reference_generation_plan.json"),
+            "flow_graph": _load_json_or_empty(out_path / "reference_flow_graph.json"),
+        }
+    else:
+        design_bundle = plan_rebuild_design(
+            archived_reference,
+            out_path,
+            mode=design_plan_mode,
+            model=design_plan_model,
+            adapter=design_adapter,
+            fallback_on_error=True,
+        )
 
     if skip_analysis and (out_path / "reference_geometry.json").exists():
         program = _program_from_contracts(out_path)
@@ -1046,6 +1069,9 @@ def rebuild_editable(
         "asset_retries": asset_retries,
         "economy_mode": economy_mode,
         "asset_policy": asset_policy,
+        "design_plan_mode": design_plan_mode,
+        "design_plan_effective_mode": design_bundle.get("logic", {}).get("effective_mode"),
+        "design_plan_model": design_bundle.get("logic", {}).get("model"),
         "api_requests_attempted": asset_summary.get("api_requests_attempted", 0),
         "asset_count": len(asset_reports),
         "slot_count": len(program.get("slots", [])),
@@ -1056,6 +1082,10 @@ def rebuild_editable(
         "layout_mode": layout_mode,
         "reports": {
             "input_manifest": str(out_path / "input_manifest.json"),
+            "reference_logic_plan": str(out_path / "reference_logic_plan.json"),
+            "reference_layer_plan": str(out_path / "reference_layer_plan.json"),
+            "reference_generation_plan": str(out_path / "reference_generation_plan.json"),
+            "reference_flow_graph": str(out_path / "reference_flow_graph.json"),
             "reference_geometry": str(out_path / "reference_geometry.json"),
             "reference_text_geometry": str(out_path / "reference_text_geometry.json"),
             "reference_controls": str(out_path / "reference_controls.json"),

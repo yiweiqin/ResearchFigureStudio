@@ -157,6 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--economy-mode", dest="economy_mode", action="store_true", default=True, help="Reuse accepted/passing assets and generate each failed slot once. Enabled by default.")
     rebuild.add_argument("--no-economy-mode", dest="economy_mode", action="store_false", help="Disable economy reuse decisions.")
     rebuild.add_argument("--text-mode", choices=["ocr", "manual", "off"], default="ocr", help="Editable text extraction mode. Default: ocr.")
+    rebuild.add_argument("--design-plan-mode", choices=["off", "heuristic", "vlm"], default="vlm", help="Whole-reference design planning mode. Default: vlm with explicit fallback reporting.")
+    rebuild.add_argument("--design-plan-model", help="Optional VLM for whole-reference design planning.")
     rebuild.add_argument("--layout-mode", choices=["heuristic", "vlm", "hybrid"], default="hybrid", help="Panel/card/slot layout extraction mode. Default: hybrid.")
     rebuild.add_argument("--control-mode", choices=["heuristic", "vlm", "hybrid", "manual"], default="hybrid", help="Arrow/control extraction mode. Default: hybrid.")
     rebuild.add_argument("--export-preview", action="store_true", help="Export a PNG preview when PowerPoint is available.")
@@ -344,6 +346,9 @@ def main(argv: list[str] | None = None) -> int:
                 control_adapter=rebuild_adapters["control"] if args.control_mode in {"vlm", "hybrid"} else None,
                 semantic_adapter=rebuild_adapters["semantic"] if args.layout_mode in {"vlm", "hybrid"} or args.control_mode in {"vlm", "hybrid"} else None,
                 asset_policy=args.asset_policy,
+                design_plan_mode=args.design_plan_mode,
+                design_plan_model=args.design_plan_model,
+                design_adapter=rebuild_adapters["design"] if args.design_plan_mode == "vlm" else None,
             )
         elif args.command == "rebuild-editable-eval":
             result = evaluate_rebuild_vlm(
