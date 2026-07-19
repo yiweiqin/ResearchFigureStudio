@@ -926,6 +926,9 @@ def rebuild_editable(
     design_plan_mode: str = "vlm",
     design_plan_model: str | None = None,
     design_adapter: Callable | None = None,
+    text_grouping_mode: str = "heuristic",
+    text_grouping_model: str | None = None,
+    text_grouping_adapter: Callable | None = None,
 ) -> dict:
     reference_path = Path(reference)
     if not reference_path.exists():
@@ -947,6 +950,8 @@ def rebuild_editable(
         "asset_policy": asset_policy,
         "design_plan_mode": design_plan_mode,
         "design_plan_model": design_plan_model,
+        "text_grouping_mode": text_grouping_mode,
+        "text_grouping_model": text_grouping_model,
         "skip_analysis": skip_analysis,
         "compile_only": compile_only,
     })
@@ -1000,6 +1005,9 @@ def rebuild_editable(
             ocr_engine=ocr_engine,
             ocr_lang=ocr_lang,
             ocr_adapter=ocr_adapter,
+            text_grouping_mode=text_grouping_mode,
+            text_grouping_model=text_grouping_model,
+            text_grouping_adapter=text_grouping_adapter,
         )
     else:
         write_json(out_path / "reference_text_geometry.json", {"summary": "Text extraction skipped.", "detection_mode": "off", "regions": []})
@@ -1072,6 +1080,7 @@ def rebuild_editable(
         "design_plan_mode": design_plan_mode,
         "design_plan_effective_mode": design_bundle.get("logic", {}).get("effective_mode"),
         "design_plan_model": design_bundle.get("logic", {}).get("model"),
+        "text_grouping_mode": text_grouping_mode,
         "api_requests_attempted": asset_summary.get("api_requests_attempted", 0),
         "asset_count": len(asset_reports),
         "slot_count": len(program.get("slots", [])),

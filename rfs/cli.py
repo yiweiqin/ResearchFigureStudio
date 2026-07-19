@@ -159,6 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--text-mode", choices=["ocr", "manual", "off"], default="ocr", help="Editable text extraction mode. Default: ocr.")
     rebuild.add_argument("--design-plan-mode", choices=["off", "heuristic", "vlm"], default="vlm", help="Whole-reference design planning mode. Default: vlm with explicit fallback reporting.")
     rebuild.add_argument("--design-plan-model", help="Optional VLM for whole-reference design planning.")
+    rebuild.add_argument("--text-grouping-mode", choices=["off", "heuristic", "vlm", "hybrid"], default="heuristic", help="Group OCR lines into editable paragraphs. Default: heuristic.")
+    rebuild.add_argument("--text-grouping-model", help="Optional VLM for OCR text grouping.")
     rebuild.add_argument("--layout-mode", choices=["heuristic", "vlm", "hybrid"], default="hybrid", help="Panel/card/slot layout extraction mode. Default: hybrid.")
     rebuild.add_argument("--control-mode", choices=["heuristic", "vlm", "hybrid", "manual"], default="hybrid", help="Arrow/control extraction mode. Default: hybrid.")
     rebuild.add_argument("--export-preview", action="store_true", help="Export a PNG preview when PowerPoint is available.")
@@ -349,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
                 design_plan_mode=args.design_plan_mode,
                 design_plan_model=args.design_plan_model,
                 design_adapter=rebuild_adapters["design"] if args.design_plan_mode == "vlm" else None,
+                text_grouping_mode=args.text_grouping_mode,
+                text_grouping_model=args.text_grouping_model,
             )
         elif args.command == "rebuild-editable-eval":
             result = evaluate_rebuild_vlm(

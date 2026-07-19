@@ -7,6 +7,7 @@ from typing import Callable
 from PIL import Image
 
 from .reference_text_extractor import extract_reference_text
+from .text_grouping import group_text_regions, write_text_grouping_artifacts
 from .utils import write_json
 
 
@@ -336,6 +337,9 @@ def build_text_layer(
     ocr_engine: str = "paddle",
     ocr_lang: str = "en_ch",
     ocr_adapter: Callable[[str | Path, str], list[dict]] | None = None,
+    text_grouping_mode: str = "heuristic",
+    text_grouping_model: str | None = None,
+    text_grouping_adapter: Callable | None = None,
 ) -> dict:
     """Build reference-first editable text artifacts and attach them to the program."""
 
@@ -352,7 +356,25 @@ def build_text_layer(
         lang=ocr_lang,
         ocr_adapter=ocr_adapter,
     )
-    regions = _merge_ocr_with_fallback(ocr_regions, fallback_regions)
+    raw_geometry = {
+        "summary": "Raw line-level OCR geometry before paragraph grouping.",
+        "reference_path": str(reference_path),
+        "detection_mode": "ocr" if ocr_regions else "ocr_empty_or_unavailable",
+        "ocr_engine": ocr_engine,
+        "ocr_lang": ocr_lang,
+        "text_region_count": len(ocr_regions),
+        "text_regions": ocr_regions,
+    }
+    grouped_ocr_regions, grouping_plan, grouping_report = group_text_regions(
+        ocr_regions,
+        mode=text_grouping_mode if ocr_regions else "off",
+        adapter=text_grouping_adapter,
+        reference_path=reference_path,
+        program=program,
+        model=text_grouping_model,
+    )
+    write_text_grouping_artifacts(out, raw_geometry, grouping_plan, grouping_report)
+    regions = _merge_ocr_with_fallback(grouped_ocr_regions, fallback_regions)
     if not ocr_regions:
         ocr_report["text_region_count"] = len(regions)
         ocr_report.setdefault("warnings", [])
@@ -395,6 +417,11 @@ def build_text_layer(
         "detection_mode": "ocr" if ocr_regions else "reference_geometry_and_local_color_sampling",
         "ocr_engine": ocr_engine,
         "ocr_lang": ocr_lang,
+        "reference_text_geometry_raw_path": "reference_text_geometry_raw.json",
+        "text_grouping_plan_path": "text_grouping_plan.json",
+        "text_grouping_report_path": "text_grouping_report.json",
+        "text_grouping_mode": text_grouping_mode,
+        "text_grouping_status": grouping_report.get("status"),
         "text_regions": regions,
     }
     text_program = {
