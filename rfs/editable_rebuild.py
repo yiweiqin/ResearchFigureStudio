@@ -17,10 +17,11 @@ from .layout_planner import dominant_palette, estimate_background, plan_referenc
 from .layout_semantic_planner import plan_slot_semantics
 from .ppt_compiler import compile_ppt
 from .rebuild_design_planner import plan_rebuild_design
+from .rebuild_preview_renderer import render_rebuild_preview
 from .rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from .rebuild_visual_critic import run_rebuild_visual_quality_check
 from .text_layer import build_text_layer
-from .utils import ensure_dir, write_json, write_text
+from .utils import ensure_dir, read_json, write_json, write_text
 
 
 ASSET_THRESHOLDS = {
@@ -781,6 +782,9 @@ def _export_preview(pptx_path: Path, out: Path) -> Path | None:
     preview = out / "rebuild_preview.png"
     if platform.system() != "Windows":
         write_text(out / "preview_export_error.txt", "PowerPoint preview export is only available on Windows with Microsoft PowerPoint installed.")
+        program_path = out / "figure_program.json"
+        if program_path.exists():
+            return render_rebuild_preview(read_json(program_path), out, preview)
         return None
     try:
         import win32com.client
@@ -793,6 +797,9 @@ def _export_preview(pptx_path: Path, out: Path) -> Path | None:
         return preview
     except Exception as exc:
         write_text(out / "preview_export_error.txt", str(exc))
+        program_path = out / "figure_program.json"
+        if program_path.exists():
+            return render_rebuild_preview(read_json(program_path), out, preview)
         return None
 
 
