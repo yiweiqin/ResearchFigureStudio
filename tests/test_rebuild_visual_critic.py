@@ -75,6 +75,23 @@ class RebuildVisualCriticTests(unittest.TestCase):
             self.assertEqual(report["ownership_issue_count"], 1)
             self.assertEqual(report["issues"][0]["type"], "text_layer_ownership_conflict")
 
+    def test_same_target_role_without_explicit_group_is_not_forced_aligned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            program = {
+                "text_program": {"items": [
+                    {"id": "a", "target_id": "panel", "role": "body_label", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.03}},
+                    {"id": "b", "target_id": "panel", "role": "body_label", "bbox_percent": {"x": 0.3, "y": 0.4, "w": 0.1, "h": 0.03}},
+                    {"id": "c", "target_id": "panel", "role": "body_label", "bbox_percent": {"x": 0.5, "y": 0.7, "w": 0.1, "h": 0.03}},
+                ]},
+                "panels": [],
+                "slots": [],
+                "arrows": [],
+            }
+
+            report = run_rebuild_visual_quality_check(Path(tmp), program)
+
+            self.assertNotIn("text_group_misaligned", {item["type"] for item in report["issues"]})
+
 
 if __name__ == "__main__":
     unittest.main()
