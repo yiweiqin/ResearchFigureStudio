@@ -264,7 +264,7 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
         else:
             continue
         token = token_map.get(str(arrow.get("style_token_id")))
-        arrow_color = str(token.get("hex")) if token else "#1F6F8B"
+        arrow_color = str(token.get("hex")) if token else str(arrow.get("stroke_color") or "#1F6F8B")
         control_kind = str(arrow.get("control_kind") or arrow.get("type", "")).lower()
         dashed = control_kind in {"dashed_loop", "dashed", "loop"}
         if str(arrow.get("line_pattern", "")).lower() in {"dash", "dashed"}:
@@ -379,6 +379,17 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
             font_family=str(title_text_item.get("font_family_guess") or "") if title_text_item else None,
         )
 
+    for idx, card in enumerate(program.get("cards", [])):
+        bbox = card.get("bbox_percent")
+        if not isinstance(bbox, dict):
+            continue
+        x, y, w, h = pct_to_inches(bbox, width_in, height_in)
+        fill = card.get("fill_color") or "#FFFFFF"
+        stroke = card.get("stroke_color") or (palette[(idx + 1) % len(palette)] if palette else "#B8C0CC")
+        _add_round_rect(slide, x, y, w, h, fill, stroke, width_pt=float(card.get("stroke_width_pt") or 1.0))
+        if card.get("title") and not has_text_program:
+            _add_label(slide, str(card.get("title")), x + 0.03, y + 0.03, max(0.05, w - 0.06), min(0.22, h * 0.32), font_size=7, bold=True)
+
     rendered_arrows = _draw_program_arrows(slide, program, width_in, height_in)
 
     # Slot image layer and editable captions.
@@ -489,6 +500,24 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
             "editable_in": "pptx",
             "rendered_as": "ppt_textbox",
         })
+
+    for label in program.get("labels", []):
+        bbox = label.get("bbox_percent")
+        if not isinstance(bbox, dict):
+            continue
+        x, y, w, h = pct_to_inches(bbox, width_in, height_in)
+        _add_label(
+            slide,
+            str(label.get("text") or ""),
+            x,
+            y,
+            w,
+            h,
+            font_size=float(label.get("font_size_pt") or 9),
+            bold=bool(label.get("bold", True)),
+            align=PP_ALIGN.LEFT if str(label.get("align")).lower() == "left" else PP_ALIGN.CENTER,
+            color=str(label.get("color_hex") or "#263747"),
+        )
 
     # Shared resource bus as editable connectors.
     shared = panels_by_id.get("shared_resource_library")

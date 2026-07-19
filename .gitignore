@@ -26,6 +26,7 @@ tmp/translation_env/
 # ResearchFigureStudio generated outputs
 output/
 outputs/
+paper_summary_framework_workflow/
 asset_candidates/
 assets_generated/
 assets_raw/

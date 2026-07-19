@@ -56,6 +56,9 @@ figure generation, guidance and contributions are very welcome.
 See [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/help-wanted.md](docs/help-wanted.md) for concrete contribution areas.
 
+For GPT/Codex agents reproducing or continuing this workflow, start with
+[docs/gpt-reproduction-workflow.md](docs/gpt-reproduction-workflow.md).
+
 ## Installation
 
 ```powershell
@@ -73,6 +76,66 @@ python -m pip install -e ".[ocr]"
 ```
 
 Windows with PowerPoint installed gives the best PPTX/PDF/PNG export path. The Python package itself can still generate and validate most intermediate artifacts without external image APIs when using `--asset-mode placeholder`.
+
+## Paper To Image Without PPTX
+
+Use `paper-to-image` when the required endpoint is a generated raster framework
+figure rather than an editable PowerPoint file. The production route performs a
+universal evidence-grounded paper review, loads a domain extension, converts
+positive references into content-free architecture templates, selects a template,
+renders `layout_blueprint.png`, and uses Image2 edit to create and review three
+candidates. It never invokes the PPTX compiler.
+
+Offline engineering validation:
+
+```powershell
+rfs paper-to-image `
+  --paper "C:\path\paper.pdf" `
+  --out "output\paper_to_image_placeholder" `
+  --planner-mode heuristic `
+  --asset-mode placeholder `
+  --candidates 2 `
+  --review-mode heuristic `
+  --ocr-engine off `
+  --json
+```
+
+Placeholder output is written as `engineering_preview.png`. It is explicitly
+ineligible for production delivery and never becomes `selected_image.png`.
+
+Real VLM planning and Image2 generation:
+
+```powershell
+rfs paper-to-image `
+  --paper "C:\path\paper.pdf" `
+  --out "output\paper_to_image" `
+  --planner-mode vlm `
+  --domain-profile auto `
+  --positive-reference "C:\path\reference1.png" `
+  --positive-reference "C:\path\reference2.png" `
+  --template auto `
+  --asset-mode image2 `
+  --candidates 3 `
+  --aspect-ratio auto `
+  --review-mode vlm `
+  --repair-rounds 1 `
+  --ocr-engine auto `
+  --json
+```
+
+The main outputs are `paper_review.json`, `review_coverage_report.json`,
+`domain_profile.json`, `template_profiles/`, `selected_template.json`,
+`layout_blueprint.png`, `figure_specification.json`, `image_prompt.txt`,
+`image2_request_manifest.json`, four critic reports, the `candidates/`
+directory, and production-only `selected_image.png`.
+
+Reference-conditioned production generation requires an Image2 edit endpoint.
+It defaults to `<API_BASE>/images/edits` and may be overridden with
+`RFS_IMAGE_EDIT_URL`. No API key value is written to output artifacts or logs.
+If a key was pasted into a chat, issue, or terminal transcript, revoke it and use
+a newly rotated key through environment variables before running production.
+See [docs/paper-to-image.md](docs/paper-to-image.md) for the review schema,
+template contract, production gates, and failure behavior.
 
 ## Offline Smoke Test
 
@@ -132,6 +195,7 @@ $env:MODEL_VLM='your-vision-language-model'
 $env:RFS_REBUILD_LAYOUT_MODEL=$env:MODEL_VLM
 $env:RFS_REBUILD_CONTROL_MODEL=$env:MODEL_VLM
 $env:RFS_REBUILD_SEMANTIC_MODEL=$env:MODEL_VLM
+$env:RFS_PROFESSIONAL_REBUILD_MODEL=$env:MODEL_VLM
 
 # Required only for --asset-mode api slot-level image generation.
 $env:GEMINI_API_KEY=$env:API_KEY
@@ -151,6 +215,25 @@ rfs rebuild-editable `
   --text-mode ocr `
   --export-preview
 ```
+
+Higher-quality scripted mode, where the VLM first writes a controlled Figure DSL
+that mimics the best specialized rebuild scripts:
+
+```powershell
+rfs rebuild-editable-pro `
+  --reference "C:\path\figure.png" `
+  --out "output\editable_rebuild_pro" `
+  --asset-mode api `
+  --repair-rounds 2 `
+  --export-preview
+```
+
+The pro workflow writes `professional_rebuild_script.dsl.json`; edit that file
+and rerun with `--compile-only` to recompile without rerunning VLM planning or
+image-generation API calls. Use `--benchmark-out output\known_good_rebuild` to
+write `professional_gap_report.json` against a specialized-script output. Use
+`--repair-mode vlm` only when you want the VLM to apply constrained DSL patches
+after preview comparison.
 
 Lower-cost mode, using VLM structure planning but keeping reference crops as
 slot assets:

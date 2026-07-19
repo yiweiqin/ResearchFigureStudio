@@ -9,6 +9,9 @@ from PIL import Image, ImageDraw
 
 from rfs.cli import main
 from rfs.editable_rebuild import economy_acceptance_decision, rebuild_editable
+from rfs.professional_dsl import validate_and_normalize_dsl
+from rfs.professional_repair import apply_professional_dsl_patch
+from rfs.professional_rebuild import rebuild_editable_pro
 from rfs.rebuild_eval import evaluate_rebuild_vlm
 from rfs.rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from rfs.rebuild_vlm_adapters import build_rebuild_vlm_adapters, vlm_layout_adapter, vlm_semantic_adapter
@@ -320,6 +323,183 @@ class RebuildEditableTests(unittest.TestCase):
             self.assertIsNotNone(adapters["layout"])
             self.assertIsNotNone(adapters["control"])
             self.assertIsNotNone(adapters["semantic"])
+
+    def test_cli_professional_placeholder_run_writes_dsl_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+            with patch.dict("os.environ", {"API_BASE": "", "API_KEY": "", "GEMINI_API_KEY": ""}, clear=False):
+                code = main(["rebuild-editable-pro", "--reference", str(reference), "--out", str(out), "--asset-mode", "placeholder", "--text-mode", "off", "--repair-rounds", "1", "--export-preview"])
+            self.assertEqual(code, 0)
+            required = [
+                "professional_rebuild_plan.json",
+                "professional_rebuild_script.dsl.json",
+                "professional_rebuild_validation.json",
+                "professional_rebuild_notes.md",
+                "professional_repair_round_1.json",
+                "figure_program.json",
+                "asset_generation_specs.json",
+                "editable_composition.pptx",
+            ]
+            for name in required:
+                self.assertTrue((out / name).exists(), name)
+            validation = json.loads((out / "professional_rebuild_validation.json").read_text(encoding="utf-8"))
+            self.assertEqual(validation["status"], "pass")
+            with zipfile.ZipFile(out / "editable_composition.pptx") as archive:
+                slide_xml = archive.read("ppt/slides/slide1.xml").decode("utf-8")
+            self.assertNotIn("inputs/pipeline.png", slide_xml)
+            self.assertIn("<p:pic>", slide_xml)
+
+    def test_professional_fake_planner_dsl_compiles_text_arrow_and_asset_spec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "summary": "fake professional script",
+                    "dsl_version": "1.0",
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "style_tokens", "id": "style_tokens", "font_family": "Arial", "palette": ["#F7F3EA", "#4A90C2"]},
+                        {"type": "panel", "id": "main_panel", "title": "Main", "bbox_percent": {"x": 0.04, "y": 0.12, "w": 0.92, "h": 0.76}, "fill_color": "#FFFFFF", "stroke_color": "#4A90C2"},
+                        {"type": "text", "id": "title_text", "text": "Pipeline Demo", "bbox_percent": {"x": 0.06, "y": 0.04, "w": 0.4, "h": 0.08}, "font_size_pt": 18, "bold": True, "align": "left"},
+                        {"type": "asset_slot", "id": "robot_icon", "asset_id": "robot_icon", "bbox_percent": {"x": 0.40, "y": 0.25, "w": 0.18, "h": 0.30}, "asset_type": "character", "prompt_subject": "friendly robot agent", "background_color_hex": "#FFFFFF", "generation_aspect_ratio": "3:4"},
+                        {"type": "polyline", "id": "flow_arrow", "source_id": "robot_icon", "target_id": "robot_icon", "path_percent": [[0.20, 0.30], [0.55, 0.30], [0.70, 0.42]], "stroke_color": "#D94141", "stroke_width_pt": 2.4},
+                    ],
+                }
+
+            result = rebuild_editable_pro(reference, out, asset_mode="placeholder", text_mode="off", export_preview=False, repair_rounds=0, planner_adapter=fake_planner)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["text_count"], 1)
+            self.assertEqual(result["connector_count"], 1)
+            specs = json.loads((out / "asset_generation_specs.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs["specs"][0]["generation_aspect_ratio"], "3:4")
+            self.assertIn("friendly robot agent", specs["specs"][0]["prompt"])
+            with zipfile.ZipFile(out / "editable_composition.pptx") as archive:
+                slide_xml = archive.read("ppt/slides/slide1.xml").decode("utf-8")
+            self.assertIn("Pipeline Demo", slide_xml)
+            report = json.loads((out / "composition_quality_report.json").read_text(encoding="utf-8"))
+            self.assertFalse(report["no_full_image_policy"]["contains_full_reference_image"])
+            gap = json.loads((out / "professional_gap_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(gap["professional_counts"]["text_count"], 1)
+            self.assertEqual(gap["professional_counts"]["connector_count"], 1)
+
+    def test_professional_invalid_dsl_reports_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            dsl = {
+                "canvas": {"width_px": 640, "height_px": 360, "width_in": 12, "height_in": 6.75},
+                "objects": [
+                    {"type": "asset_slot", "id": "dup", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}},
+                    {"type": "asset_slot", "id": "dup", "bbox_percent": {"x": 0.3, "y": 0.1, "w": 0.2, "h": 0.2}},
+                    {"type": "arrow", "id": "bad_arrow", "source_id": "dup", "target_id": "dup"},
+                    {"type": "unknown", "id": "bad", "bbox_percent": {"x": 0, "y": 0, "w": 1, "h": 1}},
+                ],
+            }
+            _normalized, report = validate_and_normalize_dsl(dsl, reference, root / "out")
+            self.assertEqual(report["status"], "error")
+            self.assertTrue(any("duplicate id dup" in error for error in report["errors"]))
+            self.assertTrue(any("bad_arrow missing at least two" in error for error in report["errors"]))
+            self.assertTrue(any("unknown object type" in error for error in report["errors"]))
+
+    def test_professional_compile_only_reuses_existing_dsl_without_planner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "asset_slot", "id": "slot_a", "asset_id": "slot_a", "bbox_percent": {"x": 0.1, "y": 0.2, "w": 0.2, "h": 0.3}, "prompt_subject": "document card"},
+                    ],
+                }
+
+            first = rebuild_editable_pro(reference, out, asset_mode="placeholder", text_mode="off", repair_rounds=0, planner_adapter=fake_planner)
+            self.assertTrue(first["ok"])
+            with patch("rfs.professional_rebuild.plan_professional_dsl") as planner:
+                second = rebuild_editable_pro(reference, out, asset_mode="placeholder", text_mode="off", compile_only=True, repair_rounds=0)
+            planner.assert_not_called()
+            self.assertTrue(second["compile_only"])
+            self.assertTrue((out / "editable_composition.pptx").exists())
+
+    def test_professional_benchmark_gap_report_compares_specialized_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            benchmark = root / "benchmark"
+            benchmark.mkdir()
+            (benchmark / "figure_program.json").write_text(json.dumps({
+                "panels": [{"id": "p"}],
+                "cards": [{"id": "c1"}, {"id": "c2"}],
+                "slots": [{"id": "s"}],
+                "assets": [{"id": "s"}],
+                "arrows": [{"id": "a1"}, {"id": "a2"}],
+                "text_program": {"items": [{"id": "t1"}, {"id": "t2"}]},
+                "labels": [],
+            }), encoding="utf-8")
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "text", "id": "t", "text": "Only one", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1}},
+                    ],
+                }
+
+            out = root / "pro"
+            rebuild_editable_pro(reference, out, asset_mode="placeholder", text_mode="off", repair_rounds=0, planner_adapter=fake_planner, benchmark_out=benchmark)
+            gap = json.loads((out / "professional_gap_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(gap["benchmark_counts"]["text_count"], 2)
+            self.assertIn("professional_text_count_below_benchmark", gap["risks"])
+
+    def test_professional_repair_patch_only_allows_safe_fields(self):
+        dsl = {"objects": [{"type": "text", "id": "title", "text": "Demo", "font_size_pt": 10}]}
+        patched, report = apply_professional_dsl_patch(dsl, {
+            "operations": [
+                {"op": "replace", "object_id": "title", "field": "font_size_pt", "value": 13},
+                {"op": "replace", "object_id": "title", "field": "text", "value": "Bad"},
+                {"op": "add", "object_id": "new", "field": "font_size_pt", "value": 9},
+            ]
+        })
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["applied_count"], 1)
+        self.assertEqual(patched["objects"][0]["font_size_pt"], 13)
+        self.assertEqual(patched["objects"][0]["text"], "Demo")
+
+    def test_professional_repair_adapter_patches_dsl_and_recompiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "text", "id": "title", "text": "Pipeline Demo", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.4, "h": 0.1}, "font_size_pt": 10},
+                    ],
+                }
+
+            def fake_repair(_reference, _preview, _dsl, _round):
+                return {"operations": [{"op": "replace", "object_id": "title", "field": "font_size_pt", "value": 14}]}
+
+            result = rebuild_editable_pro(reference, out, asset_mode="placeholder", text_mode="off", repair_rounds=1, planner_adapter=fake_planner, repair_adapter=fake_repair)
+            self.assertTrue(result["ok"])
+            patched = json.loads((out / "professional_rebuild_script.dsl.json").read_text(encoding="utf-8"))
+            title = next(obj for obj in patched["objects"] if obj["id"] == "title")
+            self.assertEqual(title["font_size_pt"], 14)
+            repair = json.loads((out / "professional_repair_round_1.json").read_text(encoding="utf-8"))
+            self.assertEqual(repair["applied_count"], 1)
 
 
 if __name__ == "__main__":

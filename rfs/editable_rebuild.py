@@ -393,7 +393,8 @@ def _make_asset_specs(program: dict, reference_path: Path, out: Path) -> list[di
         slot_type = _slot_type_for_box(slot)
         fill_min, fill_max = _fill_target_for_type(slot_type)
         slot_ratio = float(bbox["w"]) / max(float(bbox["h"]), 0.001)
-        generation_ratio = _supported_aspect_ratio(float(bbox["w"]), float(bbox["h"]))
+        generation_ratio = str(slot.get("generation_aspect_ratio") or _supported_aspect_ratio(float(bbox["w"]), float(bbox["h"])))
+        slot_background = str(slot.get("background_color_hex") or background)
         crop_path = out / "reference_slot_crops" / f"{slot['id']}.png"
         _crop_reference(reference_path, crop_path, bbox)
         spec = {
@@ -410,9 +411,9 @@ def _make_asset_specs(program: dict, reference_path: Path, out: Path) -> list[di
             "slot_bbox_percent": bbox,
             "slot_aspect_ratio": round(slot_ratio, 4),
             "generation_aspect_ratio": generation_ratio,
-            "background_color_hex": background,
+            "background_color_hex": slot_background,
             "reference_crop_path": str(crop_path),
-            "prompt": _asset_prompt(slot, slot_type, background, generation_ratio),
+            "prompt": _asset_prompt(slot, slot_type, slot_background, generation_ratio),
             "main_subject_fill_target": round((fill_min + fill_max) / 2, 3),
             "internal_content_fill_target": round((fill_min + fill_max) / 2, 3),
             "max_margin_percent": 0.10,
@@ -598,7 +599,8 @@ def _ppt_package_counts(pptx_path: Path, reference_path: Path) -> dict:
                 picture_count += 1
             if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
                 text_shape_count += 1
-            if "CONNECTOR" in str(getattr(shape, "shape_type", "")):
+            shape_type_text = str(getattr(shape, "shape_type", ""))
+            if "CONNECTOR" in shape_type_text or "LINE" in shape_type_text:
                 connector_count += 1
     return {
         "ppt_page_count": slide_count,

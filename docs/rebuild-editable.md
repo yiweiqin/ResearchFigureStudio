@@ -1,6 +1,6 @@
 # Image-to-Editable-PPT Rebuild
 
-`rfs rebuild-editable` is the reference-only workflow for turning one figure image into an editable PowerPoint-first rebuild.
+`rfs rebuild-editable` is the reference-only workflow for turning one figure image into an editable PowerPoint-first rebuild. `rfs rebuild-editable-pro` is the higher-quality scripted workflow: it asks a VLM to produce a controlled Figure DSL that mimics the repository's best one-off rebuild scripts, then interprets that DSL through the same safe compiler.
 
 The v1 goal is reproducibility and inspectability: panels, text, connectors, and simple structure are PPT objects; complex visual blocks are slot-level raster assets. The command does not place the full reference image as the final slide background.
 
@@ -28,6 +28,24 @@ High-cost strict regeneration:
 rfs rebuild-editable --reference input.png --out output\demo --asset-mode api --strict-asset-regeneration --asset-retries 5
 ```
 
+Professional scripted rebuild:
+
+```powershell
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode api --repair-rounds 2 --export-preview
+```
+
+Compare against a known high-quality specialized rebuild:
+
+```powershell
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode crop --benchmark-out output\autofigure_architecture_ai_rebuild
+```
+
+Offline professional smoke test:
+
+```powershell
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro_placeholder --asset-mode placeholder --text-mode off
+```
+
 ## Main Options
 
 ```text
@@ -49,6 +67,16 @@ rfs rebuild-editable --reference input.png --out output\demo --asset-mode api --
 --export-preview         Export rebuild_preview.png when PowerPoint is available.
 ```
 
+Professional-only options:
+
+```text
+rebuild-editable-pro     Use the controlled professional Figure DSL workflow.
+--repair-rounds          Preview repair reports to write/run. Default: 2.
+--repair-mode            report | vlm. Default: report. vlm applies controlled DSL patches.
+--benchmark-out          Optional specialized output directory for professional_gap_report.json.
+--compile-only           Recompile from professional_rebuild_script.dsl.json without VLM planning or asset API calls.
+```
+
 ## API Environment
 
 `--asset-mode api` uses the same image-generation route as the specialized rebuild scripts:
@@ -67,6 +95,7 @@ MODEL_VLM
 RFS_REBUILD_LAYOUT_MODEL    optional
 RFS_REBUILD_CONTROL_MODEL   optional
 RFS_REBUILD_SEMANTIC_MODEL  optional
+RFS_PROFESSIONAL_REBUILD_MODEL optional, used by rebuild-editable-pro
 ```
 
 PowerShell example:
@@ -78,6 +107,7 @@ $env:MODEL_VLM='your-vision-language-model'
 $env:RFS_REBUILD_LAYOUT_MODEL=$env:MODEL_VLM
 $env:RFS_REBUILD_CONTROL_MODEL=$env:MODEL_VLM
 $env:RFS_REBUILD_SEMANTIC_MODEL=$env:MODEL_VLM
+$env:RFS_PROFESSIONAL_REBUILD_MODEL=$env:MODEL_VLM
 $env:GEMINI_API_KEY=$env:API_KEY
 $env:GEMINI_GEN_IMG_URL='https://your-provider/v1beta/models/your-image-model:generateContent'
 ```
@@ -108,6 +138,17 @@ editable_composition.pptx
 rebuild_preview.png or preview_export_error.txt
 ```
 
+`rebuild-editable-pro` additionally writes:
+
+```text
+professional_rebuild_plan.json
+professional_rebuild_script.dsl.json
+professional_rebuild_validation.json
+professional_rebuild_notes.md
+professional_gap_report.json
+professional_repair_round_N.json
+```
+
 `figure_program.json` is the PPT compiler source of truth. `reference_text_geometry.json` stores OCR or fallback text geometry. `reference_controls.json` stores editable connector candidates. `slot_inventory.json` stores non-text visual asset slots.
 
 ## Analysis And Manual Correction
@@ -128,6 +169,16 @@ After manually editing JSON contracts, recompile without rerunning analysis or i
 ```powershell
 rfs rebuild-editable --reference input.png --out output\demo --compile-only
 ```
+
+For the professional workflow, edit `professional_rebuild_script.dsl.json` and recompile without rerunning VLM planning or image-generation API calls:
+
+```powershell
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --compile-only --export-preview
+```
+
+`--repair-mode vlm` is intentionally constrained. It may only patch DSL fields such as `bbox_percent`, `font_size_pt`, `path_percent`, `stroke_color`, `stroke_width_pt`, `prompt_subject`, `background_color_hex`, `generation_aspect_ratio`, and `content_fill_target`. It cannot add arbitrary objects or execute generated Python.
+
+`professional_gap_report.json` compares baseline counts, professional DSL counts, and optional benchmark counts. Use it to see whether the pro workflow is moving toward the best specialized scripts in text count, connector count, panel/card structure, and slot coverage.
 
 To keep existing analysis contracts but rerun OCR, asset specs, and placeholder/API asset handling:
 
