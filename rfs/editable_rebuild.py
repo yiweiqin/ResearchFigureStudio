@@ -18,6 +18,7 @@ from .layout_semantic_planner import plan_slot_semantics
 from .ppt_compiler import compile_ppt
 from .rebuild_design_planner import plan_rebuild_design
 from .rebuild_vlm_validation import build_rebuild_vlm_validation_report
+from .rebuild_visual_critic import run_rebuild_visual_quality_check
 from .text_layer import build_text_layer
 from .utils import ensure_dir, write_json, write_text
 
@@ -1046,6 +1047,13 @@ def rebuild_editable(
         regen = {str(item).strip() for item in regenerate_slots if str(item).strip()}
     asset_reports, asset_summary = _generate_assets(specs, program, out_path, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration, asset_policy=asset_policy)
     vlm_validation_report = build_rebuild_vlm_validation_report(out_path, reference_geometry, reference_controls, semantic_report, asset_summary)
+    visual_quality_report = run_rebuild_visual_quality_check(
+        out_path,
+        program,
+        reference_geometry=reference_geometry,
+        reference_controls=reference_controls,
+        ownership_report=_load_json_or_empty(out_path / "text_layer_ownership_report.json"),
+    )
 
     write_json(out_path / "figure_program.json", program)
     pptx_path = compile_ppt(program, out_path)
@@ -1089,6 +1097,7 @@ def rebuild_editable(
         "text_mode": text_mode,
         "control_mode": control_mode,
         "layout_mode": layout_mode,
+        "rebuild_visual_quality_status": visual_quality_report.get("status"),
         "reports": {
             "input_manifest": str(out_path / "input_manifest.json"),
             "reference_logic_plan": str(out_path / "reference_logic_plan.json"),
@@ -1101,6 +1110,7 @@ def rebuild_editable(
             "slot_inventory": str(out_path / "slot_inventory.json"),
             "slot_semantic_report": str(out_path / "slot_semantic_report.json"),
             "rebuild_vlm_validation_report": str(out_path / "rebuild_vlm_validation_report.json"),
+            "rebuild_visual_quality_report": str(out_path / "rebuild_visual_quality_report.json"),
             "asset_generation_specs": str(out_path / "asset_generation_specs.json"),
             "asset_generation_report": str(out_path / "asset_generation_report.json"),
             "asset_economy_report": str(out_path / "asset_economy_report.json"),
