@@ -8,6 +8,7 @@ from PIL import Image
 
 from .reference_text_extractor import extract_reference_text
 from .text_grouping import group_text_regions, write_text_grouping_artifacts
+from .text_layer_ownership import apply_text_layer_ownership, write_text_layer_ownership_artifacts
 from .utils import write_json
 
 
@@ -375,6 +376,8 @@ def build_text_layer(
     )
     write_text_grouping_artifacts(out, raw_geometry, grouping_plan, grouping_report)
     regions = _merge_ocr_with_fallback(grouped_ocr_regions, fallback_regions)
+    regions, ownership_plan, ownership_report = apply_text_layer_ownership(regions, program, mode="heuristic")
+    write_text_layer_ownership_artifacts(out, ownership_plan, ownership_report)
     if not ocr_regions:
         ocr_report["text_region_count"] = len(regions)
         ocr_report.setdefault("warnings", [])
@@ -382,6 +385,8 @@ def build_text_layer(
 
     items: list[dict] = []
     for region in regions:
+        if region.get("layer_ownership") != "editable_text_layer":
+            continue
         font_size = float(region.get("font_size_pt") or _font_pt_from_reference_region(region, canvas_height_in))
         token_id = _nearest_token_id(style, region["color_hex"])
         item = {
@@ -407,6 +412,7 @@ def build_text_layer(
             "ocr_confidence": region.get("confidence"),
             "editable_in": "pptx",
             "visible": True,
+            "layer_ownership": region.get("layer_ownership"),
         }
         items.append(item)
 
@@ -422,6 +428,8 @@ def build_text_layer(
         "text_grouping_report_path": "text_grouping_report.json",
         "text_grouping_mode": text_grouping_mode,
         "text_grouping_status": grouping_report.get("status"),
+        "text_layer_ownership_plan_path": "text_layer_ownership_plan.json",
+        "text_layer_ownership_report_path": "text_layer_ownership_report.json",
         "text_regions": regions,
     }
     text_program = {

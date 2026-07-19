@@ -8,6 +8,7 @@ from PIL import Image
 
 from rfs.ppt_compiler import compile_ppt
 from rfs.text_layer import build_text_layer
+from rfs.text_layer_ownership import apply_text_layer_ownership
 
 
 def _base_program() -> dict:
@@ -40,6 +41,22 @@ def _style() -> dict:
 
 
 class TextLayerOcrTests(unittest.TestCase):
+    def test_text_ownership_keeps_critical_labels_editable(self):
+        program = {
+            "slots": [{"id": "slot_a", "bbox_percent": {"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}}]
+        }
+        regions = [
+            {"id": "title", "text": "Method", "role": "panel_title", "target_id": "slot_a", "font_size_pt": 12, "bbox_percent": {"x": 0.2, "y": 0.2, "w": 0.2, "h": 0.1}},
+            {"id": "decorative", "text": "x", "role": "free_text", "target_id": "slot_a", "font_size_pt": 3, "bbox_percent": {"x": 0.3, "y": 0.3, "w": 0.05, "h": 0.05}},
+        ]
+
+        planned, _plan, report = apply_text_layer_ownership(regions, program)
+
+        by_id = {item["id"]: item for item in planned}
+        self.assertEqual(by_id["title"]["layer_ownership"], "editable_text_layer")
+        self.assertEqual(by_id["decorative"]["layer_ownership"], "decorative_asset_text")
+        self.assertEqual(report["editable_text_count"], 1)
+
     def test_fake_ocr_creates_reference_text_geometry_without_duplicate_panel_title(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
