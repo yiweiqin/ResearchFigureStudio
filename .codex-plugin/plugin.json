@@ -1,0 +1,29 @@
+{
+  "name": "research-figure-studio",
+  "version": "0.2.0",
+  "description": "Generate paper-grounded scientific figures as editable PowerPoint compositions.",
+  "author": {
+    "name": "ResearchFigureStudio contributors",
+    "url": "https://github.com/yiweiqin/ResearchFigureStudio"
+  },
+  "homepage": "https://github.com/yiweiqin/ResearchFigureStudio",
+  "repository": "https://github.com/yiweiqin/ResearchFigureStudio",
+  "license": "MIT",
+  "keywords": ["research", "scientific-figures", "powerpoint", "pptx", "codex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Research Figure Studio",
+    "shortDescription": "Paper to editable PowerPoint figures",
+    "longDescription": "Build scientifically grounded framework figures whose exact labels and relations remain editable in PowerPoint.",
+    "developerName": "ResearchFigureStudio contributors",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/yiweiqin/ResearchFigureStudio",
+    "defaultPrompt": [
+      "Turn this paper into an editable PPT framework figure.",
+      "Rebuild this scientific figure as editable PowerPoint.",
+      "Check whether this figure matches the paper semantics."
+    ],
+    "brandColor": "#2F6F8F"
+  }
+}

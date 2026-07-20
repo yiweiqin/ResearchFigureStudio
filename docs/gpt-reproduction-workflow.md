@@ -57,7 +57,7 @@ Existing one-off scripts in `scripts/` are historical examples. Do not treat the
 Install locally:
 
 ```powershell
-cd D:\ResearchFigureStudio
+cd <path-to-ResearchFigureStudio>
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```

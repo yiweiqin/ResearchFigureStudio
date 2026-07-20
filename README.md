@@ -2,7 +2,7 @@
 
 ## Summary
 
-ResearchFigureStudio is a PPTX-first research figure generation pipeline for paper-grounded, reference-guided scientific framework figures. It turns a paper plus a user-provided visual reference image into an editable PowerPoint composition assembled from many slot-level image assets, not one flattened full-diagram bitmap.
+ResearchFigureStudio is a paper-to-editable-PPT scientific figure engine and Codex plugin. Paper contracts provide exact labels and scientific relations; generated or user-provided images provide layout and visual style; deterministic code compiles the result into editable PowerPoint objects.
 
 The current workflow is optimized for AI/ML/NLP system figures:
 
@@ -76,6 +76,22 @@ python -m pip install -e ".[ocr]"
 ```
 
 Windows with PowerPoint installed gives the best PPTX/PDF/PNG export path. The Python package itself can still generate and validate most intermediate artifacts without external image APIs when using `--asset-mode placeholder`.
+
+## Paper To Editable PPTX
+
+The main product route is:
+
+```powershell
+rfs paper-to-editable `
+  --paper "C:\path\paper.pdf" `
+  --out "output\paper_to_editable" `
+  --positive-reference "C:\path\optional_style_reference.png" `
+  --json
+```
+
+This writes paper-review and image-generation artifacts under `paper_to_image/`, then writes the semantic contract, editable figure program, PPTX, preview, and QA reports under `editable/`. If no image candidate passes the production gates, the workflow stops before creating an official editable deliverable.
+
+For offline engineering validation only, add `--image-asset-mode placeholder --rebuild-asset-mode placeholder --allow-engineering-preview`. This does not create a production-approved result.
 
 ## Paper To Image Without PPTX
 
@@ -376,7 +392,7 @@ Optional arrow-beautification pass:
 rfs make-framework `
   --paper "C:\path\paper.pdf" `
   --reference "C:\path\reference.png" `
-  --out D:\ResearchFigureStudio\output\aesthetic_experiment `
+  --out .\output\aesthetic_experiment `
   --slot-count 40 `
   --slot-source reference-primary `
   --control-localizer-mode hybrid `
@@ -466,7 +482,7 @@ Run validation:
 
 ```powershell
 rfs validate --out "output\paper_reference_image2" --json
-python codex-skills\research-figure-making\scripts\validate_framework_outputs.py "output\paper_reference_image2"
+python skills\research-figure-studio\scripts\validate_framework_outputs.py "output\paper_reference_image2"
 ```
 
 ## Codex Skill
@@ -474,15 +490,15 @@ python codex-skills\research-figure-making\scripts\validate_framework_outputs.py
 This repository includes the Codex skill under:
 
 ```text
-codex-skills/research-figure-making
+skills/research-figure-studio
 ```
 
 To install it locally into Codex:
 
 ```powershell
-$dst = Join-Path $env:USERPROFILE ".codex\skills\research-figure-making"
+$dst = Join-Path $env:USERPROFILE ".codex\skills\research-figure-studio"
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-Copy-Item -Recurse "codex-skills\research-figure-making" $dst
+Copy-Item -Recurse "skills\research-figure-studio" $dst
 ```
 
 The skill documents the full research-figure workflow and includes the standalone framework-output validator.
@@ -492,7 +508,7 @@ The skill documents the full research-figure workflow and includes the standalon
 ```powershell
 python -m compileall -q rfs
 python -m unittest discover -s tests -q
-python -m py_compile codex-skills\research-figure-making\scripts\validate_framework_outputs.py
+python -m py_compile skills\research-figure-studio\scripts\validate_framework_outputs.py
 ```
 
 ## Repository Hygiene

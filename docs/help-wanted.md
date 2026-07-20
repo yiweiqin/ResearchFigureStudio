@@ -67,8 +67,8 @@ We welcome help on:
 - `rfs/ppt_compiler.py`
 - `rfs/visual_critic.py`
 - `rfs/validator.py`
-- `codex-skills/research-figure-making/references/reference_image_alignment.md`
-- `codex-skills/research-figure-making/references/figure_program.md`
+- `skills/research-figure-studio/references/reference_image_alignment.md`
+- `skills/research-figure-studio/references/figure_program.md`
 
 ## Desired End State
 

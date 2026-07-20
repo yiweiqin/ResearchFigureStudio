@@ -29,20 +29,20 @@ The workflow is designed to keep scientific content, layout, image generation, a
 Offline engineering check:
 
 ```powershell
-rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out D:\ResearchFigureStudio\output\offline_check --asset-mode placeholder --locator-mode heuristic --control-localizer-mode heuristic --arrow-style-mode reference --prompt-plan-mode heuristic --slot-count 36 --candidates-per-slot 3 --asset-review-mode heuristic --critic-mode heuristic --json
-rfs validate --out D:\ResearchFigureStudio\output\offline_check --json
+rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out .\output\offline_check --asset-mode placeholder --locator-mode heuristic --control-localizer-mode heuristic --arrow-style-mode reference --prompt-plan-mode heuristic --slot-count 36 --candidates-per-slot 3 --asset-review-mode heuristic --critic-mode heuristic --json
+rfs validate --out .\output\offline_check --json
 ```
 
 Small real image check:
 
 ```powershell
-rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out D:\ResearchFigureStudio\output\real_small --asset-mode gemini --asset-workers 3 --asset-retries 2 --locator-mode vlm --control-localizer-mode hybrid --arrow-style-mode reference --prompt-plan-mode vlm --prompt-plan-workers 4 --slot-count 25 --candidates-per-slot 1 --asset-review-mode heuristic --critic-mode heuristic --json
+rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out .\output\real_small --asset-mode gemini --asset-workers 3 --asset-retries 2 --locator-mode vlm --control-localizer-mode hybrid --arrow-style-mode reference --prompt-plan-mode vlm --prompt-plan-workers 4 --slot-count 25 --candidates-per-slot 1 --asset-review-mode heuristic --critic-mode heuristic --json
 ```
 
 Full quality run:
 
 ```powershell
-rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out D:\ResearchFigureStudio\output\full_quality --asset-mode gemini --asset-workers 4 --asset-retries 2 --locator-mode vlm --control-localizer-mode hybrid --arrow-style-mode reference --prompt-plan-mode vlm --prompt-plan-workers 4 --slot-count 36 --candidates-per-slot 3 --asset-review-mode vlm --critic-mode vlm --critic-iterations 1 --json
+rfs make-framework --paper "C:\path\paper.pdf" --reference "C:\path\reference.png" --out .\output\full_quality --asset-mode gemini --asset-workers 4 --asset-retries 2 --locator-mode vlm --control-localizer-mode hybrid --arrow-style-mode reference --prompt-plan-mode vlm --prompt-plan-workers 4 --slot-count 36 --candidates-per-slot 3 --asset-review-mode vlm --critic-mode vlm --critic-iterations 1 --json
 ```
 
 ## Parallel Asset Generation

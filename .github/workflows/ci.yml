@@ -20,16 +20,16 @@ jobs:
       - name: Compile package and bundled scripts
         run: |
           python -m compileall -q rfs
-          python -m py_compile codex-skills/research-figure-making/scripts/validate_framework_outputs.py
-          python -m py_compile codex-skills/research-figure-making/scripts/estimate_asset_fill.py
+          python -m py_compile skills/research-figure-studio/scripts/validate_framework_outputs.py
+          python -m py_compile skills/research-figure-studio/scripts/estimate_asset_fill.py
       - name: Run unit tests
         run: python -m unittest discover -s tests -q
       - name: Check bundled skill metadata
         shell: python
         run: |
           from pathlib import Path
-          skill = Path('codex-skills/research-figure-making/SKILL.md')
+          skill = Path('skills/research-figure-studio/SKILL.md')
           text = skill.read_text(encoding='utf-8')
           assert text.startswith('---'), 'SKILL.md must start with YAML frontmatter'
-          assert 'name: research-figure-making' in text
+          assert 'name: research-figure-studio' in text
           assert 'description:' in text

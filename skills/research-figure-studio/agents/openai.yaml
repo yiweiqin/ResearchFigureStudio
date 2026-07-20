@@ -1,0 +1,7 @@
+interface:
+  display_name: "Research Figure Studio"
+  short_description: "Create paper-grounded scientific figures as editable PowerPoint diagrams."
+  default_prompt: "Use $research-figure-studio to turn my paper into an editable PowerPoint framework figure."
+
+policy:
+  allow_implicit_invocation: true
