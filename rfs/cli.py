@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
+from .evaluation import list_benchmark_cases, run_benchmark_case, score_benchmark_case, validate_benchmark_case
 from .paper_to_image import run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
@@ -251,6 +252,15 @@ def build_parser() -> argparse.ArgumentParser:
     coevolution_report.add_argument("--run", required=True, help="Existing co-evolution output directory.")
     coevolution_report.add_argument("--json", action="store_true", help="Emit JSON.")
 
+    benchmark = sub.add_parser("benchmark", help="List, validate, run, or score ResearchFigureStudio benchmark cases.")
+    benchmark.add_argument("benchmark_action", choices=["list", "validate", "run", "score"])
+    benchmark.add_argument("--suite", choices=["paper-to-image", "image-to-ppt"], help="Optional suite filter for list.")
+    benchmark.add_argument("--root", default="benchmarks", help="Benchmark root for list. Default: benchmarks.")
+    benchmark.add_argument("--case", help="Benchmark case directory for validate, run, or score.")
+    benchmark.add_argument("--run", dest="run_dir", help="Existing workflow output directory for score.")
+    benchmark.add_argument("--out", help="Output directory for run, or optional score report destination.")
+    benchmark.add_argument("--json", action="store_true", help="Emit JSON.")
+
     validate = sub.add_parser("validate", help="Validate an existing ResearchFigureStudio output directory.")
     validate.add_argument("--out", required=True, help="Output directory to validate.")
     validate.add_argument("--json", action="store_true", help="Emit JSON.")
@@ -465,6 +475,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "coevolution-report":
             result = analyze_coevolution_run(args.run)
+        elif args.command == "benchmark":
+            if args.benchmark_action == "list":
+                result = list_benchmark_cases(args.root, suite=args.suite)
+            elif args.benchmark_action == "validate":
+                if not args.case:
+                    parser.error("benchmark validate requires --case")
+                result = validate_benchmark_case(args.case)
+            elif args.benchmark_action == "run":
+                if not args.case or not args.out:
+                    parser.error("benchmark run requires --case and --out")
+                result = run_benchmark_case(args.case, args.out)
+            else:
+                if not args.case or not args.run_dir:
+                    parser.error("benchmark score requires --case and --run")
+                result = score_benchmark_case(args.case, args.run_dir, args.out)
         elif args.command == "validate":
             result = validate_output(args.out)
         elif args.command == "presentations-qa":

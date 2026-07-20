@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchFigureStudio benchmark case",
+  "type": "object",
+  "required": ["summary", "case_id", "suite", "thresholds", "run_config"],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "suite": {"enum": ["paper-to-image", "image-to-ppt"]},
+    "thresholds": {"type": "object"},
+    "run_config": {"type": "object"}
+  },
+  "additionalProperties": true
+}

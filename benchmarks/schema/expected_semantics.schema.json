@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Paper-to-image semantic ground truth",
+  "type": "object",
+  "required": ["summary", "entities", "relations", "forbidden_labels"],
+  "properties": {
+    "summary": {"type": "string"},
+    "entities": {"type": "array", "items": {"type": "object", "required": ["id", "label", "role"]}},
+    "relations": {"type": "array", "items": {"type": "object", "required": ["source", "target", "type"]}},
+    "forbidden_labels": {"type": "array", "items": {"type": "string"}}
+  }
+}

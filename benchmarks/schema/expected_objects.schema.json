@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Image-to-PPT object ground truth",
+  "type": "object",
+  "required": ["summary", "objects", "relations"],
+  "properties": {
+    "summary": {"type": "string"},
+    "objects": {"type": "array", "items": {"type": "object", "required": ["id", "type", "bbox_percent"]}},
+    "relations": {"type": "array", "items": {"type": "object", "required": ["source", "target", "type"]}}
+  }
+}

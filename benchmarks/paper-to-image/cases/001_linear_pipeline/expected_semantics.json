@@ -1,0 +1,17 @@
+{
+  "summary": "Human-authored semantic ground truth for the ExampleFlow figure.",
+  "entities": [
+    {"id": "raw_document", "label": "Raw Document", "role": "input", "required": true},
+    {"id": "document_encoding", "label": "Document Encoding", "role": "module", "required": true},
+    {"id": "evidence_aggregation", "label": "Evidence Aggregation", "role": "module", "required": true},
+    {"id": "final_prediction", "label": "Final Prediction", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "raw_document", "target": "document_encoding", "type": "data_flow", "required": true},
+    {"source": "document_encoding", "target": "evidence_aggregation", "type": "data_flow", "required": true},
+    {"source": "evidence_aggregation", "target": "final_prediction", "type": "data_flow", "required": true}
+  ],
+  "forbidden_labels": ["Agent", "Memory", "Retriever", "Knowledge Base"],
+  "required_innovation": "Evidence Aggregation",
+  "expected_reading_order": ["raw_document", "document_encoding", "evidence_aggregation", "final_prediction"]
+}

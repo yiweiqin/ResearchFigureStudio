@@ -1,0 +1,30 @@
+{
+  "summary": "Blinded human rating record for one generated scientific figure.",
+  "case_id": "",
+  "candidate_id": "",
+  "reviewer_id": "anonymous_reviewer_01",
+  "reviewer_background": "paper_author|domain_expert|visual_design_expert|general_researcher",
+  "scores_1_to_5": {
+    "scientific_faithfulness": 0,
+    "information_completeness": 0,
+    "information_density_without_clutter": 0,
+    "reading_order_clarity": 0,
+    "arrow_and_grouping_clarity": 0,
+    "text_readability_at_target_size": 0,
+    "aesthetic_quality": 0,
+    "academic_professionalism": 0
+  },
+  "quick_comprehension": {
+    "input_identified": false,
+    "output_identified": false,
+    "core_innovation_identified": false,
+    "main_flow_direction_identified": false
+  },
+  "hard_errors": [],
+  "pairwise_preference": {
+    "other_candidate_id": "",
+    "preferred": "this|other|tie",
+    "reason": ""
+  },
+  "notes": ""
+}

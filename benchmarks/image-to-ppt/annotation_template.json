@@ -1,0 +1,33 @@
+{
+  "summary": "Independent human annotation template for image-to-PPT reconstruction.",
+  "case_id": "",
+  "canvas": {"width_px": 0, "height_px": 0},
+  "objects": [
+    {
+      "id": "object_01",
+      "type": "panel|card|asset|text|legend|formula",
+      "bbox_percent": {"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0},
+      "text": "",
+      "parent_id": null,
+      "z_index": 0,
+      "must_be_editable": true
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation_01",
+      "source": "object_01",
+      "target": "object_02",
+      "type": "data_flow",
+      "path_percent": [[0.0, 0.0], [0.0, 0.0]],
+      "must_be_editable": true
+    }
+  ],
+  "groups": [],
+  "mutation_tests": [
+    {"operation": "replace_text", "target_id": "", "value": "Edited label"},
+    {"operation": "move_object", "target_id": "", "delta_percent": {"x": 0.05, "y": 0.0}},
+    {"operation": "change_fill", "target_id": "", "value": "#FFAA00"},
+    {"operation": "delete_relation", "target_id": ""}
+  ]
+}

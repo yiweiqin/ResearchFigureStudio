@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frozen judge or human-calibrated paper-image review",
+  "type": "object",
+  "required": ["scientific", "ocr", "information", "clarity", "aesthetic", "stability"],
+  "properties": {
+    "scientific": {
+      "type": "object",
+      "required": ["score", "missing_modules", "missing_relations", "reversed_relations", "invented_items"]
+    },
+    "ocr": {
+      "type": "object",
+      "required": ["score", "missing_labels", "misspelled_labels", "forbidden_labels_found"]
+    },
+    "information": {
+      "type": "object",
+      "required": ["coverage", "density", "redundancy", "unsupported_information", "score"]
+    },
+    "clarity": {
+      "type": "object",
+      "required": ["reading_order", "arrow_ambiguity", "grouping", "target_size_readability", "cognitive_load", "score"]
+    },
+    "aesthetic": {
+      "type": "object",
+      "required": ["hierarchy", "balance", "whitespace", "color", "icon_consistency", "professionalism", "score"]
+    },
+    "stability": {
+      "type": "object",
+      "required": ["seed_count", "mean_score", "worst_case_score", "standard_deviation", "production_pass_rate"]
+    }
+  }
+}

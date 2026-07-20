@@ -78,3 +78,15 @@ The normal paper-to-editable output should contain:
 - `editable/rebuild_preview.png` when preview export is requested
 
 If production gates fail, return the engineering artifacts and the blocker; do not claim that the figure is ready for paper submission.
+
+## Benchmark commands
+
+Use the two independent suites to locate failures before changing the workflow:
+
+```powershell
+rfs benchmark list --root benchmarks --json
+rfs benchmark run --case <case_dir> --out <run_dir> --json
+rfs benchmark score --case <case_dir> --run <run_dir> --json
+```
+
+`paper-to-image` scientific and terminology errors are hard failures. `image-to-ppt` must reject full-slide reference images even when raster similarity is high.

@@ -1,0 +1,26 @@
+{
+  "summary": "Synthetic three-stage image-to-editable-PPT reconstruction case.",
+  "case_id": "001_three_stage_layout",
+  "suite": "image-to-ppt",
+  "tier": "offline-contract",
+  "reference_image": "reference.ppm",
+  "expected_objects": "expected_objects.json",
+  "preview": "rebuild_preview.png",
+  "pptx": "editable_composition.pptx",
+  "run_config": {
+    "asset_mode": "placeholder",
+    "asset_policy": "smart-api",
+    "text_mode": "off",
+    "layout_mode": "heuristic",
+    "control_mode": "heuristic",
+    "design_plan_mode": "heuristic",
+    "ocr_engine": "off"
+  },
+  "thresholds": {
+    "object_coverage": 0.8,
+    "relation_coverage": 1.0,
+    "editability_score": 0.66,
+    "full_slide_image_count": 0,
+    "blocking_visual_issue_count": 0
+  }
+}

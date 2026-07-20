@@ -67,6 +67,7 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 - `rebuild-editable`: reconstructs an image; it can optionally accept a paper semantic contract.
 - `paper-to-editable`: runs both stages and requires a production-approved image unless engineering preview use is explicitly enabled.
 - Plugin skill: selects and invokes workflows; it does not contain the engine or hardcoded repository paths.
+- Benchmark layer: independently scores paper-to-image scientific/visual quality and image-to-PPT fidelity/editability.
 
 ## Production rules
 

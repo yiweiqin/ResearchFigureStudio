@@ -1,0 +1,9 @@
+{
+  "summary": "Visual preferences separated from scientific ground truth.",
+  "aspect_ratio": "16:9",
+  "language": "English",
+  "preferred_flow": "left_to_right",
+  "style_description": "clean academic framework figure",
+  "preferred_palette": ["blue", "teal", "warm orange accent"],
+  "avoid": ["commercial poster", "cyberpunk", "generic dashboard"]
+}

@@ -1,0 +1,14 @@
+{
+  "summary": "Human-authored object and relation annotations for a three-stage layout.",
+  "objects": [
+    {"id": "input", "type": "card", "bbox_percent": {"x": 0.05, "y": 0.25, "w": 0.22, "h": 0.45}},
+    {"id": "method", "type": "card", "bbox_percent": {"x": 0.39, "y": 0.20, "w": 0.22, "h": 0.55}},
+    {"id": "output", "type": "card", "bbox_percent": {"x": 0.73, "y": 0.25, "w": 0.22, "h": 0.45}}
+  ],
+  "relations": [
+    {"source": "input", "target": "method", "type": "data_flow"},
+    {"source": "method", "target": "output", "type": "data_flow"}
+  ],
+  "required_editable_types": ["card", "text", "connector"],
+  "forbid_full_slide_reference_image": true
+}
