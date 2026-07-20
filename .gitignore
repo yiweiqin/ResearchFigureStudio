@@ -22,6 +22,7 @@ env/
 tmp/translation_env/
 tmp/codex-presentations/
 tmp/pdfs/*/
+tmp/pdfs/
 tmp/paper-to-editable-smoke*/
 *.key
 *.pem

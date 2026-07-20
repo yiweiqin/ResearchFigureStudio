@@ -26,6 +26,14 @@ The semantic path never passes through OCR alone. OCR may help recover geometry 
 .codex-plugin/                 Codex plugin manifest
 skills/research-figure-studio Thin agent instructions; no machine paths
 rfs/                           Installable, agent-independent Python engine
+  contracts/                   Paper semantic contracts and stable schemas
+  providers/                   VLM and external model integrations
+  analysis/                    Paper, layout, and text analysis entry points
+  planning/                    Paper and rebuild planning entry points
+  generation/                  Reference and slot-asset generation entry points
+  workflows/                   Product-level workflow entry points
+  composition/                 PPTX compilation and fallback preview rendering
+  evaluation/                  Deterministic rebuild quality checks
   paper_to_image/              Paper review, grounding, planning, image candidates
   coevolution/                 Experimental creator/judge research
   paper_to_editable.py         Product workflow orchestrator
@@ -33,7 +41,7 @@ rfs/                           Installable, agent-independent Python engine
   editable_rebuild.py          Reference image → editable figure program/PPTX
   ppt_compiler.py              Deterministic PowerPoint renderer
   rebuild_visual_critic.py     Deterministic rebuild QA
-tests/                         Automated behavior and contract tests
+tests/                         Unit, integration, and future end-to-end tests
 benchmarks/                    Real product acceptance cases and metrics
 experiments/                   Research prototypes and historical scripts
 docs/                          Architecture, workflows, decisions, roadmaps

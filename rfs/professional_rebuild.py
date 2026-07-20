@@ -15,7 +15,7 @@ from .editable_rebuild import (
     _ppt_package_counts,
     rebuild_editable,
 )
-from .ppt_compiler import compile_ppt
+from .composition import compile_ppt
 from .professional_compiler import dsl_to_program
 from .professional_dsl import fallback_professional_dsl, validate_and_normalize_dsl
 from .professional_gap import build_professional_gap_report

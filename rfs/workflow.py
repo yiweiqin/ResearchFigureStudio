@@ -10,7 +10,7 @@ from .input_archive import archive_inputs
 from .input_loader import load_text
 from .paper_analyzer import analyze_paper
 from .presentations_qa import run_presentations_qa
-from .ppt_compiler import compile_ppt
+from .composition import compile_ppt
 from .prompt_planner import plan_slot_prompts
 from .layout_locator import locate_layout
 from .program_builder import build_figure_program

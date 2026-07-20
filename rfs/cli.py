@@ -10,7 +10,7 @@ from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
 from .paper_to_image import run_paper_to_image
-from .paper_to_editable import run_paper_to_editable
+from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
 from .professional_repair import vlm_professional_repair_adapter
 from .presentations_qa import run_presentations_qa
