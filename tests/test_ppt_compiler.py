@@ -29,6 +29,17 @@ class PptCompilerArrowTests(unittest.TestCase):
                     "bbox_percent": {"x": 0.05, "y": 0.05, "w": 0.90, "h": 0.80},
                     "editable_in": "pptx",
                 }],
+                "cards": [{
+                    "id": "card_a",
+                    "semantic_role": "outer_group_boundary",
+                    "bbox_percent": {"x": 0.08, "y": 0.16, "w": 0.76, "h": 0.54},
+                    "shape_kind": "rect",
+                    "stroke_color": "#59AFCB",
+                    "stroke_width_pt": 1.5,
+                    "dash_style": "dash",
+                    "fill_transparency": 1.0,
+                    "z_index": 12,
+                }],
                 "slots": [
                     {
                         "id": "slot_a",
@@ -87,6 +98,8 @@ class PptCompilerArrowTests(unittest.TestCase):
             by_id = {item["arrow_id"]: item for item in report["arrows"]}
             self.assertEqual(by_id["multi_a"]["segment_count"], 3)
             self.assertEqual(by_id["loop_a"]["segment_count"], 4)
+            self.assertEqual(report["cards"][0]["card_id"], "card_a")
+            self.assertEqual(report["cards"][0]["render_policy"], "ppt_shape_not_image_asset")
 
             with zipfile.ZipFile(pptx) as archive:
                 slide_xml = archive.read("ppt/slides/slide1.xml").decode("utf-8")
