@@ -224,6 +224,7 @@ rfs rebuild-editable-pro `
   --reference "C:\path\figure.png" `
   --out "output\editable_rebuild_pro" `
   --asset-mode api `
+  --asset-policy smart-api `
   --repair-rounds 2 `
   --export-preview
 ```
@@ -235,14 +236,21 @@ write `professional_gap_report.json` against a specialized-script output. Use
 `--repair-mode vlm` only when you want the VLM to apply constrained DSL patches
 after preview comparison.
 
-Lower-cost mode, using VLM structure planning but keeping reference crops as
-slot assets:
+In `smart-api` policy, reference crops are only used as image-generation context.
+They are not inserted as final PPT assets. Text-like slots are filtered into
+editable text, duplicate complex icons reuse one generated asset, and API
+failures fall back to placeholders instead of reference crops.
+
+Lower-cost structure check. With `smart-api`, this does not keep reference crops
+as final assets; it writes placeholders for visual slots while still producing
+the DSL, overlays, and reports:
 
 ```powershell
 rfs rebuild-editable `
   --reference "C:\path\figure.png" `
   --out "output\editable_rebuild_crop" `
   --asset-mode crop `
+  --asset-policy smart-api `
   --layout-mode hybrid `
   --control-mode hybrid
 ```

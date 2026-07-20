@@ -20,6 +20,8 @@ research_figure_studio.egg-info/
 venv/
 env/
 tmp/translation_env/
+tmp/codex-presentations/
+tmp/pdfs/*/
 *.key
 *.pem
 

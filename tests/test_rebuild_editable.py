@@ -501,6 +501,64 @@ class RebuildEditableTests(unittest.TestCase):
             repair = json.loads((out / "professional_repair_round_1.json").read_text(encoding="utf-8"))
             self.assertEqual(repair["applied_count"], 1)
 
+    def test_smart_api_policy_filters_text_slots_and_disables_final_crop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "text", "id": "text_label", "text": "Output", "bbox_percent": {"x": 0.55, "y": 0.20, "w": 0.20, "h": 0.08}, "font_size_pt": 12},
+                        {"type": "asset_slot", "id": "misread_text_as_icon", "asset_id": "misread_text_as_icon", "bbox_percent": {"x": 0.55, "y": 0.20, "w": 0.20, "h": 0.08}, "asset_type": "generic", "prompt_subject": "Output text"},
+                        {"type": "asset_slot", "id": "robot_icon", "asset_id": "robot_icon", "bbox_percent": {"x": 0.20, "y": 0.25, "w": 0.16, "h": 0.24}, "asset_type": "character", "prompt_subject": "friendly robot"},
+                    ],
+                }
+
+            result = rebuild_editable_pro(reference, out, asset_mode="crop", asset_policy="smart-api", text_mode="off", repair_rounds=0, planner_adapter=fake_planner)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["asset_policy"], "smart-api")
+            report = json.loads((out / "asset_generation_report.json").read_text(encoding="utf-8"))
+            self.assertFalse(report["final_crop_assets_allowed"])
+            statuses = {item["slot_id"]: item["status"] for item in report["assets"]}
+            self.assertEqual(statuses["robot_icon"], "crop_disabled_by_smart_api_policy_placeholder")
+            self.assertNotIn("misread_text_as_icon", statuses)
+            text_filter = json.loads((out / "text_asset_filter_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(text_filter["items"][0]["candidate_id"], "misread_text_as_icon")
+            program = json.loads((out / "figure_program.json").read_text(encoding="utf-8"))
+            self.assertEqual([slot["id"] for slot in program["slots"]], ["robot_icon"])
+
+    def test_smart_api_policy_reuses_duplicate_complex_icons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference = _fixture(root / "pipeline.png")
+            out = root / "pro"
+
+            def fake_planner(_reference, _baseline, _text_geometry):
+                return {
+                    "canvas": {"width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                    "objects": [
+                        {"type": "canvas", "id": "canvas", "width_px": 640, "height_px": 360, "width_in": 12.0, "height_in": 6.75, "background": "#F7F3EA"},
+                        {"type": "asset_slot", "id": "executor_a_icon", "asset_id": "executor_a_icon", "bbox_percent": {"x": 0.20, "y": 0.25, "w": 0.12, "h": 0.18}, "asset_type": "tool_combo", "prompt_subject": "terminal and database icon"},
+                        {"type": "asset_slot", "id": "executor_b_icon", "asset_id": "executor_b_icon", "bbox_percent": {"x": 0.40, "y": 0.25, "w": 0.12, "h": 0.18}, "asset_type": "tool_combo", "prompt_subject": "terminal and database icon"},
+                    ],
+                }
+
+            with patch.dict("os.environ", {"API_BASE": "", "API_KEY": "", "GEMINI_API_KEY": "", "GEMINI_GEN_IMG_URL": ""}, clear=False):
+                result = rebuild_editable_pro(reference, out, asset_mode="api", asset_policy="smart-api", text_mode="off", repair_rounds=0, planner_adapter=fake_planner)
+            self.assertTrue(result["ok"])
+            report = json.loads((out / "asset_generation_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["api_requests_attempted"], 1)
+            statuses = {item["slot_id"]: item["status"] for item in report["assets"]}
+            self.assertEqual(statuses["executor_a_icon"], "api_failed_placeholder_fallback")
+            self.assertEqual(statuses["executor_b_icon"], "reused_from_group")
+            plan = json.loads((out / "api_asset_plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["unique_api_assets"], 1)
+            self.assertEqual(plan["reused_slots"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

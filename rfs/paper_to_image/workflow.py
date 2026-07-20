@@ -114,7 +114,9 @@ def run_paper_to_image(
     selected_template = select_template(template_profiles, paper_review, requested=template, target_ratio=str(preferences.get("aspect_ratio") or "auto"))
     if str(preferences.get("aspect_ratio") or "auto") == "auto":
         ratio = float(selected_template.get("source_aspect_ratio") or selected_template.get("aspect_ratio") or 16 / 9)
-        preferences["aspect_ratio"] = f"{ratio:.3f}:1.000"
+        preferences["template_source_aspect_ratio"] = round(ratio, 6)
+        preferences["aspect_ratio"] = "3:2" if ratio >= 1.25 else "2:3" if ratio <= 0.80 else "1:1"
+        preferences["generation_ratio_policy"] = "nearest_native_image2_canvas; preserve_template_internal_geometry; no_semantic_crop"
         write_json(root / "preferences.json", preferences)
     write_json(root / "selected_template.json", {"summary": "Automatically or explicitly selected content-free architecture template.", **selected_template})
     blueprint_report = render_layout_blueprint(selected_template, root / "layout_blueprint.png", target_ratio=preferences["aspect_ratio"])

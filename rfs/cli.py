@@ -151,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--reference", required=True, help="Reference image path.")
     rebuild.add_argument("--out", required=True, help="Output directory.")
     rebuild.add_argument("--asset-mode", choices=["api", "crop", "placeholder"], default="api", help="Slot asset source. Default api uses GEMINI_GEN_IMG_URL.")
+    rebuild.add_argument("--asset-policy", choices=["legacy", "smart-api"], default="smart-api", help="Slot asset decision policy. Default smart-api filters text slots, reuses duplicate assets, and disables final crop assets.")
     rebuild.add_argument("--asset-workers", type=int, default=4, help="Parallel asset workers, clamped by the pipeline to 1-12. Default: 4.")
     rebuild.add_argument("--asset-retries", type=int, default=1, help="Retries per slot in strict mode. Default: 1.")
     rebuild.add_argument("--economy-mode", dest="economy_mode", action="store_true", default=True, help="Reuse accepted/passing assets and generate each failed slot once. Enabled by default.")
@@ -179,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_pro.add_argument("--reference", required=True, help="Reference image path.")
     rebuild_pro.add_argument("--out", required=True, help="Output directory.")
     rebuild_pro.add_argument("--asset-mode", choices=["api", "crop", "placeholder"], default="api", help="Slot asset source. Default api uses GEMINI_GEN_IMG_URL.")
+    rebuild_pro.add_argument("--asset-policy", choices=["legacy", "smart-api"], default="smart-api", help="Slot asset decision policy. Default smart-api disables final crop assets, filters text slots, and reuses duplicate API assets.")
     rebuild_pro.add_argument("--asset-workers", type=int, default=4, help="Parallel asset workers, clamped by the pipeline to 1-12. Default: 4.")
     rebuild_pro.add_argument("--asset-retries", type=int, default=1, help="Retries per slot in strict mode. Default: 1.")
     rebuild_pro.add_argument("--economy-mode", dest="economy_mode", action="store_true", default=True, help="Reuse accepted/passing assets and generate each failed slot once. Enabled by default.")
@@ -230,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_human(data: dict) -> None:
     if "ok" in data:
         print(f"ok: {data['ok']}")
-    for key in ["out_dir", "selected_image", "engineering_preview", "candidate_count", "selected_candidate_id", "selected_passed_all_checks", "planner_mode", "planner_model", "paper_review_mode", "domain_profile", "template_id", "review_mode", "approved_image", "thresholds_met", "stop_reason", "rounds_completed", "online_judge_model", "frozen_judge_model", "weak_judge_isolation", "pptx", "pdf", "png", "preview", "asset_count", "slot_count", "slot_source", "asset_mode", "asset_workers", "asset_retries", "economy_mode", "api_requests_attempted", "text_count", "connector_count", "text_mode", "layout_mode", "control_mode", "professional_mode", "repair_rounds", "planner_status", "compile_only", "candidates_per_slot", "asset_review_mode", "locator_mode", "control_localizer_mode", "arrow_style_mode", "prompt_plan_mode", "prompt_plan_workers", "complexity_profile", "critic_mode", "critic_iterations", "text_extractor_mode", "ocr_engine", "ocr_lang"]:
+    for key in ["out_dir", "selected_image", "engineering_preview", "candidate_count", "selected_candidate_id", "selected_passed_all_checks", "planner_mode", "planner_model", "paper_review_mode", "domain_profile", "template_id", "review_mode", "approved_image", "thresholds_met", "stop_reason", "rounds_completed", "online_judge_model", "frozen_judge_model", "weak_judge_isolation", "pptx", "pdf", "png", "preview", "asset_count", "slot_count", "slot_source", "asset_mode", "asset_policy", "asset_workers", "asset_retries", "economy_mode", "api_requests_attempted", "text_count", "connector_count", "text_mode", "layout_mode", "control_mode", "professional_mode", "repair_rounds", "planner_status", "compile_only", "candidates_per_slot", "asset_review_mode", "locator_mode", "control_localizer_mode", "arrow_style_mode", "prompt_plan_mode", "prompt_plan_workers", "complexity_profile", "critic_mode", "critic_iterations", "text_extractor_mode", "ocr_engine", "ocr_lang"]:
         if key in data:
             print(f"{key}: {data[key]}")
     if data.get("presentations_qa"):
@@ -341,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
                 vlm_layout_adapter=rebuild_adapters["layout"] if args.layout_mode in {"vlm", "hybrid"} else None,
                 control_adapter=rebuild_adapters["control"] if args.control_mode in {"vlm", "hybrid"} else None,
                 semantic_adapter=rebuild_adapters["semantic"] if args.layout_mode in {"vlm", "hybrid"} or args.control_mode in {"vlm", "hybrid"} else None,
+                asset_policy=args.asset_policy,
             )
         elif args.command == "rebuild-editable-eval":
             result = evaluate_rebuild_vlm(
@@ -374,6 +377,7 @@ def main(argv: list[str] | None = None) -> int:
                 semantic_adapter=rebuild_adapters["semantic"] if args.layout_mode in {"vlm", "hybrid"} or args.control_mode in {"vlm", "hybrid"} else None,
                 repair_adapter=vlm_professional_repair_adapter if args.repair_mode == "vlm" else None,
                 benchmark_out=args.benchmark_out,
+                asset_policy=args.asset_policy,
             )
         elif args.command == "coevolve-image":
             result = run_image_coevolution(

@@ -21,7 +21,7 @@ rfs rebuild-editable --reference input.png --out output\demo --asset-mode api --
 For higher-quality reference-only reproduction, use the scripted professional workflow. It asks the VLM to generate a controlled Figure DSL that mimics the best one-off rebuild scripts, then compiles that DSL safely:
 
 ```powershell
-rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode api --repair-rounds 2 --export-preview
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode api --asset-policy smart-api --repair-rounds 2 --export-preview
 ```
 
 The evaluation command is:
@@ -99,7 +99,7 @@ Never write API keys into source files, docs, fixtures, or committed outputs.
 
 ### 1. Start With A Cost-Safe Evaluation
 
-Use crop assets first. This validates layout/control/semantic VLM quality without spending image-generation credits:
+Use crop/placeholder assets first only as an engineering check. The evaluator may use crop for cost-safe structure comparison; production/pro runs should use `smart-api` so crop is not inserted as a final PPT asset:
 
 ```powershell
 rfs rebuild-editable-eval `
@@ -136,6 +136,7 @@ rfs rebuild-editable `
   --reference "C:\path\figure.png" `
   --out "output\editable_rebuild" `
   --asset-mode api `
+  --asset-policy smart-api `
   --layout-mode hybrid `
   --control-mode hybrid `
   --text-mode ocr `
@@ -215,6 +216,7 @@ A result is acceptable only if:
 - Complex visuals are slot-level assets under `assets/`.
 - `rebuild_vlm_validation_report.json` has `status: pass` or only explainable warnings.
 - `asset_generation_report.json` records API request counts and fallbacks.
+- `asset_decision_report.json`, `text_asset_filter_report.json`, and `api_asset_plan.json` explain which slots are API-generated, reused, or rejected as text.
 - `reference_geometry_overlay.png` and `reference_controls_overlay.png` visually match the reference closely enough for the current stage.
 
 For `rfs rebuild-editable-pro`, additionally check:
@@ -258,10 +260,10 @@ Use these modes deliberately:
 rfs rebuild-editable --reference input.png --out output\placeholder --asset-mode placeholder --layout-mode heuristic --control-mode heuristic
 
 # VLM structure test without image generation cost.
-rfs rebuild-editable --reference input.png --out output\crop --asset-mode crop --layout-mode hybrid --control-mode hybrid
+rfs rebuild-editable --reference input.png --out output\crop --asset-mode crop --asset-policy smart-api --layout-mode hybrid --control-mode hybrid
 
 # Full quality run.
-rfs rebuild-editable --reference input.png --out output\api --asset-mode api --layout-mode hybrid --control-mode hybrid
+rfs rebuild-editable --reference input.png --out output\api --asset-mode api --asset-policy smart-api --layout-mode hybrid --control-mode hybrid
 ```
 
 Default economy behavior:
@@ -325,7 +327,7 @@ Action:
 
 - Inspect `asset_generation_specs.json` for `generation_aspect_ratio`, `main_subject_fill_target`, and `prompt_subject`.
 - Regenerate only failed slots with `--regenerate-slots`.
-- Do not globally crop assets unless the user explicitly approves a controlled trim experiment.
+- Do not use reference crops as final PPT assets in smart-api/pro runs. Crops are context for API generation only.
 
 ## Test Commands
 

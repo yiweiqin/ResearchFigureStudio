@@ -108,6 +108,7 @@ def _compile_professional(
     generate_assets: bool = True,
     baseline_program: dict | None = None,
     benchmark_out: str | Path | None = None,
+    asset_policy: str = "smart-api",
 ) -> dict:
     normalized, validation = validate_and_normalize_dsl(dsl, archived_reference, out)
     write_json(out / "professional_rebuild_script.dsl.json", normalized)
@@ -134,7 +135,10 @@ def _compile_professional(
     _draw_geometry_overlay(archived_reference, out, program)
     _draw_controls_overlay(archived_reference, out, program.get("arrows", []))
 
-    specs = _make_asset_specs(program, archived_reference, out)
+    specs = _make_asset_specs(program, archived_reference, out, asset_policy=asset_policy)
+    if asset_policy == "smart-api":
+        _write_contracts_from_program(out, program, planner_report)
+        _draw_geometry_overlay(archived_reference, out, program)
     write_json(out / "asset_generation_specs.json", {"summary": "Professional DSL slot-level asset generation specs.", "asset_mode": asset_mode, "specs": specs})
     regen: set[str] = set()
     if isinstance(regenerate_slots, str):
@@ -142,7 +146,7 @@ def _compile_professional(
     elif isinstance(regenerate_slots, list):
         regen = {str(item).strip() for item in regenerate_slots if str(item).strip()}
     if generate_assets:
-        asset_reports, asset_summary = _generate_assets(specs, program, out, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration)
+        asset_reports, asset_summary = _generate_assets(specs, program, out, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration, asset_policy=asset_policy)
     else:
         program["assets"] = [{"id": spec["asset_id"], "path": f"assets/{spec['asset_id']}.png", "source": "slot_asset"} for spec in specs]
         existing_report = _load_json_or_empty(out / "asset_generation_report.json")
@@ -168,6 +172,7 @@ def _compile_professional(
         "rebuild_editable_summary": counts,
         "dsl_validation": validation,
         "asset_count": len(asset_reports),
+        "asset_policy": asset_policy,
         "professional_gap_report": gap_report,
         "no_full_image_policy": {
             "status": "pass",
@@ -183,6 +188,7 @@ def _compile_professional(
         "pptx": str(pptx_path),
         "preview": str(preview) if preview else None,
         "asset_mode": asset_mode,
+        "asset_policy": asset_policy,
         "asset_workers": asset_workers,
         "asset_retries": asset_retries,
         "economy_mode": economy_mode,
@@ -202,6 +208,9 @@ def _compile_professional(
             "figure_program": str(out / "figure_program.json"),
             "composition_quality_report": str(out / "composition_quality_report.json"),
             "professional_gap_report": str(out / "professional_gap_report.json"),
+            "asset_decision_report": str(out / "asset_decision_report.json"),
+            "text_asset_filter_report": str(out / "text_asset_filter_report.json"),
+            "api_asset_plan": str(out / "api_asset_plan.json"),
         },
     }
 
@@ -229,6 +238,7 @@ def rebuild_editable_pro(
     planner_adapter: Callable | None = None,
     repair_adapter: Callable | None = None,
     benchmark_out: str | Path | None = None,
+    asset_policy: str = "smart-api",
 ) -> dict:
     reference_path = Path(reference)
     if not reference_path.exists():
@@ -243,6 +253,7 @@ def rebuild_editable_pro(
         "reference": str(reference_path),
         "archived_reference": str(archived_reference),
         "asset_mode": asset_mode,
+        "asset_policy": asset_policy,
         "text_mode": text_mode,
         "control_mode": control_mode,
         "layout_mode": layout_mode,
@@ -273,6 +284,7 @@ def rebuild_editable_pro(
             generate_assets=False,
             baseline_program=None,
             benchmark_out=benchmark_out,
+            asset_policy=asset_policy,
         )
         result["compile_only"] = True
         write_json(out_path / "rebuild_result.json", result)
@@ -298,6 +310,7 @@ def rebuild_editable_pro(
         vlm_layout_adapter=vlm_layout_adapter,
         control_adapter=control_adapter,
         semantic_adapter=semantic_adapter,
+        asset_policy="legacy",
     )
     baseline_program = _load_json_or_empty(out_path / "figure_program.json")
     if not baseline_program:
@@ -324,6 +337,7 @@ def rebuild_editable_pro(
         export_preview,
         baseline_program=baseline_program,
         benchmark_out=benchmark_out,
+        asset_policy=asset_policy,
     )
     repair_reports = run_professional_repair_rounds(archived_reference, out_path, dsl, repair_rounds=repair_rounds, repair_adapter=repair_adapter)
     if any(int(item.get("applied_count") or 0) > 0 for item in repair_reports):
@@ -343,6 +357,7 @@ def rebuild_editable_pro(
             export_preview,
             baseline_program=baseline_program,
             benchmark_out=benchmark_out,
+            asset_policy=asset_policy,
         )
     result["repair_rounds"] = len(repair_reports)
     result["planner_status"] = planner_report.get("status")

@@ -36,6 +36,10 @@ ASSET_THRESHOLDS = {
 }
 
 
+TEXT_ASSET_OVERLAP_THRESHOLD = 0.60
+SIMPLE_PRIMITIVE_TYPES = {"legend_marker", "simple_marker", "status_marker", "node_marker"}
+
+
 def _bbox(x: float, y: float, w: float, h: float) -> dict[str, float]:
     x = max(0.0, min(0.995, x))
     y = max(0.0, min(0.995, y))
@@ -385,7 +389,157 @@ def _load_accepted_assets(path: Path) -> dict:
     return {}
 
 
-def _make_asset_specs(program: dict, reference_path: Path, out: Path) -> list[dict]:
+def _bbox_overlap_ratio(a: dict, b: dict) -> float:
+    ax1, ay1 = float(a["x"]), float(a["y"])
+    ax2, ay2 = ax1 + float(a["w"]), ay1 + float(a["h"])
+    bx1, by1 = float(b["x"]), float(b["y"])
+    bx2, by2 = bx1 + float(b["w"]), by1 + float(b["h"])
+    ix = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    iy = max(0.0, min(ay2, by2) - max(ay1, by1))
+    return (ix * iy) / max(float(a["w"]) * float(a["h"]), 0.000001)
+
+
+def _text_program_boxes(program: dict) -> list[dict]:
+    text_program = program.get("text_program") if isinstance(program.get("text_program"), dict) else {}
+    boxes = []
+    for item in text_program.get("items", []) or []:
+        if not isinstance(item, dict) or not isinstance(item.get("bbox_percent"), dict):
+            continue
+        if not str(item.get("text") or "").strip():
+            continue
+        boxes.append(item)
+    return boxes
+
+
+def _normalized_reuse_key(spec: dict) -> str:
+    import re
+
+    subject = str(spec.get("prompt_subject") or spec.get("semantic_role") or spec.get("slot_id") or "").lower()
+    subject = re.sub(r"\b(executor|branch|step|slot|icon)\s*[a-z0-9]*\b", " ", subject)
+    subject = re.sub(r"\b[a-d]\b|\b[0-9]+\b", " ", subject)
+    subject = re.sub(r"[^a-z0-9]+", " ", subject).strip()
+    if not subject:
+        subject = str(spec.get("asset_type") or spec.get("slot_type") or "generic")
+    return f"{spec.get('asset_type') or spec.get('slot_type') or 'generic'}::{subject}"
+
+
+def _apply_smart_asset_policy(specs: list[dict], program: dict, out: Path, asset_policy: str) -> list[dict]:
+    text_items = _text_program_boxes(program)
+    filtered: list[dict] = []
+    text_filter_report = []
+    decision_report = []
+    api_plan = {
+        "summary": "Smart API asset plan. Reference crops are only prompt/context inputs; they are not final PPT assets.",
+        "asset_policy": asset_policy,
+        "unique_api_assets": 0,
+        "reused_slots": 0,
+        "skipped_text_regions": 0,
+        "ppt_primitive_slots": 0,
+        "estimated_api_requests": 0,
+        "reuse_groups": [],
+        "recommended_api_slots": [],
+    }
+
+    for spec in specs:
+        slot_id = str(spec["slot_id"])
+        bbox = spec["slot_bbox_percent"]
+        overlaps = [
+            {
+                "text_id": item.get("id"),
+                "text": item.get("text"),
+                "overlap_ratio": round(_bbox_overlap_ratio(bbox, item["bbox_percent"]), 4),
+            }
+            for item in text_items
+        ]
+        best = max(overlaps, key=lambda item: item["overlap_ratio"], default=None)
+        if best and float(best["overlap_ratio"]) >= TEXT_ASSET_OVERLAP_THRESHOLD:
+            spec["asset_decision"] = "text_region"
+            spec["asset_generation_mode"] = "skip_asset"
+            spec["asset_decision_reason"] = f"OCR/DSL text overlap {best['overlap_ratio']:.2f}; region is primarily editable text."
+            text_filter_report.append({
+                "candidate_id": slot_id,
+                "rejected_as_asset": True,
+                "converted_to": "existing_editable_text",
+                "reason": spec["asset_decision_reason"],
+                "matched_text_id": best.get("text_id"),
+                "matched_text": best.get("text"),
+                "ocr_or_text_overlap": best.get("overlap_ratio"),
+            })
+            decision_report.append({
+                "slot_id": slot_id,
+                "decision": "text_region",
+                "needs_api": False,
+                "reason": spec["asset_decision_reason"],
+            })
+            api_plan["skipped_text_regions"] += 1
+            continue
+        if str(spec.get("asset_type") or spec.get("slot_type") or "").lower() in SIMPLE_PRIMITIVE_TYPES:
+            spec["asset_decision"] = "ppt_primitive"
+            spec["asset_generation_mode"] = "skip_asset"
+            spec["asset_decision_reason"] = "Simple marker should be represented by editable PPT primitives, not an image asset."
+            decision_report.append({
+                "slot_id": slot_id,
+                "decision": "ppt_primitive",
+                "needs_api": False,
+                "reason": spec["asset_decision_reason"],
+            })
+            api_plan["ppt_primitive_slots"] += 1
+            continue
+        spec["asset_decision"] = "api_generated"
+        spec["asset_generation_mode"] = "api"
+        spec["asset_decision_reason"] = "Complex non-text visual slot; final asset should be API-generated from reference crop context."
+        spec["reuse_group_key"] = _normalized_reuse_key(spec)
+        filtered.append(spec)
+
+    primary_by_key: dict[str, dict] = {}
+    reuse_groups: dict[str, list[str]] = {}
+    for spec in filtered:
+        key = str(spec["reuse_group_key"])
+        reuse_groups.setdefault(key, []).append(str(spec["slot_id"]))
+        if key not in primary_by_key:
+            primary_by_key[key] = spec
+            decision = "api_generated"
+            api_plan["unique_api_assets"] += 1
+            api_plan["recommended_api_slots"].append(str(spec["slot_id"]))
+        else:
+            primary = primary_by_key[key]
+            spec["asset_decision"] = "reuse_existing"
+            spec["asset_generation_mode"] = "reuse_existing"
+            spec["reuse_source_slot_id"] = primary["slot_id"]
+            spec["reuse_source_asset_id"] = primary["asset_id"]
+            decision = "reuse_existing"
+            api_plan["reused_slots"] += 1
+        decision_report.append({
+            "slot_id": spec["slot_id"],
+            "decision": decision,
+            "reused_asset_id": spec.get("reuse_source_asset_id"),
+            "reuse_group_key": key,
+            "needs_api": decision == "api_generated",
+            "reason": spec.get("asset_decision_reason"),
+        })
+    api_plan["estimated_api_requests"] = api_plan["unique_api_assets"]
+    api_plan["reuse_groups"] = [
+        {"reuse_group_key": key, "slots": slots}
+        for key, slots in sorted(reuse_groups.items())
+        if len(slots) > 1
+    ]
+    kept_slot_ids = {str(spec["slot_id"]) for spec in filtered}
+    program["slots"] = [slot for slot in program.get("slots", []) if str(slot.get("id")) in kept_slot_ids]
+    write_json(out / "asset_decision_report.json", {
+        "summary": "Slot-level asset decisions. In smart-api mode, final crop assets are disabled; crops are only API reference inputs.",
+        "asset_policy": asset_policy,
+        "decisions": decision_report,
+    })
+    write_json(out / "text_asset_filter_report.json", {
+        "summary": "Text-like candidate slots rejected before asset generation.",
+        "overlap_threshold": TEXT_ASSET_OVERLAP_THRESHOLD,
+        "items": text_filter_report,
+    })
+    write_json(out / "api_asset_plan.json", api_plan)
+    return filtered
+
+
+def _make_asset_specs(program: dict, reference_path: Path, out: Path, asset_policy: str = "legacy") -> list[dict]:
     specs = []
     background = str(program["canvas"].get("background") or "#FFFFFF")
     for slot in program["slots"]:
@@ -426,6 +580,22 @@ def _make_asset_specs(program: dict, reference_path: Path, out: Path) -> list[di
             "no_crop_postprocess": True,
         }
         specs.append(spec)
+    if asset_policy == "smart-api":
+        return _apply_smart_asset_policy(specs, program, out, asset_policy)
+    write_json(out / "asset_decision_report.json", {
+        "summary": "Legacy asset decision report.",
+        "asset_policy": asset_policy,
+        "decisions": [{"slot_id": spec["slot_id"], "decision": asset_policy, "needs_api": asset_policy == "api"} for spec in specs],
+    })
+    write_json(out / "text_asset_filter_report.json", {
+        "summary": "Text asset filter disabled in legacy asset policy.",
+        "items": [],
+    })
+    write_json(out / "api_asset_plan.json", {
+        "summary": "API asset plan disabled in legacy asset policy.",
+        "asset_policy": asset_policy,
+        "estimated_api_requests": len(specs) if asset_policy == "api" else 0,
+    })
     return specs
 
 
@@ -439,6 +609,7 @@ def _generate_assets(
     economy_mode: bool,
     regenerate_slots: set[str],
     strict_asset_regeneration: bool,
+    asset_policy: str = "legacy",
 ) -> tuple[list[dict], dict]:
     asset_dir = ensure_dir(out / "assets")
     accepted = _load_accepted_assets(out / "accepted_assets.json")
@@ -448,6 +619,14 @@ def _generate_assets(
     def run_one(spec: dict) -> dict:
         slot_id = spec["slot_id"]
         out_path = asset_dir / f"{spec['asset_id']}.png"
+        if spec.get("asset_decision") == "reuse_existing":
+            source_asset = asset_dir / f"{spec['reuse_source_asset_id']}.png"
+            if source_asset.exists():
+                shutil.copyfile(source_asset, out_path)
+                metrics = _foreground_metrics(out_path, spec["background_color_hex"])
+                decision = economy_acceptance_decision(spec["slot_type"], metrics.get("foreground_bbox_fill_percent", 0.0), strict=False)
+                return {**spec, **metrics, **decision, "status": "reused_from_group", "asset_path": str(out_path), "api_requests_attempted": 0, "economy_decision": "reuse_group_asset", "fallback_used": False}
+            return {**spec, "status": "reuse_source_missing", "asset_path": str(out_path), "api_requests_attempted": 0, "fallback_used": True, "error": f"reuse source missing: {source_asset}"}
         locked = bool(accepted.get(slot_id, {}).get("accepted")) or bool(accepted.get(spec["asset_id"], {}).get("accepted"))
         if out_path.exists() and economy_mode and slot_id not in regenerate_slots and not strict_asset_regeneration:
             metrics = _foreground_metrics(out_path, spec["background_color_hex"])
@@ -463,10 +642,14 @@ def _generate_assets(
                     _placeholder_asset({"id": slot_id, "bbox_percent": spec["slot_bbox_percent"]}, out_path, spec["background_color_hex"])
                     request_count = 0
                     status = "placeholder"
-                elif asset_mode == "crop":
+                elif asset_mode == "crop" and asset_policy != "smart-api":
                     shutil.copyfile(crop_path, out_path)
                     request_count = 0
                     status = "reference_crop"
+                elif asset_mode == "crop" and asset_policy == "smart-api":
+                    _placeholder_asset({"id": slot_id, "bbox_percent": spec["slot_bbox_percent"]}, out_path, spec["background_color_hex"])
+                    request_count = 0
+                    status = "crop_disabled_by_smart_api_policy_placeholder"
                 else:
                     result = _api_generate_asset(spec, crop_path, out_path)
                     request_count = int(result.get("api_requests_attempted", 1))
@@ -486,7 +669,7 @@ def _generate_assets(
                 }
             except Exception as exc:
                 last_error = str(exc)
-                if asset_mode == "api":
+                if asset_mode == "api" and asset_policy != "smart-api":
                     try:
                         shutil.copyfile(crop_path, out_path)
                         metrics = _foreground_metrics(out_path, spec["background_color_hex"])
@@ -505,20 +688,47 @@ def _generate_assets(
                         }
                     except Exception:
                         pass
+                if asset_mode == "api" and asset_policy == "smart-api":
+                    try:
+                        _placeholder_asset({"id": slot_id, "bbox_percent": spec["slot_bbox_percent"]}, out_path, spec["background_color_hex"])
+                        metrics = _foreground_metrics(out_path, spec["background_color_hex"])
+                        decision = economy_acceptance_decision(spec["slot_type"], metrics.get("foreground_bbox_fill_percent", 0.0), strict=False)
+                        return {
+                            **spec,
+                            **metrics,
+                            **decision,
+                            "status": "api_failed_placeholder_fallback",
+                            "asset_path": str(out_path),
+                            "api_requests_attempted": 1,
+                            "attempt": attempt,
+                            "economy_decision": "placeholder_after_api_error_crop_disabled",
+                            "fallback_used": True,
+                            "error": last_error,
+                        }
+                    except Exception:
+                        pass
         return {**spec, "status": "failed", "asset_path": str(out_path), "api_requests_attempted": 0, "fallback_used": True, "error": last_error}
 
+    primary_specs = [spec for spec in specs if spec.get("asset_decision") != "reuse_existing"]
+    reuse_specs = [spec for spec in specs if spec.get("asset_decision") == "reuse_existing"]
     workers = max(1, min(int(asset_workers), 12))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(run_one, spec) for spec in specs]
+        futures = [pool.submit(run_one, spec) for spec in primary_specs]
         for future in as_completed(futures):
             report = future.result()
             reports.append(report)
             api_requests += int(report.get("api_requests_attempted") or 0)
+    for spec in reuse_specs:
+        report = run_one(spec)
+        reports.append(report)
+        api_requests += int(report.get("api_requests_attempted") or 0)
     reports.sort(key=lambda item: str(item.get("slot_id")))
     program["assets"] = [{"id": spec["asset_id"], "path": f"assets/{spec['asset_id']}.png", "source": "slot_asset"} for spec in specs]
     summary = {
         "summary": "Asset generation report for reusable editable rebuild workflow.",
         "asset_mode": asset_mode,
+        "asset_policy": asset_policy,
+        "final_crop_assets_allowed": asset_policy != "smart-api",
         "economy_mode": economy_mode,
         "asset_retries": asset_retries,
         "strict_asset_regeneration": strict_asset_regeneration,
@@ -531,6 +741,7 @@ def _generate_assets(
         "accepted_assets_file": str(out / "accepted_assets.json"),
         "regenerate_slots": sorted(regenerate_slots),
         "thresholds": {key: {"min": value[0], "max": value[1]} for key, value in ASSET_THRESHOLDS.items()},
+        "asset_policy": asset_policy,
         "assets": [{
             "slot_id": item.get("slot_id"),
             "slot_type": item.get("slot_type"),
@@ -710,6 +921,7 @@ def rebuild_editable(
     vlm_layout_adapter: Callable | None = None,
     control_adapter: Callable | None = None,
     semantic_adapter: Callable | None = None,
+    asset_policy: str = "legacy",
 ) -> dict:
     reference_path = Path(reference)
     if not reference_path.exists():
@@ -728,6 +940,7 @@ def rebuild_editable(
         "text_mode": text_mode,
         "control_mode": control_mode,
         "layout_mode": layout_mode,
+        "asset_policy": asset_policy,
         "skip_analysis": skip_analysis,
         "compile_only": compile_only,
     })
@@ -789,14 +1002,18 @@ def rebuild_editable(
         write_json(out_path / "slot_semantic_report.json", semantic_report)
     write_json(out_path / "slot_inventory.json", {"summary": "Visual asset slot inventory.", "slots": program["slots"]})
 
-    specs = _make_asset_specs(program, archived_reference, out_path)
+    specs = _make_asset_specs(program, archived_reference, out_path, asset_policy=asset_policy)
+    if asset_policy == "smart-api":
+        reference_geometry["slots"] = program.get("slots", [])
+        write_json(out_path / "reference_geometry.json", reference_geometry)
+        write_json(out_path / "slot_inventory.json", {"summary": "Visual asset slot inventory.", "slots": program["slots"]})
     write_json(out_path / "asset_generation_specs.json", {"summary": "Slot-level asset generation specs.", "asset_mode": asset_mode, "specs": specs})
     regen = set()
     if isinstance(regenerate_slots, str):
         regen = {item.strip() for item in regenerate_slots.split(",") if item.strip()}
     elif isinstance(regenerate_slots, list):
         regen = {str(item).strip() for item in regenerate_slots if str(item).strip()}
-    asset_reports, asset_summary = _generate_assets(specs, program, out_path, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration)
+    asset_reports, asset_summary = _generate_assets(specs, program, out_path, asset_mode, asset_workers, asset_retries, economy_mode, regen, strict_asset_regeneration, asset_policy=asset_policy)
     vlm_validation_report = build_rebuild_vlm_validation_report(out_path, reference_geometry, reference_controls, semantic_report, asset_summary)
 
     write_json(out_path / "figure_program.json", program)
@@ -828,6 +1045,7 @@ def rebuild_editable(
         "asset_workers": asset_workers,
         "asset_retries": asset_retries,
         "economy_mode": economy_mode,
+        "asset_policy": asset_policy,
         "api_requests_attempted": asset_summary.get("api_requests_attempted", 0),
         "asset_count": len(asset_reports),
         "slot_count": len(program.get("slots", [])),
@@ -847,6 +1065,9 @@ def rebuild_editable(
             "asset_generation_specs": str(out_path / "asset_generation_specs.json"),
             "asset_generation_report": str(out_path / "asset_generation_report.json"),
             "asset_economy_report": str(out_path / "asset_economy_report.json"),
+            "asset_decision_report": str(out_path / "asset_decision_report.json"),
+            "text_asset_filter_report": str(out_path / "text_asset_filter_report.json"),
+            "api_asset_plan": str(out_path / "api_asset_plan.json"),
             "figure_program": str(out_path / "figure_program.json"),
             "composition_quality_report": str(out_path / "composition_quality_report.json"),
         },

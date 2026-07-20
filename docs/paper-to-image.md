@@ -48,6 +48,10 @@ Positive references are classified as `arbor`, `linear`, `tripanel`, or `dense-m
 
 The selected profile is rendered as `layout_blueprint.png`. The blueprint contains no reference text or reference-specific objects and is the only image supplied to Image2 edit for initial candidates.
 
+When `--aspect-ratio auto` is used, the template keeps its internal normalized
+geometry while the generation canvas uses the nearest native Image2 ratio
+(`3:2`, `2:3`, or `1:1`). This avoids semantic cropping after generation.
+
 ## Production Gates
 
 Every Image2 candidate must pass:

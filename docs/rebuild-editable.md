@@ -31,13 +31,13 @@ rfs rebuild-editable --reference input.png --out output\demo --asset-mode api --
 Professional scripted rebuild:
 
 ```powershell
-rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode api --repair-rounds 2 --export-preview
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode api --asset-policy smart-api --repair-rounds 2 --export-preview
 ```
 
 Compare against a known high-quality specialized rebuild:
 
 ```powershell
-rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode crop --benchmark-out output\autofigure_architecture_ai_rebuild
+rfs rebuild-editable-pro --reference input.png --out output\demo_pro --asset-mode crop --asset-policy smart-api --benchmark-out output\autofigure_architecture_ai_rebuild
 ```
 
 Offline professional smoke test:
@@ -52,6 +52,7 @@ rfs rebuild-editable-pro --reference input.png --out output\demo_pro_placeholder
 --reference              Input reference image.
 --out                    Output directory.
 --asset-mode             api | crop | placeholder. Default: api.
+--asset-policy           legacy | smart-api. Default: smart-api. Use legacy only for old crop-fallback behavior.
 --asset-workers          Parallel asset workers. Default: 4.
 --asset-retries          Retries used by strict regeneration. Default: 1.
 --economy-mode           Reuse accepted/passing assets. Enabled by default.
@@ -76,6 +77,8 @@ rebuild-editable-pro     Use the controlled professional Figure DSL workflow.
 --benchmark-out          Optional specialized output directory for professional_gap_report.json.
 --compile-only           Recompile from professional_rebuild_script.dsl.json without VLM planning or asset API calls.
 ```
+
+`smart-api` disables final reference-crop assets. Local crops are still saved and passed as API reference context, but final PPT assets are API-generated, reused from another generated slot, or skipped when the region is primarily editable text. If `--asset-mode crop --asset-policy smart-api` is used for a low-cost dry run, the final visual asset is a placeholder and the report records `crop_disabled_by_smart_api_policy_placeholder`.
 
 ## API Environment
 
@@ -112,7 +115,7 @@ $env:GEMINI_API_KEY=$env:API_KEY
 $env:GEMINI_GEN_IMG_URL='https://your-provider/v1beta/models/your-image-model:generateContent'
 ```
 
-If the API call fails for a slot, v1 falls back to the reference crop for that slot and records the failure in `asset_generation_report.json`.
+With `--asset-policy legacy`, if the API call fails for a slot, v1 falls back to the reference crop for that slot and records the failure in `asset_generation_report.json`. With `--asset-policy smart-api`, crop fallback is disabled; API failure falls back to a placeholder and records `api_failed_placeholder_fallback`.
 
 ## Output Files
 
@@ -131,6 +134,9 @@ asset_generation_specs.json
 asset_generation_report.json
 asset_economy_report.json
 asset_ratio_fit_report.json
+asset_decision_report.json
+text_asset_filter_report.json
+api_asset_plan.json
 figure_program.json
 composition_quality_report.json
 rebuild_vlm_validation_report.json
