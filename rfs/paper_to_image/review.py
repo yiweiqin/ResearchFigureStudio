@@ -272,7 +272,13 @@ def validate_review_coverage(review: dict, parsed: dict, domain_profile: dict, s
                 grounded += 1
             elif item.get("status") in {"required", "optional"}:
                 errors.append(f"{field}:{item.get('id')} lacks evidence")
-    module_ids = {item.get("id") for item in review.get("modules", [])} | {item.get("id") for item in review.get("research_objects", [])}
+    endpoint_fields = ("inputs", "outputs", "research_objects", "concepts", "modules", "innovations")
+    module_ids = {
+        item.get("id")
+        for field in endpoint_fields
+        for item in review.get(field, [])
+        if isinstance(item, dict) and item.get("id")
+    }
     for relation in review.get("relations", []):
         source = relation.get("source_id") or relation.get("source")
         target = relation.get("target_id") or relation.get("target")

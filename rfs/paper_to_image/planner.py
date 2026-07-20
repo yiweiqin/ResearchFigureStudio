@@ -359,6 +359,15 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         if invalid:
             errors.append(f"module {module_id or index + 1} references unknown evidence ids: {invalid}")
 
+    endpoint_ids = set(module_ids)
+    for field in ("inputs", "outputs", "innovations"):
+        for index, item in enumerate(spec.get(field) if isinstance(spec.get(field), list) else []):
+            if not isinstance(item, dict):
+                continue
+            endpoint_id = str(item.get("id") or item.get("name") or item.get("visible_label") or item.get("text") or "").strip()
+            if endpoint_id:
+                endpoint_ids.add(endpoint_id)
+
     relations = spec.get("relations") if isinstance(spec.get("relations"), list) else []
     for index, relation in enumerate(relations):
         if not isinstance(relation, dict):
@@ -366,7 +375,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
             continue
         source = str(relation.get("source") or "").strip()
         target = str(relation.get("target") or "").strip()
-        if source not in module_ids or target not in module_ids:
+        if source not in endpoint_ids or target not in endpoint_ids:
             errors.append(f"relation {index + 1} has unknown endpoint: {source} -> {target}")
         evidence_ids = relation.get("evidence_ids") if isinstance(relation.get("evidence_ids"), list) else []
         if not evidence_ids:

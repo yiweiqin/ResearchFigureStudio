@@ -20,6 +20,7 @@ from .rebuild_design_planner import plan_rebuild_design
 from .rebuild_preview_renderer import render_rebuild_preview
 from .rebuild_vlm_validation import build_rebuild_vlm_validation_report
 from .rebuild_visual_critic import run_rebuild_visual_quality_check
+from .semantic_contract import apply_paper_semantic_contract
 from .text_layer import build_text_layer
 from .utils import ensure_dir, read_json, write_json, write_text
 
@@ -937,6 +938,7 @@ def rebuild_editable(
     text_grouping_mode: str = "heuristic",
     text_grouping_model: str | None = None,
     text_grouping_adapter: Callable | None = None,
+    semantic_contract: dict | str | Path | None = None,
 ) -> dict:
     reference_path = Path(reference)
     if not reference_path.exists():
@@ -960,6 +962,7 @@ def rebuild_editable(
         "design_plan_model": design_plan_model,
         "text_grouping_mode": text_grouping_mode,
         "text_grouping_model": text_grouping_model,
+        "semantic_contract": str(semantic_contract) if isinstance(semantic_contract, (str, Path)) else ("inline" if semantic_contract else None),
         "skip_analysis": skip_analysis,
         "compile_only": compile_only,
     })
@@ -1039,6 +1042,10 @@ def rebuild_editable(
     elif not semantic_report:
         semantic_report = {"summary": "Semantic planning skipped by --skip-analysis.", "semantic_vlm_status": "skipped", "slots": []}
         write_json(out_path / "slot_semantic_report.json", semantic_report)
+    semantic_binding_report = {}
+    if semantic_contract:
+        contract = read_json(semantic_contract) if isinstance(semantic_contract, (str, Path)) else semantic_contract
+        program, semantic_binding_report = apply_paper_semantic_contract(program, contract, out_path)
     write_json(out_path / "slot_inventory.json", {"summary": "Visual asset slot inventory.", "slots": program["slots"]})
 
     specs = _make_asset_specs(program, archived_reference, out_path, asset_policy=asset_policy)
@@ -1105,6 +1112,7 @@ def rebuild_editable(
         "control_mode": control_mode,
         "layout_mode": layout_mode,
         "rebuild_visual_quality_status": visual_quality_report.get("status"),
+        "semantic_binding_status": semantic_binding_report.get("status") if semantic_binding_report else None,
         "reports": {
             "input_manifest": str(out_path / "input_manifest.json"),
             "reference_logic_plan": str(out_path / "reference_logic_plan.json"),
@@ -1118,6 +1126,7 @@ def rebuild_editable(
             "slot_semantic_report": str(out_path / "slot_semantic_report.json"),
             "rebuild_vlm_validation_report": str(out_path / "rebuild_vlm_validation_report.json"),
             "rebuild_visual_quality_report": str(out_path / "rebuild_visual_quality_report.json"),
+            "semantic_binding_report": str(out_path / "semantic_binding_report.json") if semantic_binding_report else None,
             "asset_generation_specs": str(out_path / "asset_generation_specs.json"),
             "asset_generation_report": str(out_path / "asset_generation_report.json"),
             "asset_economy_report": str(out_path / "asset_economy_report.json"),

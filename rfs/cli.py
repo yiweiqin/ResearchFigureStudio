@@ -10,6 +10,7 @@ from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
 from .paper_to_image import run_paper_to_image
+from .paper_to_editable import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
 from .professional_repair import vlm_professional_repair_adapter
 from .presentations_qa import run_presentations_qa
@@ -146,6 +147,37 @@ def build_parser() -> argparse.ArgumentParser:
     paper_image.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "vlm", "off"], default="auto", help="OCR source for exact-label validation. Auto tries local OCR and uses VLM review evidence. Default: auto.")
     paper_image.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     paper_image.add_argument("--json", action="store_true", help="Emit JSON.")
+
+    paper_editable = sub.add_parser("paper-to-editable", help="Generate a paper-grounded visual reference and rebuild it as an editable PowerPoint figure.")
+    paper_editable.add_argument("--paper", required=True, help="Paper PDF/LaTeX/Markdown/Word/text path.")
+    paper_editable.add_argument("--out", required=True, help="Output directory for paper analysis, image candidates, semantic contracts, and editable PPTX.")
+    paper_editable.add_argument("--preferences", help="Optional JSON file containing style and output preferences.")
+    paper_editable.add_argument("--positive-reference", action="append", default=[], help="Optional positive visual reference image. Repeat for multiple files.")
+    paper_editable.add_argument("--negative-reference", action="append", default=[], help="Optional negative visual reference image. Repeat for multiple files.")
+    paper_editable.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm")
+    paper_editable.add_argument("--planner-model")
+    paper_editable.add_argument("--image-asset-mode", choices=["image2", "gemini", "placeholder"], default="image2")
+    paper_editable.add_argument("--image-candidates", type=int, default=3)
+    paper_editable.add_argument("--aspect-ratio", default="auto")
+    paper_editable.add_argument("--language", default="English")
+    paper_editable.add_argument("--image-model")
+    paper_editable.add_argument("--image-retries", type=int, default=2)
+    paper_editable.add_argument("--review-mode", choices=["off", "heuristic", "vlm"], default="vlm")
+    paper_editable.add_argument("--review-model")
+    paper_editable.add_argument("--domain-profile", choices=["auto", "general", "ai-ml-method", "system-platform", "dataset-benchmark", "empirical-science", "survey-review"], default="auto")
+    paper_editable.add_argument("--template", choices=["auto", "arbor", "linear", "tripanel", "dense-multimodal"], default="auto")
+    paper_editable.add_argument("--repair-rounds", type=int, default=1)
+    paper_editable.add_argument("--rebuild-asset-mode", choices=["api", "crop", "placeholder"], default="api")
+    paper_editable.add_argument("--rebuild-asset-policy", choices=["legacy", "smart-api"], default="smart-api")
+    paper_editable.add_argument("--layout-mode", choices=["heuristic", "vlm", "hybrid"], default="hybrid")
+    paper_editable.add_argument("--control-mode", choices=["heuristic", "vlm", "hybrid", "manual"], default="hybrid")
+    paper_editable.add_argument("--text-mode", choices=["ocr", "manual", "off"], default="ocr")
+    paper_editable.add_argument("--design-plan-mode", choices=["off", "heuristic", "vlm"], default="vlm")
+    paper_editable.add_argument("--allow-engineering-preview", action="store_true", help="Allow offline/non-production image previews to exercise the editable pipeline. Never enabled by default.")
+    paper_editable.add_argument("--no-export-preview", action="store_true")
+    paper_editable.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "vlm", "off"], default="auto")
+    paper_editable.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
+    paper_editable.add_argument("--json", action="store_true", help="Emit JSON.")
 
     rebuild = sub.add_parser("rebuild-editable", help="Rebuild a reference image into a reusable editable PowerPoint composition.")
     rebuild.add_argument("--reference", required=True, help="Reference image path.")
@@ -322,6 +354,37 @@ def main(argv: list[str] | None = None) -> int:
                 domain_profile=args.domain_profile,
                 template=args.template,
                 repair_rounds=args.repair_rounds,
+                ocr_engine=args.ocr_engine,
+                ocr_lang=args.ocr_lang,
+            )
+        elif args.command == "paper-to-editable":
+            result = run_paper_to_editable(
+                paper=args.paper,
+                out=args.out,
+                preferences_path=args.preferences,
+                positive_references=args.positive_reference,
+                negative_references=args.negative_reference,
+                planner_mode=args.planner_mode,
+                planner_model=args.planner_model,
+                image_asset_mode=args.image_asset_mode,
+                image_candidates=args.image_candidates,
+                aspect_ratio=args.aspect_ratio,
+                language=args.language,
+                image_model=args.image_model,
+                image_retries=args.image_retries,
+                review_mode=args.review_mode,
+                review_model=args.review_model,
+                domain_profile=args.domain_profile,
+                template=args.template,
+                repair_rounds=args.repair_rounds,
+                rebuild_asset_mode=args.rebuild_asset_mode,
+                rebuild_asset_policy=args.rebuild_asset_policy,
+                layout_mode=args.layout_mode,
+                control_mode=args.control_mode,
+                text_mode=args.text_mode,
+                design_plan_mode=args.design_plan_mode,
+                export_preview=not args.no_export_preview,
+                allow_engineering_preview=args.allow_engineering_preview,
                 ocr_engine=args.ocr_engine,
                 ocr_lang=args.ocr_lang,
             )
