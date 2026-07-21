@@ -1,0 +1,15 @@
+{
+  "summary": "ICLR 2021 Vision Transformer case for a clean linear architecture figure.",
+  "case_id": "101_vit_linear",
+  "suite": "paper-to-image",
+  "tier": "real-paper-offline-contract",
+  "topology": "linear_pipeline",
+  "paper": "inputs/paper.pdf",
+  "source": "source.json",
+  "expected_semantics": "expected_semantics.json",
+  "preferences": "../../preferences/top_conference.json",
+  "positive_references": [],
+  "negative_references": [],
+  "run_config": {"planner_mode": "heuristic", "image_asset_mode": "placeholder", "image_candidates": 2, "review_mode": "heuristic", "aspect_ratio": "16:9", "ocr_engine": "off"},
+  "thresholds": {"entity_recall": 1.0, "relation_recall": 1.0, "exact_label_rate": 1.0, "hallucination_count": 0, "forbidden_content_count": 0}
+}

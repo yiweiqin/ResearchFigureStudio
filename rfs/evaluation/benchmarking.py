@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageChops, ImageFilter, ImageStat
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+import requests
 
 from ..utils import ensure_dir, read_json, write_json, write_text
 
@@ -37,7 +40,13 @@ def _clamp(value: object) -> float:
 
 
 def _threshold_failures(metrics: dict, thresholds: dict) -> list[str]:
-    maximum_metrics = {"hallucination_count", "forbidden_content_count", "full_slide_image_count", "blocking_visual_issue_count"}
+    maximum_metrics = {
+        "hallucination_count",
+        "forbidden_content_count",
+        "plan_forbidden_content_count",
+        "full_slide_image_count",
+        "blocking_visual_issue_count",
+    }
     failures = []
     for key, threshold in thresholds.items():
         value = metrics.get(key)
@@ -48,6 +57,70 @@ def _threshold_failures(metrics: dict, thresholds: dict) -> list[str]:
         elif key not in maximum_metrics and float(value) < float(threshold):
             failures.append(f"{key}={value} below minimum {threshold}")
     return failures
+
+
+def _normalized_text(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _score_planning_contract(expected: dict, specification: dict) -> dict[str, Any]:
+    if not specification:
+        return {"available": False}
+    actual_entities = []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        for index, item in enumerate(specification.get(field, []) if isinstance(specification.get(field), list) else []):
+            if not isinstance(item, dict):
+                continue
+            label = next((str(item.get(key) or "").strip() for key in ("visible_label", "name", "text", "statement", "label", "id") if str(item.get(key) or "").strip()), "")
+            actual_entities.append({"id": str(item.get("id") or f"{field}_{index}"), "label": label, "normalized": _normalized_text(label)})
+    expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
+    mapping: dict[str, str] = {}
+    matched = []
+    used_actual_ids: set[str] = set()
+    for item in expected_entities:
+        candidates = [str(item.get("label") or "")] + [str(value) for value in item.get("aliases", []) if str(value).strip()]
+        normalized = [_normalized_text(value) for value in candidates if _normalized_text(value)]
+        match = next(
+            (
+                actual
+                for actual in actual_entities
+                if actual["id"] not in used_actual_ids
+                and actual["normalized"]
+                and any(
+                    value == actual["normalized"]
+                    or value in actual["normalized"]
+                    or actual["normalized"] in value
+                    for value in normalized
+                )
+            ),
+            None,
+        )
+        if match:
+            mapping[str(item.get("id"))] = match["id"]
+            used_actual_ids.add(match["id"])
+            matched.append(str(item.get("id")))
+    expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
+    actual_relations = {
+        (str(item.get("source") or item.get("source_id") or ""), str(item.get("target") or item.get("target_id") or ""))
+        for item in specification.get("relations", [])
+        if isinstance(item, dict)
+    }
+    relation_matches = 0
+    for relation in expected_relations:
+        source = mapping.get(str(relation.get("source")))
+        target = mapping.get(str(relation.get("target")))
+        if source and target and (source, target) in actual_relations:
+            relation_matches += 1
+    actual_text = " ".join(item["label"] for item in actual_entities).casefold()
+    forbidden = [label for label in expected.get("forbidden_labels", []) if str(label).casefold() in actual_text]
+    return {
+        "available": True,
+        "entity_recall": _clamp(len(matched) / max(1, len(expected_entities))),
+        "relation_recall": _clamp(relation_matches / max(1, len(expected_relations))),
+        "matched_entity_ids": matched,
+        "missing_entity_ids": [str(item.get("id")) for item in expected_entities if str(item.get("id")) not in matched],
+        "forbidden_labels_found": forbidden,
+    }
 
 
 def validate_benchmark_case(case_dir: str | Path) -> dict[str, Any]:
@@ -65,7 +138,14 @@ def validate_benchmark_case(case_dir: str | Path) -> dict[str, Any]:
 
     required_files = ["case.json"]
     if suite == "paper-to-image":
-        required_files.extend([str(case.get("paper") or "paper.md"), str(case.get("expected_semantics") or "expected_semantics.json")])
+        paper_relative = str(case.get("paper") or "paper.md")
+        required_files.append(str(case.get("expected_semantics") or "expected_semantics.json"))
+        if not (root / paper_relative).exists():
+            source_path = root / str(case.get("source") or "source.json")
+            if source_path.exists():
+                warnings.append(f"paper input not fetched yet: {paper_relative}")
+            else:
+                errors.append(f"missing required file: {paper_relative}; no source.json is available")
         expected = _load(root / str(case.get("expected_semantics") or "expected_semantics.json"))
         if not expected.get("entities"):
             errors.append("expected_semantics.json requires entities")
@@ -98,6 +178,55 @@ def validate_benchmark_case(case_dir: str | Path) -> dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def fetch_benchmark_case(case_dir: str | Path, force: bool = False) -> dict[str, Any]:
+    root = Path(case_dir).resolve()
+    case = _load(root / "case.json")
+    source_path = root / str(case.get("source") or "source.json")
+    source = _load(source_path)
+    if str(case.get("suite") or "") != "paper-to-image":
+        return {"summary": "Benchmark source fetch is only required for paper-to-image cases.", "ok": True, "case_dir": str(root), "status": "not_required"}
+    if not source:
+        return {"summary": "Benchmark source metadata is missing.", "ok": False, "case_dir": str(root), "status": "missing_source", "error": str(source_path)}
+    target = root / str(case.get("paper") or "inputs/paper.pdf")
+    if target.exists() and not force:
+        return {
+            "summary": "Benchmark paper source already exists.",
+            "ok": True,
+            "case_dir": str(root),
+            "status": "reused",
+            "paper": str(target),
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        }
+    urls = source.get("paper_urls") if isinstance(source.get("paper_urls"), list) else []
+    errors = []
+    for url in urls:
+        try:
+            response = requests.get(str(url), headers={"User-Agent": "ResearchFigureStudio benchmark fetch/0.1"}, timeout=120)
+            response.raise_for_status()
+            content = response.content
+            if not content.startswith(b"%PDF"):
+                raise ValueError("downloaded response is not a PDF")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            digest = hashlib.sha256(content).hexdigest()
+            report = {
+                "summary": "Benchmark paper source fetched for local use.",
+                "ok": True,
+                "case_dir": str(root),
+                "status": "downloaded",
+                "paper": str(target),
+                "source_url": str(url),
+                "bytes": len(content),
+                "sha256": digest,
+                "license_note": source.get("license_note"),
+            }
+            write_json(target.parent / "fetch_report.json", report)
+            return report
+        except Exception as exc:
+            errors.append({"url": str(url), "error": str(exc)})
+    return {"summary": "Unable to fetch benchmark paper source.", "ok": False, "case_dir": str(root), "status": "failed", "errors": errors}
 
 
 def list_benchmark_cases(benchmarks_root: str | Path, suite: str | None = None) -> dict[str, Any]:
@@ -145,6 +274,7 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
     clarity = review.get("clarity", {}) if isinstance(review.get("clarity"), dict) else {}
     information = review.get("information", {}) if isinstance(review.get("information"), dict) else {}
     stability = review.get("stability", {}) if isinstance(review.get("stability"), dict) else {}
+    planning_contract = _score_planning_contract(expected, _load(run / "figure_specification.json"))
 
     expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
     expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
@@ -175,6 +305,12 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         hard_failures.append("required relations missing or incorrect")
     if exact_label_rate < 1.0:
         hard_failures.append("required labels missing or misspelled")
+    if planning_contract.get("available") and float(planning_contract.get("entity_recall", 0.0)) < 1.0:
+        hard_failures.append("paper planning missed required benchmark entities")
+    if planning_contract.get("available") and float(planning_contract.get("relation_recall", 0.0)) < 1.0:
+        hard_failures.append("paper planning missed required benchmark relations")
+    if planning_contract.get("forbidden_labels_found"):
+        hard_failures.append("paper planning introduced forbidden benchmark labels")
 
     metrics = {
         "entity_recall": entity_recall,
@@ -187,6 +323,9 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         "stability_score": stability_score,
         "hallucination_count": len(invented),
         "forbidden_content_count": len(forbidden_found),
+        "plan_entity_recall": planning_contract.get("entity_recall"),
+        "plan_relation_recall": planning_contract.get("relation_recall"),
+        "plan_forbidden_content_count": len(planning_contract.get("forbidden_labels_found", [])),
     }
     thresholds = case.get("thresholds", {})
     threshold_failures = _threshold_failures(metrics, thresholds)
@@ -198,6 +337,7 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         "case_dir": str(case_root),
         "run_dir": str(run),
         "metrics": metrics,
+        "planning_contract": planning_contract,
         "total_score": total_score,
         "hard_failures": sorted(set(hard_failures)),
         "threshold_failures": threshold_failures,
@@ -413,6 +553,14 @@ def score_benchmark_case(case_dir: str | Path, run_dir: str | Path, out: str | P
 
 
 def run_benchmark_case(case_dir: str | Path, out: str | Path) -> dict[str, Any]:
+    case_root = Path(case_dir).resolve()
+    case_preflight = _load(case_root / "case.json")
+    if str(case_preflight.get("suite") or "") == "paper-to-image":
+        paper_path = case_root / str(case_preflight.get("paper") or "paper.md")
+        if not paper_path.exists():
+            fetched = fetch_benchmark_case(case_root)
+            if not fetched.get("ok"):
+                return {**fetched, "passed": False}
     validation = validate_benchmark_case(case_dir)
     if not validation["ok"]:
         return {**validation, "passed": False}

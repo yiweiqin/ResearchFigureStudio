@@ -24,6 +24,7 @@ tmp/codex-presentations/
 tmp/pdfs/*/
 tmp/pdfs/
 tmp/paper-to-editable-smoke*/
+benchmarks/**/inputs/
 *.key
 *.pem
 

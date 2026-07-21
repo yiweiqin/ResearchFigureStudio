@@ -1,0 +1,24 @@
+{
+  "summary": "Human-authored semantic contract for Mask R-CNN.",
+  "entities": [
+    {"id": "input_image", "label": "Input Image", "role": "input", "required": true},
+    {"id": "backbone", "label": "Backbone", "role": "module", "required": true},
+    {"id": "region_proposals", "label": "Region Proposals", "role": "module", "required": true},
+    {"id": "roi_align", "label": "RoIAlign", "role": "module", "required": true},
+    {"id": "classification_head", "label": "Classification", "role": "output", "required": true},
+    {"id": "box_head", "label": "Bounding-box Regression", "role": "output", "required": true},
+    {"id": "mask_head", "label": "Mask Branch", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "input_image", "target": "backbone", "type": "data_flow", "required": true},
+    {"source": "backbone", "target": "region_proposals", "type": "data_flow", "required": true},
+    {"source": "region_proposals", "target": "roi_align", "type": "data_flow", "required": true},
+    {"source": "backbone", "target": "roi_align", "type": "feature_flow", "required": true},
+    {"source": "roi_align", "target": "classification_head", "type": "branch", "required": true},
+    {"source": "roi_align", "target": "box_head", "type": "branch", "required": true},
+    {"source": "roi_align", "target": "mask_head", "type": "branch", "required": true}
+  ],
+  "forbidden_labels": ["Semantic Segmentation Only", "Single Output Head", "Transformer Decoder"],
+  "expected_reading_order": ["input_image", "backbone", "region_proposals", "roi_align"],
+  "topology_requirements": {"primary_flow": "left_to_right", "branch_count": 3, "convergence_count": 1, "feedback_loop_count": 0}
+}

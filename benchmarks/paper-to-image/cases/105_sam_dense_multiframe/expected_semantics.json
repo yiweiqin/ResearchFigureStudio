@@ -1,0 +1,32 @@
+{
+  "summary": "Human-authored semantic contract for the Segment Anything overview.",
+  "entities": [
+    {"id": "promptable_task", "label": "Promptable Segmentation Task", "role": "panel", "required": true},
+    {"id": "image", "label": "Image", "role": "input", "required": true},
+    {"id": "prompt", "label": "Prompt", "role": "input", "required": true},
+    {"id": "valid_mask", "label": "Valid Segmentation Mask", "role": "output", "required": true},
+    {"id": "sam_model", "label": "Segment Anything Model", "role": "panel", "required": true},
+    {"id": "image_encoder", "label": "Image Encoder", "role": "module", "required": true},
+    {"id": "prompt_encoder", "label": "Prompt Encoder", "role": "module", "required": true},
+    {"id": "mask_decoder", "label": "Mask Decoder", "role": "module", "required": true},
+    {"id": "data_engine", "label": "Data Engine", "role": "panel", "required": true},
+    {"id": "assisted_manual", "label": "Assisted-manual", "role": "module", "required": true},
+    {"id": "semi_automatic", "label": "Semi-automatic", "role": "module", "required": true},
+    {"id": "fully_automatic", "label": "Fully Automatic", "role": "module", "required": true},
+    {"id": "sa1b", "label": "SA-1B", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "image", "target": "image_encoder", "type": "data_flow", "required": true},
+    {"source": "prompt", "target": "prompt_encoder", "type": "data_flow", "required": true},
+    {"source": "image_encoder", "target": "mask_decoder", "type": "feature_flow", "required": true},
+    {"source": "prompt_encoder", "target": "mask_decoder", "type": "conditioning", "required": true},
+    {"source": "mask_decoder", "target": "valid_mask", "type": "data_flow", "required": true},
+    {"source": "assisted_manual", "target": "semi_automatic", "type": "stage_transition", "required": true},
+    {"source": "semi_automatic", "target": "fully_automatic", "type": "stage_transition", "required": true},
+    {"source": "fully_automatic", "target": "sa1b", "type": "data_generation", "required": true},
+    {"source": "sam_model", "target": "data_engine", "type": "annotation_support", "required": true}
+  ],
+  "forbidden_labels": ["Text-to-Image Generation", "Object Detector Only", "Single-stage Manual Annotation", "Language Model"],
+  "expected_panels": ["promptable_task", "sam_model", "data_engine"],
+  "topology_requirements": {"panel_count": 3, "dense_multi_panel": true, "feedback_between_model_and_data_engine": true}
+}

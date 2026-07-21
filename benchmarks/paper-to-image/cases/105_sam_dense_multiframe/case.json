@@ -1,0 +1,8 @@
+{
+  "summary": "ICCV 2023 Segment Anything case for a dense three-part task-model-data-engine overview.",
+  "case_id": "105_sam_dense_multiframe", "suite": "paper-to-image", "tier": "real-paper-offline-contract", "topology": "dense_multi_panel",
+  "paper": "inputs/paper.pdf", "source": "source.json", "expected_semantics": "expected_semantics.json", "preferences": "../../preferences/top_conference.json",
+  "positive_references": [], "negative_references": [],
+  "run_config": {"planner_mode": "heuristic", "image_asset_mode": "placeholder", "image_candidates": 2, "review_mode": "heuristic", "aspect_ratio": "16:9", "ocr_engine": "off"},
+  "thresholds": {"entity_recall": 1.0, "relation_recall": 1.0, "exact_label_rate": 1.0, "hallucination_count": 0, "forbidden_content_count": 0}
+}

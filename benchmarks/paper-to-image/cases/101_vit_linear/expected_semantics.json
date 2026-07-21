@@ -1,0 +1,25 @@
+{
+  "summary": "Human-authored semantic contract for the Vision Transformer architecture.",
+  "entities": [
+    {"id": "input_image", "label": "Input Image", "role": "input", "required": true},
+    {"id": "image_patches", "label": "Image Patches", "role": "module", "required": true},
+    {"id": "linear_projection", "label": "Linear Projection of Flattened Patches", "role": "module", "required": true},
+    {"id": "position_embedding", "label": "Position Embedding", "role": "module", "required": true},
+    {"id": "class_token", "label": "Class Token", "role": "module", "required": true},
+    {"id": "transformer_encoder", "label": "Transformer Encoder", "role": "module", "required": true},
+    {"id": "mlp_head", "label": "MLP Head", "role": "module", "required": true},
+    {"id": "class_prediction", "label": "Class Prediction", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "input_image", "target": "image_patches", "type": "data_flow", "required": true},
+    {"source": "image_patches", "target": "linear_projection", "type": "data_flow", "required": true},
+    {"source": "linear_projection", "target": "transformer_encoder", "type": "data_flow", "required": true},
+    {"source": "position_embedding", "target": "transformer_encoder", "type": "conditioning", "required": true},
+    {"source": "class_token", "target": "transformer_encoder", "type": "conditioning", "required": true},
+    {"source": "transformer_encoder", "target": "mlp_head", "type": "data_flow", "required": true},
+    {"source": "mlp_head", "target": "class_prediction", "type": "data_flow", "required": true}
+  ],
+  "forbidden_labels": ["CNN Backbone", "Recurrent Network", "Decoder", "Object Detection Head"],
+  "expected_reading_order": ["input_image", "image_patches", "linear_projection", "transformer_encoder", "mlp_head", "class_prediction"],
+  "topology_requirements": {"primary_flow": "left_to_right", "branch_count": 0, "feedback_loop_count": 0, "dense_multi_panel": false}
+}

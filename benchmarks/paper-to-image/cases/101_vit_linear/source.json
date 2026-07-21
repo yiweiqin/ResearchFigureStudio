@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+  "venue": "ICLR",
+  "year": 2021,
+  "arxiv_id": "2010.11929",
+  "official_url": "https://openreview.net/forum?id=YicbFdNTTy",
+  "paper_urls": ["https://arxiv.org/pdf/2010.11929", "https://export.arxiv.org/pdf/2010.11929"],
+  "target_figure": "Figure 1",
+  "verified_caption": "Model overview. The image is split into fixed-size patches, linearly embedded, combined with position embeddings and processed by a Transformer encoder.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

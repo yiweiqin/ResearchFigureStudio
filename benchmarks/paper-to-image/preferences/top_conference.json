@@ -1,0 +1,9 @@
+{
+  "summary": "Shared visual preferences for computer-science top-conference benchmark cases.",
+  "aspect_ratio": "16:9",
+  "language": "English",
+  "style_description": "clean top-conference method figure, compact academic layout, restrained color, clear arrows and grouping",
+  "preferred_palette": ["cool blue", "teal", "muted orange accent", "light neutral background"],
+  "visual_density": "high but readable",
+  "avoid": ["commercial poster", "photorealistic decoration", "cyberpunk", "generic robot imagery", "fake equations", "fake charts", "long paragraphs"]
+}

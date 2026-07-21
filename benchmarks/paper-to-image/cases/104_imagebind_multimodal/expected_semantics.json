@@ -1,0 +1,27 @@
+{
+  "summary": "Human-authored semantic contract for ImageBind.",
+  "entities": [
+    {"id": "image", "label": "Image", "role": "input", "required": true},
+    {"id": "text", "label": "Text", "role": "input", "required": true},
+    {"id": "audio", "label": "Audio", "role": "input", "required": true},
+    {"id": "depth", "label": "Depth", "role": "input", "required": true},
+    {"id": "thermal", "label": "Thermal", "role": "input", "required": true},
+    {"id": "imu", "label": "IMU", "role": "input", "required": true},
+    {"id": "modality_encoders", "label": "Modality Encoders", "role": "module", "required": true},
+    {"id": "joint_embedding", "label": "Joint Embedding Space", "role": "module", "required": true},
+    {"id": "emergent_alignment", "label": "Emergent Cross-modal Alignment", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "image", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "text", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "audio", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "depth", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "thermal", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "imu", "target": "modality_encoders", "type": "encoding", "required": true},
+    {"source": "modality_encoders", "target": "joint_embedding", "type": "alignment", "required": true},
+    {"source": "joint_embedding", "target": "emergent_alignment", "type": "enables", "required": true}
+  ],
+  "forbidden_labels": ["All Modality Pairs Are Directly Paired", "Single Shared Raw Encoder", "Late Fusion Classifier"],
+  "expected_reading_order": ["image", "text", "audio", "depth", "thermal", "imu", "modality_encoders", "joint_embedding", "emergent_alignment"],
+  "topology_requirements": {"primary_flow": "many_to_one_to_many", "input_modality_count": 6, "shared_space_required": true}
+}

@@ -1,0 +1,8 @@
+{
+  "summary": "Publication metadata and local-fetch sources.",
+  "paper_title": "Mask R-CNN", "venue": "ICCV", "year": 2017, "arxiv_id": "1703.06870",
+  "official_url": "https://openaccess.thecvf.com/content_ICCV_2017/html/He_Mask_R-CNN_ICCV_2017_paper.html",
+  "paper_urls": ["https://arxiv.org/pdf/1703.06870", "https://export.arxiv.org/pdf/1703.06870"],
+  "target_figure": "Figure 1", "verified_caption": "The Mask R-CNN framework for instance segmentation.",
+  "license_note": "Verify redistribution rights; keep downloaded inputs local."
+}

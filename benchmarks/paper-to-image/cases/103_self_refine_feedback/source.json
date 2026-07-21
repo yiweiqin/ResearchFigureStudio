@@ -1,0 +1,7 @@
+{
+  "summary": "Publication metadata and local-fetch sources.",
+  "paper_title": "Self-Refine: Iterative Refinement with Self-Feedback", "venue": "NeurIPS", "year": 2023, "arxiv_id": "2303.17651",
+  "official_url": "https://arxiv.org/abs/2303.17651", "paper_urls": ["https://arxiv.org/pdf/2303.17651", "https://export.arxiv.org/pdf/2303.17651"],
+  "target_figure": "Figure 1", "verified_caption": "Iterative generation, feedback and refinement without additional supervised training.",
+  "license_note": "Use the arXiv license shown on the source page; downloaded inputs remain local."
+}

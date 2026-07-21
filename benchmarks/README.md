@@ -21,6 +21,7 @@ A full-slide copy of the reference image is a hard failure even if pixel similar
 ```powershell
 rfs benchmark list --root benchmarks --json
 rfs benchmark validate --case benchmarks/paper-to-image/cases/001_linear_pipeline --json
+rfs benchmark fetch --case benchmarks/paper-to-image/cases/101_vit_linear --json
 rfs benchmark run --case benchmarks/paper-to-image/cases/001_linear_pipeline --out output/benchmarks/p2i_001 --json
 rfs benchmark score --case benchmarks/image-to-ppt/cases/001_three_stage_layout --run output/rebuild_case --json
 ```
@@ -30,6 +31,8 @@ rfs benchmark score --case benchmarks/image-to-ppt/cases/001_three_stage_layout 
 Each case contains `case.json` plus suite-specific human-authored ground truth. Synthetic cases may be committed. Real papers and figures should only be committed when redistribution is permitted; otherwise use local paths or a private benchmark data repository.
 
 Generated runs and reports belong under `output/benchmarks/` and are not source fixtures.
+
+Real-paper cases commit `source.json` and human-authored Ground Truth, while `benchmark fetch` downloads the PDF into an ignored local `inputs/` directory. This keeps the public repository reproducible without redistributing publisher files.
 
 ## Evaluation tiers
 

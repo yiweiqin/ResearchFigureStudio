@@ -1,0 +1,25 @@
+{
+  "summary": "Human-authored semantic contract for Self-Refine.",
+  "entities": [
+    {"id": "task_input", "label": "Input", "role": "input", "required": true},
+    {"id": "initial_generator", "label": "Generate", "role": "module", "required": true},
+    {"id": "initial_output", "label": "Initial Output", "role": "module", "required": true},
+    {"id": "feedback_module", "label": "Feedback", "role": "module", "required": true},
+    {"id": "feedback_text", "label": "Feedback", "role": "control", "required": true},
+    {"id": "refinement_module", "label": "Refine", "role": "module", "required": true},
+    {"id": "refined_output", "label": "Refined Output", "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "task_input", "target": "initial_generator", "type": "data_flow", "required": true},
+    {"source": "initial_generator", "target": "initial_output", "type": "data_flow", "required": true},
+    {"source": "initial_output", "target": "feedback_module", "type": "evaluation", "required": true},
+    {"source": "feedback_module", "target": "feedback_text", "type": "feedback", "required": true},
+    {"source": "initial_output", "target": "refinement_module", "type": "revision_input", "required": true},
+    {"source": "feedback_text", "target": "refinement_module", "type": "feedback", "required": true},
+    {"source": "refinement_module", "target": "refined_output", "type": "data_flow", "required": true},
+    {"source": "refined_output", "target": "feedback_module", "type": "feedback_loop", "required": true}
+  ],
+  "forbidden_labels": ["Gradient Update", "Human Annotator Required", "External Reward Model", "Supervised Fine-tuning"],
+  "expected_reading_order": ["task_input", "initial_generator", "initial_output", "feedback_module", "refinement_module", "refined_output"],
+  "topology_requirements": {"primary_flow": "cyclic", "feedback_loop_count": 1, "iteration_must_be_visible": true}
+}

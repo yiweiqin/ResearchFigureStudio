@@ -1,0 +1,8 @@
+{
+  "summary": "Publication metadata and local-fetch sources.",
+  "paper_title": "ImageBind: One Embedding Space To Bind Them All", "venue": "CVPR", "year": 2023, "arxiv_id": "2305.05665",
+  "official_url": "https://openaccess.thecvf.com/content/CVPR2023/html/Girdhar_ImageBind_One_Embedding_Space_To_Bind_Them_All_CVPR_2023_paper.html",
+  "paper_urls": ["https://arxiv.org/pdf/2305.05665", "https://export.arxiv.org/pdf/2305.05665"],
+  "target_figure": "Figure 2", "verified_caption": "Different naturally aligned modality pairs are linked through image data into a common embedding space.",
+  "license_note": "Verify redistribution rights; keep downloaded inputs local."
+}

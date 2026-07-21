@@ -85,6 +85,7 @@ Use the two independent suites to locate failures before changing the workflow:
 
 ```powershell
 rfs benchmark list --root benchmarks --json
+rfs benchmark fetch --case <case_dir> --json
 rfs benchmark run --case <case_dir> --out <run_dir> --json
 rfs benchmark score --case <case_dir> --run <run_dir> --json
 ```
