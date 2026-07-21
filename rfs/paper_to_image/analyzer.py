@@ -25,6 +25,12 @@ SECTION_ALIASES = {
 def _clean(text: str) -> str:
     value = unicodedata.normalize("NFKC", str(text or "")).replace("\u00ad", "")
     value = value.replace("\r\n", "\n").replace("\r", "\n")
+    previous = None
+    while previous != value:
+        previous = value
+        value = re.sub(r"\b([A-Z])\s+([A-Z]{2,})\b", r"\1\2", value)
+    value = re.sub(r"\bANIMAGE\b", "AN IMAGE", value)
+    value = re.sub(r"\(\s*([A-Z])\s+([A-Z])\s+([A-Z])\s*\)", r"(\1\2\3)", value)
     value = re.sub(r"[ \t]+", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()
@@ -362,11 +368,11 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 explicit = re.match(r"^(abstract|references|acknowledg(?:e)?ments?|appendix)$", line, re.IGNORECASE)
                 numbered = re.match(r"^\s*((?:\d+(?:\.\d+)*)|(?:[ivx]+))[.)]?\s+(.{2,120})$", line, re.IGNORECASE)
                 compact_line = re.sub(r"[^a-z]", "", line.casefold())
-                known = any(compact_line.startswith(re.sub(r"[^a-z]", "", alias.casefold())) for aliases in SECTION_ALIASES.values() for alias in aliases)
+                known = len(line) <= 60 and not line.endswith((".", ",", ";")) and any(compact_line.startswith(re.sub(r"[^a-z]", "", alias.casefold())) for aliases in SECTION_ALIASES.values() for alias in aliases)
                 if numbered:
                     title_candidate = numbered.group(2).strip()
                     first_alpha = next((char for char in title_candidate if char.isalpha()), "")
-                    if not first_alpha or not first_alpha.isupper() or re.search(r"[=±∑∫]", title_candidate):
+                    if not first_alpha or not first_alpha.isupper() or re.search(r"[=±∑∫]", title_candidate) or title_candidate.endswith(".") or len(title_candidate) > 80 or len(title_candidate.split()) > 10:
                         numbered = None
                 if not (explicit or numbered or known):
                     continue

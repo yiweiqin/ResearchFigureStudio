@@ -1,39 +1,15 @@
 from __future__ import annotations
 
-import json
-import shutil
 import time
 from pathlib import Path
 from typing import Any
 
-from ..utils import ensure_dir, write_json, write_text
-from .analyzer import parse_paper
+from ..utils import write_json, write_text
 from .generator import generate_and_select
-from .planner import compile_image_prompt, merge_preferences, plan_paper_image, validate_plan_grounding
-from .review import build_paper_review, detect_domain_profile, validate_review_coverage
+from .planner import compile_image_prompt
+from .preparation import prepare_paper_figure_contract
+from .review import validate_review_coverage
 from .templates import build_template_profiles, render_layout_blueprint, select_template
-
-
-def _load_preferences(path: str | Path | None) -> dict:
-    if not path:
-        return {}
-    source = Path(path).resolve()
-    if not source.exists():
-        raise FileNotFoundError(f"Preferences file does not exist: {source}")
-    raw = json.loads(source.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("Preferences file must contain a JSON object")
-    return raw
-
-
-def _archive_file(source: str | Path, target_dir: Path, target_name: str | None = None) -> str:
-    path = Path(source).resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"Input file does not exist: {path}")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / (target_name or path.name)
-    shutil.copyfile(path, target)
-    return str(target)
 
 
 def run_paper_to_image(
@@ -61,47 +37,36 @@ def run_paper_to_image(
     critic_adapter=None,
 ) -> dict:
     started = time.time()
-    root = ensure_dir(out).resolve()
-    inputs = ensure_dir(root / "inputs")
-    positive_dir = ensure_dir(inputs / "positive_references")
-    negative_dir = ensure_dir(inputs / "negative_references")
-
-    archived_paper = _archive_file(paper, inputs, f"paper{Path(paper).suffix.lower()}")
-    archived_positive = [_archive_file(path, positive_dir) for path in (positive_references or [])]
-    archived_negative = [_archive_file(path, negative_dir) for path in (negative_references or [])]
-    raw_preferences = _load_preferences(preferences_path)
-    preferences = merge_preferences(raw_preferences, aspect_ratio=aspect_ratio, language=language)
-    preferences["positive_references"] = archived_positive
-    preferences["negative_references"] = archived_negative
-    write_json(root / "preferences.json", preferences)
-    input_manifest = {
-        "summary": "Archived inputs for the paper-to-image run.",
-        "paper_original": str(Path(paper).resolve()),
-        "paper_archived": archived_paper,
-        "preferences_original": str(Path(preferences_path).resolve()) if preferences_path else None,
-        "positive_references": archived_positive,
-        "negative_references": archived_negative,
-    }
-    write_json(root / "input_manifest.json", input_manifest)
-
-    parsed = parse_paper(archived_paper)
-    evidence_map = {
-        "summary": "Page-aware evidence map used by paper summary and figure planning.",
-        "source_path": parsed["source_path"],
-        "page_count": parsed["page_count"],
-        "char_count": parsed["char_count"],
-        "headings": parsed["headings"],
-        "evidence": parsed["evidence"],
-    }
-    write_json(root / "evidence_map.json", evidence_map)
-    write_json(root / "document_index.json", parsed["document_index"])
-
-    selected_domain = detect_domain_profile(parsed, explicit=domain_profile)
-    write_json(root / "domain_profile.json", selected_domain)
-    paper_review, review_metadata = build_paper_review(parsed, selected_domain, mode=planner_mode, model=planner_model)
-    write_text(root / "prompts" / "paper_review_prompt.txt", review_metadata.pop("prompt"))
-    write_json(root / "paper_review_metadata.json", review_metadata)
-    write_json(root / "paper_review.json", paper_review)
+    prepared = prepare_paper_figure_contract(
+        paper=paper,
+        out=out,
+        deadline_seconds=600,
+        planner_mode=planner_mode,
+        planner_model=planner_model,
+        ocr_engine=ocr_engine if ocr_engine in {"auto", "paddle", "easyocr", "off"} else "auto",
+        ocr_lang=ocr_lang,
+        preferences_path=preferences_path,
+        positive_references=positive_references,
+        negative_references=negative_references,
+        aspect_ratio=aspect_ratio,
+        language=language,
+        domain_profile=domain_profile,
+        ocr_adapter=ocr_adapter,
+    )
+    if not prepared.get("ok"):
+        raise ValueError(f"Paper contract preparation failed: {prepared.get('errors') or prepared.get('planning_validation', {}).get('errors')}")
+    root = prepared["root"]
+    archived_paper = prepared["paper"]
+    archived_positive = prepared["archived_positive"]
+    archived_negative = prepared["archived_negative"]
+    preferences = prepared["preferences"]
+    parsed = prepared["parsed"]
+    selected_domain = prepared["selected_domain"]
+    paper_review = prepared["paper_review"]
+    review_metadata = prepared["review_metadata"]
+    plan = prepared["plan"]
+    planner_metadata = prepared["planner_metadata"]
+    planning_validation = prepared["planning_validation"]
     production_mode = asset_mode == "image2"
     coverage = validate_review_coverage(paper_review, parsed, selected_domain, strict=production_mode)
     write_json(root / "review_coverage_report.json", coverage)
@@ -122,25 +87,10 @@ def run_paper_to_image(
     blueprint_report = render_layout_blueprint(selected_template, root / "layout_blueprint.png", target_ratio=preferences["aspect_ratio"])
     write_json(root / "layout_blueprint.json", blueprint_report)
 
-    references = archived_positive + archived_negative
-    plan, planner_metadata = plan_paper_image(
-        parsed,
-        preferences,
-        mode=planner_mode,
-        model=planner_model,
-        reference_images=references,
-        paper_review=paper_review,
-    )
-    write_text(root / "prompts" / "planning_prompt.txt", planner_metadata.pop("prompt"))
-    write_json(root / "planning_metadata.json", {"summary": "Planner execution metadata.", **planner_metadata})
-    artifact_names = ["paper_summary", "figure_specification", "design_plan", "layout_intent", "visual_metaphors", "style_plan"]
-    for name in artifact_names:
-        write_json(root / f"{name}.json", plan[name])
     plan["style_plan"]["selected_template_id"] = selected_template.get("profile_id")
     plan["style_plan"]["template_style"] = selected_template.get("style", {})
     plan["style_plan"]["template_palette"] = selected_template.get("palette", [])
     write_json(root / "style_plan.json", plan["style_plan"])
-    planning_validation = validate_plan_grounding(plan, parsed)
     write_json(root / "planning_validation_report.json", planning_validation)
     if not planning_validation["ok"]:
         raise ValueError(f"Paper-to-image planning failed scientific grounding validation: {planning_validation['errors']}")

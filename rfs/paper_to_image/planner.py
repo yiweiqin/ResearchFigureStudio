@@ -66,6 +66,8 @@ Return this schema:
   "figure_specification": {{
     "summary": "Scientific contract for the figure.",
     "figure_goal": "...",
+    "research_problem": {{"text": "...", "evidence_ids": ["E0001"]}},
+    "central_claim": {{"text": "...", "evidence_ids": ["E0001"]}},
     "storyline": [],
     "must_show": [{{"text": "...", "evidence_ids": ["E0001"]}}],
     "modules": [{{"id": "...", "name": "...", "role": "...", "evidence_ids": ["E0001"]}}],
@@ -73,9 +75,15 @@ Return this schema:
     "inputs": [],
     "outputs": [],
     "innovations": [],
+    "feedback_loops": [],
+    "training_flow": [],
+    "inference_flow": [],
+    "topology": "linear|branch|feedback|multimodal|dense_multiframe|unknown",
+    "required_labels": [],
     "visual_priorities": [],
     "terminology": {{}},
-    "forbidden_inventions": []
+    "forbidden_inventions": [],
+    "uncertainties": []
   }},
   "design_plan": {{
     "summary": "Information narrative for one complete image.",
@@ -252,13 +260,13 @@ def normalize_plan(raw: dict, preferences: dict) -> dict:
     return result
 
 
-def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None) -> tuple[dict, dict]:
+def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1) -> tuple[dict, dict]:
     prompt = _planner_prompt(parsed, preferences, paper_review=paper_review)
     metadata = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt}
     if mode == "vlm" and vlm_credentials_available():
         resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_MODEL", "RFS_PAPER_PLANNER_MODEL", explicit_model=model)
         try:
-            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=240, retries=1)
+            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=max(10, int(timeout_seconds)), retries=max(0, int(retries)))
             metadata["model"] = resolved
             return normalize_plan(raw, preferences), metadata
         except Exception as exc:
@@ -367,6 +375,12 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
             endpoint_id = str(item.get("id") or item.get("name") or item.get("visible_label") or item.get("text") or "").strip()
             if endpoint_id:
                 endpoint_ids.add(endpoint_id)
+            evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+            if not evidence_ids:
+                warnings.append(f"{field}[{index}] has no evidence_ids")
+            invalid = [value for value in evidence_ids if value not in valid_evidence]
+            if invalid:
+                errors.append(f"{field}[{index}] references unknown evidence ids: {invalid}")
 
     relations = spec.get("relations") if isinstance(spec.get("relations"), list) else []
     for index, relation in enumerate(relations):
@@ -379,7 +393,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
             errors.append(f"relation {index + 1} has unknown endpoint: {source} -> {target}")
         evidence_ids = relation.get("evidence_ids") if isinstance(relation.get("evidence_ids"), list) else []
         if not evidence_ids:
-            warnings.append(f"relation {source} -> {target} has no evidence_ids")
+            errors.append(f"relation {source} -> {target} has no evidence_ids")
         invalid = [item for item in evidence_ids if item not in valid_evidence]
         if invalid:
             errors.append(f"relation {source} -> {target} references unknown evidence ids: {invalid}")
@@ -393,6 +407,20 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
             invalid = [value for value in evidence_ids if value not in valid_evidence]
             if invalid:
                 errors.append(f"{field}[{index}] references unknown evidence ids: {invalid}")
+
+    for field in ("research_problem", "central_claim"):
+        item = spec.get(field)
+        if not isinstance(item, dict):
+            errors.append(f"figure_specification.{field} is missing")
+            continue
+        text = str(item.get("text") or item.get("statement") or "").strip()
+        evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+        explicitly_unknown = item.get("status") == "unknown" or text.casefold() == "unknown" or "require" in text.casefold() and "review" in text.casefold()
+        if not explicitly_unknown and not evidence_ids:
+            errors.append(f"figure_specification.{field} has no evidence_ids")
+        invalid = [value for value in evidence_ids if value not in valid_evidence]
+        if invalid:
+            errors.append(f"figure_specification.{field} references unknown evidence ids: {invalid}")
 
     return {
         "summary": "Scientific grounding and relation-contract validation.",

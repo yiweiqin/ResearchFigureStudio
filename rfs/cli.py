@@ -12,7 +12,7 @@ from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
 from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, score_benchmark_case, validate_benchmark_case
-from .paper_to_image import inspect_paper, run_paper_to_image
+from .paper_to_image import inspect_paper, run_fast_framework_prompt, run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
 from .professional_repair import vlm_professional_repair_adapter
@@ -110,6 +110,20 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_pdf.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="auto")
     inspect_pdf.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
     inspect_pdf.add_argument("--json", action="store_true", help="Emit JSON.")
+
+    fast_prompt = sub.add_parser("fast-framework-prompt", help="Compile a paper-grounded framework prompt without generating images.")
+    fast_prompt.add_argument("--paper", required=True, help="Paper PDF/LaTeX/Markdown/Word/text path.")
+    fast_prompt.add_argument("--out", required=True, help="Output directory for evidence, semantic contract, prompt, and overlay specification.")
+    fast_prompt.add_argument("--deadline", type=int, default=180, help="Soft end-to-end deadline in seconds. Default: 180.")
+    fast_prompt.add_argument("--preferences", help="Optional JSON style and output preferences.")
+    fast_prompt.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm")
+    fast_prompt.add_argument("--planner-model")
+    fast_prompt.add_argument("--domain-profile", choices=["auto", "general", "ai-ml-method", "system-platform", "dataset-benchmark", "empirical-science", "survey-review"], default="auto")
+    fast_prompt.add_argument("--aspect-ratio", default="16:9")
+    fast_prompt.add_argument("--language", default="English")
+    fast_prompt.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="auto")
+    fast_prompt.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
+    fast_prompt.add_argument("--json", action="store_true", help="Emit JSON.")
 
     make = sub.add_parser("make-framework", help="Create a paper-grounded, reference-guided editable PPTX framework figure.")
     make.add_argument("--paper", required=True, help="Paper PDF/LaTeX/Markdown/Word/text path.")
@@ -337,6 +351,20 @@ def main(argv: list[str] | None = None) -> int:
                 deadline_seconds=args.deadline,
                 ocr_engine=args.ocr_engine,
                 ocr_lang=args.ocr_lang,
+            )
+        elif args.command == "fast-framework-prompt":
+            result = run_fast_framework_prompt(
+                paper=args.paper,
+                out=args.out,
+                deadline_seconds=args.deadline,
+                planner_mode=args.planner_mode,
+                planner_model=args.planner_model,
+                ocr_engine=args.ocr_engine,
+                ocr_lang=args.ocr_lang,
+                preferences_path=args.preferences,
+                aspect_ratio=args.aspect_ratio,
+                language=args.language,
+                domain_profile=args.domain_profile,
             )
         elif args.command == "make-framework":
             result = make_framework(

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from rfs.cli import build_parser
-from rfs.paper_to_image import run_paper_to_image
+from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import review_candidate
 from rfs.paper_to_image.generator import generate_and_select
 from rfs.paper_to_image.review import detect_domain_profile, validate_review_coverage
@@ -126,6 +126,38 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.command, "inspect-pdf")
         self.assertEqual(args.deadline, 180)
         self.assertEqual(args.ocr_engine, "auto")
+
+    def test_fast_framework_prompt_writes_contract_without_generation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paper = root / "paper.md"
+            paper.write_text(PAPER_TEXT, encoding="utf-8")
+            out = root / "fast"
+
+            result = run_fast_framework_prompt(
+                paper=paper,
+                out=out,
+                deadline_seconds=180,
+                planner_mode="heuristic",
+                ocr_engine="off",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["engineering_only"])
+            self.assertFalse(result["production_ready"])
+            self.assertEqual(result["deadline_seconds"], 180)
+            for name in ["paper.md", "document_model.json", "extraction_report.json", "section_index.json", "section_summary.md", "key_evidence.json", "paper_review.json", "figure_specification.json", "planning_validation_report.json", "image_prompt.md", "overlay_spec.json", "run_report.json"]:
+                self.assertTrue((out / name).exists(), name)
+            self.assertFalse((out / "selected_image.png").exists())
+            overlay = json.loads((out / "overlay_spec.json").read_text(encoding="utf-8"))
+            self.assertTrue(overlay["labels"])
+
+    def test_fast_framework_cli_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(["fast-framework-prompt", "--paper", "paper.pdf", "--out", "output/fast"])
+        self.assertEqual(args.command, "fast-framework-prompt")
+        self.assertEqual(args.deadline, 180)
+        self.assertEqual(args.planner_mode, "vlm")
 
     def test_domain_profiles_detect_method_and_survey(self):
         method = {"evidence": [{"text": "A neural model is optimized with a training loss and used during inference."}]}
