@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
 from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, score_benchmark_case, validate_benchmark_case
-from .paper_to_image import run_paper_to_image
+from .paper_to_image import inspect_paper, run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
 from .professional_repair import vlm_professional_repair_adapter
@@ -28,7 +30,7 @@ def _json_print(data: dict) -> None:
 
 def _doctor() -> dict:
     deps = {}
-    for name, module in [("Pillow", "PIL"), ("python-pptx", "pptx"), ("PyMuPDF", "fitz"), ("requests", "requests"), ("opencv-python-headless", "cv2")]:
+    for name, module in [("Pillow", "PIL"), ("python-pptx", "pptx"), ("PyMuPDF", "fitz"), ("pypdf", "pypdf"), ("pdfplumber", "pdfplumber"), ("requests", "requests"), ("opencv-python-headless", "cv2")]:
         try:
             __import__(module)
             deps[name] = {"available": True}
@@ -61,6 +63,12 @@ def _doctor() -> dict:
         "RFS_IMAGE_EDIT_URL": {"present": env_present("RFS_IMAGE_EDIT_URL"), "value": os.getenv("RFS_IMAGE_EDIT_URL") if env_present("RFS_IMAGE_EDIT_URL") else None},
         "MODEL_VLM": {"present": env_present("MODEL_VLM"), "value": os.getenv("MODEL_VLM") if env_present("MODEL_VLM") else None},
     }
+    optional_pdf = {
+        "pdftotext": {"available": bool(shutil.which("pdftotext")), "path": shutil.which("pdftotext")},
+        "pdftoppm": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm")},
+        "easyocr": {"available": importlib.util.find_spec("easyocr") is not None},
+        "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
+    }
     ok = all(item["available"] for item in deps.values())
     return {
         "summary": "ResearchFigureStudio doctor report.",
@@ -68,6 +76,7 @@ def _doctor() -> dict:
         "version": __version__,
         "python": sys.executable,
         "dependencies": deps,
+        "pdf_tools": optional_pdf,
         "powerpoint": powerpnt,
         "auth": auth,
         "notes": [
@@ -93,6 +102,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor", help="Check dependencies, PowerPoint, and auth env vars.")
     doctor.add_argument("--json", action="store_true", help="Emit JSON.")
+
+    inspect_pdf = sub.add_parser("inspect-pdf", help="Extract and diagnose a paper without calling a model.")
+    inspect_pdf.add_argument("--paper", required=True, help="Paper PDF or supported document path.")
+    inspect_pdf.add_argument("--out", required=True, help="Output directory for the document model and extraction report.")
+    inspect_pdf.add_argument("--deadline", type=int, default=180, help="Soft processing deadline in seconds. Default: 180.")
+    inspect_pdf.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="auto")
+    inspect_pdf.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
+    inspect_pdf.add_argument("--json", action="store_true", help="Emit JSON.")
 
     make = sub.add_parser("make-framework", help="Create a paper-grounded, reference-guided editable PPTX framework figure.")
     make.add_argument("--paper", required=True, help="Paper PDF/LaTeX/Markdown/Word/text path.")
@@ -313,6 +330,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "doctor":
             result = _doctor()
+        elif args.command == "inspect-pdf":
+            result = inspect_paper(
+                paper=args.paper,
+                out=args.out,
+                deadline_seconds=args.deadline,
+                ocr_engine=args.ocr_engine,
+                ocr_lang=args.ocr_lang,
+            )
         elif args.command == "make-framework":
             result = make_framework(
                 paper=args.paper,

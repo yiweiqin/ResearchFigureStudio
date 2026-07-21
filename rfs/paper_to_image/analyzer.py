@@ -125,6 +125,36 @@ def _poppler_pages(path: Path, timeout: int = 30) -> tuple[list[str], str | None
         return [], str(exc)
 
 
+def _pdfplumber_blocks(path: Path, page_number: int) -> list[dict[str, Any]]:
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(str(path)) as document:
+            page = document.pages[page_number - 1]
+            words = page.extract_words(use_text_flow=False, keep_blank_chars=False) or []
+        rows: list[list[dict[str, Any]]] = []
+        for word in sorted(words, key=lambda item: (float(item.get("top", 0.0)), float(item.get("x0", 0.0)))):
+            row = next((items for items in rows if abs(float(items[0].get("top", 0.0)) - float(word.get("top", 0.0))) <= 3.0), None)
+            if row is None:
+                row = []
+                rows.append(row)
+            row.append(word)
+        blocks = []
+        for row in rows:
+            row.sort(key=lambda item: float(item.get("x0", 0.0)))
+            text = _clean(" ".join(str(item.get("text") or "") for item in row))
+            if text:
+                blocks.append({
+                    "bbox": [min(float(item["x0"]) for item in row), min(float(item["top"]) for item in row), max(float(item["x1"]) for item in row), max(float(item["bottom"]) for item in row)],
+                    "text": text,
+                    "source": "pdfplumber",
+                    "confidence": 0.92,
+                })
+        return blocks
+    except Exception:
+        return []
+
+
 def _pdf_metadata(path: Path) -> dict[str, Any]:
     try:
         from pypdf import PdfReader
@@ -214,6 +244,11 @@ def _read_pdf_pages(
         for index, page in enumerate(document, 1):
             raw_blocks = _pymupdf_line_blocks(page)
             ordered, order_confidence = _reading_order(raw_blocks, float(page.rect.width))
+            if len(_normalized_compare_text(" ".join(item["text"] for item in ordered))) < 80:
+                fallback_blocks = _pdfplumber_blocks(path, index)
+                fallback_ordered, fallback_confidence = _reading_order(fallback_blocks, float(page.rect.width))
+                if len(_normalized_compare_text(" ".join(item["text"] for item in fallback_ordered))) > len(_normalized_compare_text(" ".join(item["text"] for item in ordered))):
+                    ordered, order_confidence = fallback_ordered, min(fallback_confidence, 0.9)
             for block_index, block in enumerate(ordered, 1):
                 block["id"] = f"P{index:03d}_B{block_index:03d}"
                 block["kind"] = _block_kind(block["text"], (block["bbox"][2] - block["bbox"][0]) / max(1.0, float(page.rect.width)))
@@ -326,7 +361,8 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     continue
                 explicit = re.match(r"^(abstract|references|acknowledg(?:e)?ments?|appendix)$", line, re.IGNORECASE)
                 numbered = re.match(r"^\s*((?:\d+(?:\.\d+)*)|(?:[ivx]+))[.)]?\s+(.{2,120})$", line, re.IGNORECASE)
-                known = any(re.match(rf"^{re.escape(alias)}\b", line, re.IGNORECASE) for aliases in SECTION_ALIASES.values() for alias in aliases)
+                compact_line = re.sub(r"[^a-z]", "", line.casefold())
+                known = any(compact_line.startswith(re.sub(r"[^a-z]", "", alias.casefold())) for aliases in SECTION_ALIASES.values() for alias in aliases)
                 if numbered:
                     title_candidate = numbered.group(2).strip()
                     first_alpha = next((char for char in title_candidate if char.isalpha()), "")
@@ -360,7 +396,11 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
 
 def _section_coverage(pages: list[dict[str, Any]], sections: list[dict[str, Any]]) -> dict[str, bool]:
     candidates = ("\n".join(item["title"] for item in sections) + "\n" + "\n".join(page.get("text", "") for page in pages)).casefold()
-    return {name: any(re.search(rf"\b{re.escape(alias)}\b", candidates) for alias in aliases) for name, aliases in SECTION_ALIASES.items()}
+    compact = re.sub(r"[^a-z]", "", candidates)
+    return {
+        name: any(re.search(rf"\b{re.escape(alias)}\b", candidates) or re.sub(r"[^a-z]", "", alias.casefold()) in compact for alias in aliases)
+        for name, aliases in SECTION_ALIASES.items()
+    }
 
 
 def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:

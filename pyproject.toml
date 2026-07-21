@@ -11,6 +11,8 @@ dependencies = [
   "pillow",
   "python-pptx",
   "PyMuPDF",
+  "pypdf",
+  "pdfplumber",
   "requests",
   "opencv-python-headless",
   "pywin32; platform_system == 'Windows'"

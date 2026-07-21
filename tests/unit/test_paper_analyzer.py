@@ -5,6 +5,7 @@ from pathlib import Path
 import fitz
 
 from rfs.paper_to_image.analyzer import parse_paper
+from rfs.paper_to_image.inspection import inspect_paper
 
 
 class PaperAnalyzerTests(unittest.TestCase):
@@ -58,6 +59,32 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(parsed["extraction_report"]["replacement_character_rate"], 0.0)
         self.assertEqual(parsed["extraction_report"]["mojibake_rate"], 0.0)
+
+    def test_low_text_page_uses_local_ocr_adapter(self):
+        path = self._pdf(lambda _page: None)
+
+        parsed = parse_paper(
+            path,
+            ocr_engine="easyocr",
+            ocr_adapter=lambda _image, _lang: [{
+                "text": "Abstract Method Image Encoder produces the final representation with reliable evidence.",
+                "confidence": 0.93,
+                "quad": [[10, 10], [900, 10], [900, 80], [10, 80]],
+            }],
+        )
+
+        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1])
+        self.assertTrue(parsed["pages"][0]["used_ocr"])
+        self.assertIn("Image Encoder", parsed["pages"][0]["text"])
+
+    def test_inspection_reuses_matching_document_cache(self):
+        path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "Abstract Method A sufficiently long scientific paragraph for deterministic PDF inspection.", fontsize=10))
+        with tempfile.TemporaryDirectory() as temp:
+            first = inspect_paper(path, temp, ocr_engine="off")
+            second = inspect_paper(path, temp, ocr_engine="off")
+
+            self.assertTrue(first["document_model"])
+            self.assertEqual(second["status"], "cached")
 
 
 if __name__ == "__main__":
