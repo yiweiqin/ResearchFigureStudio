@@ -124,7 +124,8 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
             if not isinstance(item, dict):
                 continue
             evidence = [evidence_by_id.get(value) for value in item.get("evidence_ids", [])]
-            if evidence and all(float(record.get("confidence", 1.0)) < 0.75 for record in evidence if record):
+            valid_records = [record for record in evidence if record]
+            if valid_records and all(float(record.get("confidence", 1.0)) < 0.75 and str(record.get("source") or "").casefold() in {"easyocr", "paddle", "adapter"} for record in valid_records):
                 uncertainties.append(f"{_item_id(item, field, 0)} relies only on low-confidence OCR evidence")
     spec["uncertainties"] = list(dict.fromkeys(str(item) for item in uncertainties if str(item).strip()))
     spec.setdefault("forbidden_inventions", [])
