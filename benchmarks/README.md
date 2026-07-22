@@ -23,6 +23,7 @@ rfs benchmark list --root benchmarks --json
 rfs benchmark validate --case benchmarks/paper-to-image/cases/001_linear_pipeline --json
 rfs benchmark fetch --case benchmarks/paper-to-image/cases/101_vit_linear --json
 rfs benchmark fast --case benchmarks/paper-to-image/cases/101_vit_linear --out output/benchmarks/vit_fast --planner-mode heuristic --json
+rfs benchmark fast-suite --root benchmarks --out output/benchmarks/fast_suite --planner-mode heuristic --json
 rfs benchmark run --case benchmarks/paper-to-image/cases/001_linear_pipeline --out output/benchmarks/p2i_001 --json
 rfs benchmark score --case benchmarks/image-to-ppt/cases/001_three_stage_layout --run output/rebuild_case --json
 ```
@@ -34,6 +35,10 @@ Each case contains `case.json` plus suite-specific human-authored ground truth. 
 Generated runs and reports belong under `output/benchmarks/` and are not source fixtures.
 
 Real-paper cases commit `source.json` and human-authored Ground Truth, while `benchmark fetch` downloads the PDF into an ignored local `inputs/` directory. This keeps the public repository reproducible without redistributing publisher files.
+
+The committed unseen-generalization set includes DETR, CLIP, and NeRF in addition to ViT, Mask R-CNN, Self-Refine, ImageBind, and SAM. Local image-only scan regressions remain under ignored `tmp/pdfs/` and `output/pdf/`; do not commit publisher PDFs or generated OCR artifacts.
+
+`benchmark fast-suite` writes `fast_suite_report.json` with per-case results and aggregate entity/relation recall, forbidden content, cache hit rates, provider success/retry counts, failure categories, and stage timings.
 
 ## Evaluation tiers
 

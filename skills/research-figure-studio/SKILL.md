@@ -27,6 +27,16 @@ rfs rebuild-editable --reference <image> --out <output_dir> --asset-policy smart
 
 Use `--image-asset-mode placeholder --rebuild-asset-mode placeholder --allow-engineering-preview` only for explicit offline engineering validation. Never present that result as production-approved.
 
+For paper understanding or prompt-only work, start with:
+
+```powershell
+rfs doctor --json
+rfs inspect-pdf --paper <paper.pdf> --out <inspection_dir> --json
+rfs fast-framework-prompt --paper <paper.pdf> --out <fast_result> --deadline 180 --json
+```
+
+`inspect-pdf` and the fast path share a global document cache. For scanned PDFs, `auto` prefers RapidOCR when installed. Do not enable automatic EasyOCR model downloads implicitly; use `RFS_OCR_ALLOW_DOWNLOAD=1` only when the user explicitly wants the one-time download.
+
 ## Required semantic policy
 
 - Read and structure the paper before generating the visual reference.
@@ -87,10 +97,11 @@ Use the two independent suites to locate failures before changing the workflow:
 rfs benchmark list --root benchmarks --json
 rfs benchmark fetch --case <case_dir> --json
 rfs benchmark fast --case <case_dir> --out <run_dir> --deadline 180 --json
+rfs benchmark fast-suite --root benchmarks --out <suite_dir> --planner-mode heuristic --json
 rfs benchmark run --case <case_dir> --out <run_dir> --json
 rfs benchmark score --case <case_dir> --run <run_dir> --json
 ```
 
 `paper-to-image` scientific and terminology errors are hard failures. `image-to-ppt` must reject full-slide reference images even when raster similarity is high.
 
-For prompt-only work, run `rfs fast-framework-prompt --paper <paper.pdf> --out <fast_result> --deadline 180 --json`. Inspect `extraction_report.json` first, then `planning_validation_report.json`; treat `engineering_only: true` as a non-production result even when deterministic topology coverage is high.
+For prompt-only work, inspect `extraction_report.json`, `contract_completion_report.json`, and `planning_validation_report.json` in that order. Treat `engineering_only: true` as non-production even when deterministic topology coverage is high. Use `fast-suite` after parser or contract changes and reject regressions in forbidden content, evidence grounding, provider reliability, or stage timings.

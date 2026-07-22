@@ -8,9 +8,18 @@
 rfs fast-framework-prompt --paper paper.pdf --out output/fast --deadline 180 --json
 ```
 
-The fast path stops before image generation. It uses structured block-level PDF extraction, complete Figure 1/overview captions, stable page/content-hash evidence IDs, one compact VLM contract call, deterministic evidence rules, and a local SHA-256 contract cache. A cached paper normally completes in seconds. If no VLM succeeds, the command returns an engineering result with explicit uncertainties instead of claiming production readiness.
+The fast path stops before image generation. It uses structured block-level PDF extraction, complete overview captions, stable page/content-hash evidence IDs, a semantic-only VLM request, evidence-gated generic contract completion, and separate document/contract caches. Layout, style, prompt, and editable overlays are compiled deterministically after the semantic graph. A warm paper normally completes in well under a second. If no VLM succeeds, the command returns an engineering result with explicit uncertainties instead of claiming production readiness.
 
-Use `rfs inspect-pdf --paper paper.pdf --out output/inspection --json` to diagnose reading order, Unicode, OCR, section coverage, captions, and parser agreement without model calls.
+Use `rfs inspect-pdf --paper paper.pdf --out output/inspection --json` to diagnose reading order, Unicode, OCR, section coverage, captions, and parser agreement without model calls. For image-only/scanned papers, `--ocr-engine auto` prefers RapidOCR. EasyOCR downloads are opt-in through `RFS_OCR_ALLOW_DOWNLOAD=1`; missing models fail quickly and still write a complete extraction report.
+
+Run all or selected paper benchmarks with aggregate reliability metrics:
+
+```powershell
+rfs benchmark fast-suite --root benchmarks --out output/benchmarks/fast-suite --planner-mode heuristic --json
+rfs benchmark fast-suite --root benchmarks --out output/benchmarks/unseen --case-id 106_detr_set_prediction --case-id 107_clip_contrastive --json
+```
+
+`fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, and parser/semantic/total timings.
 
 ## Production Command
 
