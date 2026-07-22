@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _filter_ocr_margin_noise, _prioritize_ocr_candidates, _rapidocr_worker_count, _token_overlap_agreement, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _column_groups, _filter_ocr_margin_noise, _prioritize_ocr_candidates, _rapidocr_worker_count, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 from rfs.reference_text_extractor import _positive_ocr_setting
 
@@ -115,6 +115,20 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertLess(text.index("COLUMN TWO BOTTOM"), text.index("COLUMN THREE TOP"))
         self.assertEqual(parsed["pages"][0]["column_count"], 3)
         self.assertEqual(parsed["extraction_report"]["max_column_count"], 3)
+
+    def test_invalid_three_column_split_falls_back_to_two_columns(self):
+        items = []
+        for index in range(6):
+            items.append({"bbox": [95, 300 + index * 30, 395, 322 + index * 30], "text": f"Complete left column scientific sentence number {index}."})
+            items.append({"bbox": [412, 300 + index * 30, 713, 322 + index * 30], "text": f"Complete right column scientific sentence number {index}."})
+        items.extend([
+            {"bbox": [157, 96, 650, 120], "text": "BERT Pre-training of Deep Bidirectional Transformers"},
+            {"bbox": [294, 125, 512, 148], "text": "Language Understanding"},
+        ])
+
+        groups = _column_groups(items, 804)
+
+        self.assertEqual(len(groups), 2)
 
     def test_rotated_page_uses_display_coordinate_space(self):
         def draw(page):

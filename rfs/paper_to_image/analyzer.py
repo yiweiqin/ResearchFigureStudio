@@ -86,16 +86,8 @@ def _column_groups(items: list[dict[str, Any]], page_width: float, max_columns: 
         (float(positioned[index + 1]["bbox"][0]) - float(positioned[index]["bbox"][0]), index)
         for index in range(len(positioned) - 1)
     ]
-    split_indexes = sorted(index for gap, index in sorted(gaps, reverse=True)[: max_columns - 1] if gap >= page_width * 0.12)
-    if not split_indexes:
-        return [items]
-    groups: list[list[dict[str, Any]]] = []
-    start = 0
-    for split in split_indexes:
-        groups.append(positioned[start:split + 1])
-        start = split + 1
-    groups.append(positioned[start:])
-    if len(groups) > max_columns or any(len(group) < 2 for group in groups):
+    qualified_gaps = [(gap, index) for gap, index in sorted(gaps, reverse=True) if gap >= page_width * 0.12]
+    if not qualified_gaps:
         return [items]
 
     def median(values: list[float]) -> float:
@@ -103,20 +95,36 @@ def _column_groups(items: list[dict[str, Any]], page_width: float, max_columns: 
         middle = len(ordered) // 2
         return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
 
-    ordered_groups = sorted(groups, key=lambda group: median([float(item["bbox"][0]) for item in group]))
-    minimum_vertical_span = page_width * 0.12
-    minimum_text = 40
-    for group in ordered_groups:
-        vertical_span = max(float(item["bbox"][3]) for item in group) - min(float(item["bbox"][1]) for item in group)
-        text_count = sum(len(_normalized_compare_text(str(item.get("text") or ""))) for item in group)
-        if vertical_span < minimum_vertical_span or text_count < minimum_text:
-            return [items]
-    for left, right in zip(ordered_groups, ordered_groups[1:]):
-        left_right = median([float(item["bbox"][2]) for item in left])
-        right_left = median([float(item["bbox"][0]) for item in right])
-        if left_right > right_left + page_width * 0.04:
-            return [items]
-    return ordered_groups
+    def validated_groups(split_count: int) -> list[list[dict[str, Any]]] | None:
+        split_indexes = sorted(index for _, index in qualified_gaps[:split_count])
+        groups: list[list[dict[str, Any]]] = []
+        start = 0
+        for split in split_indexes:
+            groups.append(positioned[start:split + 1])
+            start = split + 1
+        groups.append(positioned[start:])
+        if len(groups) > max_columns or any(len(group) < 2 for group in groups):
+            return None
+        ordered_groups = sorted(groups, key=lambda group: median([float(item["bbox"][0]) for item in group]))
+        minimum_vertical_span = page_width * 0.12
+        minimum_text = 40
+        for group in ordered_groups:
+            vertical_span = max(float(item["bbox"][3]) for item in group) - min(float(item["bbox"][1]) for item in group)
+            text_count = sum(len(_normalized_compare_text(str(item.get("text") or ""))) for item in group)
+            if vertical_span < minimum_vertical_span or text_count < minimum_text:
+                return None
+        for left, right in zip(ordered_groups, ordered_groups[1:]):
+            left_right = median([float(item["bbox"][2]) for item in left])
+            right_left = median([float(item["bbox"][0]) for item in right])
+            if left_right > right_left + page_width * 0.04:
+                return None
+        return ordered_groups
+
+    for split_count in range(min(max_columns - 1, len(qualified_gaps)), 0, -1):
+        groups = validated_groups(split_count)
+        if groups:
+            return groups
+    return [items]
 
 
 def _reading_order(blocks: list[dict[str, Any]], page_width: float) -> tuple[list[dict[str, Any]], float]:
