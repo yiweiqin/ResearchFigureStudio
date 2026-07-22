@@ -36,7 +36,7 @@ Generated runs and reports belong under `output/benchmarks/` and are not source 
 
 Real-paper cases commit `source.json` and human-authored Ground Truth, while `benchmark fetch` downloads the PDF into an ignored local `inputs/` directory. This keeps the public repository reproducible without redistributing publisher files.
 
-The committed unseen-generalization set includes DETR, CLIP, and NeRF in addition to ViT, Mask R-CNN, Self-Refine, ImageBind, and SAM. Local image-only scan regressions remain under ignored `tmp/pdfs/` and `output/pdf/`; do not commit publisher PDFs or generated OCR artifacts.
+The committed unseen-generalization set spans vision, multimodal learning, and NLP: ViT, Mask R-CNN, Self-Refine, ImageBind, SAM, DETR, CLIP, NeRF, Transformer, BERT, and retrieval-augmented generation. The NLP cases specifically exercise short overview captions, method-text recovery, embedding summation, pre-training/fine-tuning separation, and retrieval-conditioned generation. Local image-only scan regressions remain under ignored `tmp/pdfs/` and `output/pdf/`; do not commit publisher PDFs or generated OCR artifacts.
 
 `benchmark fast-suite` writes `fast_suite_report.json` with per-case results and aggregate entity/relation recall, forbidden content, cache hit rates, provider success/retry counts, failure categories, and stage timings.
 

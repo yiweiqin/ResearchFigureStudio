@@ -240,6 +240,127 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn((ids["Volume Rendering"], ids["Rendered Image"]), pairs)
         self.assertEqual(spec["topology"], "branch")
 
+    def test_generic_completion_recovers_encoder_decoder_from_method_lines(self):
+        caption = "Figure 1: The model architecture."
+        lines = [
+            "Here, the encoder maps an input sequence of symbol representations to continuous representations.",
+            "The encoder is composed of a stack of identical layers.",
+            "The decoder is also composed of a stack of identical layers and attends over the output of the encoder stack.",
+            "We use learned embeddings to convert the input",
+            "tokens and output tokens to vectors. We also use the usual learned linear transfor-",
+            "mation and softmax function to convert the decoder output to predicted next-token probabilities.",
+            "The output embeddings are offset by one position.",
+            "We add positional encodings to the input embeddings at the bottoms of the encoder and decoder stacks.",
+        ]
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 2, "kind": "caption", "text": caption, "confidence": 1.0}]
+            + [{"id": f"E00{index + 2:02d}", "page": 3 + index // 3, "kind": "paragraph", "text": text, "section_hint": "Method", "confidence": 1.0} for index, text in enumerate(lines)],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Inputs", "Input Embedding", "Encoder Stack", "Outputs (shifted right)", "Output Embedding", "Decoder Stack", "Linear", "Softmax", "Output Probabilities"):
+            self.assertIn(label, ids)
+        self.assertIn((ids["Encoder Stack"], ids["Decoder Stack"]), pairs)
+        self.assertIn((ids["Linear"], ids["Softmax"]), pairs)
+
+    def test_generic_completion_recovers_embedding_pretraining_and_finetuning(self):
+        captions = [
+            "Figure 1: Overall pre-training and fine-tuning procedures. The same pre-trained model parameters are used to initialize models for different down-stream tasks.",
+            "Figure 2: Input representation. The input embeddings are the sum of the token embeddings, the segmentation embeddings and the position embeddings.",
+        ]
+        method = [
+            "The model architecture is a multi-layer bidirectional Transformer encoder.",
+            "Task #1: Masked LM",
+            "Task #2: Next Sentence Prediction (NSP)",
+            "We represent the input sequence and fine-tune using labeled data from the downstream tasks.",
+        ]
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": index + 2, "caption": text} for index, text in enumerate(captions)]},
+            "evidence": [{"id": f"E000{index + 1}", "page": index + 2, "kind": "caption", "text": text, "section_hint": "Figure Captions", "confidence": 1.0} for index, text in enumerate(captions)]
+            + [{"id": f"E001{index}", "page": 4, "kind": "paragraph", "text": text, "section_hint": "Method", "confidence": 1.0} for index, text in enumerate(method)],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Input Sequence", "Token Embeddings", "Segment Embeddings", "Position Embeddings", "Input Representation", "Bidirectional Transformer Encoder", "Masked LM", "Next Sentence Prediction", "Fine-tuning", "Downstream Tasks"):
+            self.assertIn(label, ids)
+        self.assertIn((ids["Token Embeddings"], ids["Input Representation"]), pairs)
+        self.assertIn((ids["Bidirectional Transformer Encoder"], ids["Fine-tuning"]), pairs)
+
+    def test_generic_completion_recovers_retrieval_conditioned_generation(self):
+        caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."
+        result_caption = "Figure 2: Posterior for each generated token with five retrieved documents."
+        parsed = {
+            "page_count": 6,
+            "document_index": {"figures": [{"page": 2, "caption": caption}, {"page": 5, "caption": result_caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 5, "kind": "caption", "text": result_caption, "section_hint": "Figure Captions", "confidence": 1.0},
+            ],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Input Query", "Query Encoder", "Document Index", "Retriever", "Top-K Documents", "Generator", "Output Sequence"):
+            self.assertIn(label, ids)
+        self.assertNotIn("Generate", ids)
+        self.assertIn((ids["Document Index"], ids["Retriever"]), pairs)
+        self.assertIn((ids["Top-K Documents"], ids["Generator"]), pairs)
+
+    def test_generic_completion_repairs_vlm_ids_labels_and_relation_grounding(self):
+        caption = "Figure 1: Pre-training and fine-tuning procedures."
+        parsed = {
+            "page_count": 5,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 3, "kind": "paragraph", "text": "The input embeddings are the sum of the token embeddings, segmentation embeddings and position embeddings.", "section_hint": "Method", "confidence": 1.0},
+                {"id": "E0003", "page": 3, "kind": "paragraph", "text": "The architecture is a multi-layer bidirectional Transformer encoder.", "section_hint": "Method", "confidence": 1.0},
+                {"id": "E0004", "page": 4, "kind": "paragraph", "text": "We train with a masked language model and next sentence prediction.", "section_hint": "Method", "confidence": 1.0},
+                {"id": "E0005", "page": 4, "kind": "paragraph", "text": "We represent the input sequence for downstream tasks.", "section_hint": "Method", "confidence": 1.0},
+                {"id": "E0006", "page": 1, "kind": "paragraph", "text": "A major limitation is that standard language models are", "section_hint": "Introduction", "confidence": 1.0},
+                {"id": "E0007", "page": 1, "kind": "paragraph", "text": "unidirectional.", "section_hint": "Introduction", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [{"id": "input_tokens", "name": "input example", "evidence_ids": ["E0005"]}],
+                "modules": [
+                    {"id": "embedding_layer", "name": "input embeddings", "evidence_ids": ["E0002"]},
+                    {"id": "transformer_encoder", "name": "Bidirectional Transformer Encoder", "evidence_ids": ["E0003"]},
+                    {"id": "mlm_head", "name": "MLM objective", "evidence_ids": []},
+                ],
+                "research_problem": {"text": "Standard language models are unidirectional.", "evidence_ids": []},
+                "outputs": [], "innovations": [], "must_show": [], "terminology": {},
+                "relations": [
+                    {"source": "embedding_layer", "target": "transformer_encoder", "type": "data_flow", "evidence_ids": []},
+                    {"source": "transformer_encoder", "target": "mlm_head", "type": "prediction", "evidence_ids": []},
+                ],
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(next(item for item in spec["inputs"] if item["id"] == "input_tokens")["name"], "Input Sequence")
+        self.assertEqual(next(item for item in spec["modules"] if item["id"] == "mlm_head")["name"], "Masked LM")
+        self.assertTrue(next(item for item in spec["modules"] if item["id"] == "mlm_head")["evidence_ids"])
+        self.assertTrue(all(item.get("evidence_ids") for item in spec["relations"] if item.get("source") in {"embedding_layer", "transformer_encoder"} and item.get("target") in {"transformer_encoder", "mlm_head"}))
+        self.assertEqual(spec["research_problem"]["evidence_ids"], ["E0006", "E0007"])
+
 
 if __name__ == "__main__":
     unittest.main()

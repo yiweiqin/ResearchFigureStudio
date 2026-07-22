@@ -1,0 +1,29 @@
+{
+  "summary": "Human-authored semantic contract for BERT pre-training, input representation, and fine-tuning.",
+  "entities": [
+    {"id": "input_tokens", "label": "Input Tokens", "aliases": ["Token Sequence", "Input Sequence"], "role": "input", "required": true},
+    {"id": "token_embeddings", "label": "Token Embeddings", "role": "module", "required": true},
+    {"id": "segment_embeddings", "label": "Segment Embeddings", "aliases": ["Segmentation Embeddings"], "role": "module", "required": true},
+    {"id": "position_embeddings", "label": "Position Embeddings", "role": "module", "required": true},
+    {"id": "input_representation", "label": "Input Representation", "aliases": ["BERT Input Representation"], "role": "module", "required": true},
+    {"id": "bert_encoder", "label": "BERT", "aliases": ["BERT Encoder", "Bidirectional Transformer Encoder"], "role": "module", "required": true},
+    {"id": "masked_lm", "label": "Masked LM", "aliases": ["Masked Language Model", "Masked Language Modeling"], "role": "training", "required": true},
+    {"id": "next_sentence", "label": "Next Sentence Prediction", "aliases": ["NSP"], "role": "training", "required": true},
+    {"id": "fine_tuning", "label": "Fine-tuning", "aliases": ["Fine-tune"], "role": "module", "required": true},
+    {"id": "downstream_tasks", "label": "Downstream Tasks", "aliases": ["Task-specific Outputs", "Fine-tuning Tasks"], "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "input_tokens", "target": "token_embeddings", "type": "embedding", "required": true},
+    {"source": "token_embeddings", "target": "input_representation", "type": "sum", "required": true},
+    {"source": "segment_embeddings", "target": "input_representation", "type": "sum", "required": true},
+    {"source": "position_embeddings", "target": "input_representation", "type": "sum", "required": true},
+    {"source": "input_representation", "target": "bert_encoder", "type": "data_flow", "required": true},
+    {"source": "bert_encoder", "target": "masked_lm", "type": "training_objective", "required": true},
+    {"source": "bert_encoder", "target": "next_sentence", "type": "training_objective", "required": true},
+    {"source": "bert_encoder", "target": "fine_tuning", "type": "initialization", "required": true},
+    {"source": "fine_tuning", "target": "downstream_tasks", "type": "data_flow", "required": true}
+  ],
+  "forbidden_labels": ["Autoregressive Decoder", "Convolutional Backbone", "Retrieval Index", "Image Encoder"],
+  "expected_reading_order": ["input_tokens", "token_embeddings", "segment_embeddings", "position_embeddings", "input_representation", "bert_encoder", "fine_tuning", "downstream_tasks"],
+  "topology_requirements": {"primary_flow": "pretrain_then_finetune", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": true}
+}

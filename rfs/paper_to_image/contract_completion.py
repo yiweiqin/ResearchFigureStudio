@@ -27,6 +27,7 @@ class ConceptRule:
     pattern: str
     aliases: tuple[str, ...] = ()
     requires_overview: bool = False
+    context_pattern: str | None = None
 
 
 CONCEPT_RULES = (
@@ -48,10 +49,10 @@ CONCEPT_RULES = (
     ConceptRule("backbone", "Backbone", "modules", "feature extractor", r"\bbackbones?\b", ("backbone architecture",), True),
     ConceptRule("image_encoder", "Image Encoder", "modules", "encoder", r"\bimage encoder\b"),
     ConceptRule("text_encoder", "Text Encoder", "modules", "encoder", r"\btext encoder\b"),
-    ConceptRule("transformer_encoder", "Transformer Encoder", "modules", "encoder", r"\btransformer encoder\b"),
-    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b"),
+    ConceptRule("transformer_encoder", "Transformer Encoder", "modules", "encoder", r"\btransformer encoder\b", (), True),
+    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b", (), True),
     ConceptRule("position_embedding", "Position Embedding", "modules", "conditioning", r"\bposition embeddings?\b", ("positional embedding",), True),
-    ConceptRule("positional_encoding", "Positional Encoding", "modules", "conditioning", r"\bposition(?:al)? encod(?:ing|ings)\b", (), True),
+    ConceptRule("positional_encoding", "Positional Encoding", "modules", "conditioning", r"\bposition(?:al)? encod(?:ing|ings)\b"),
     ConceptRule("image_patches", "Image Patches", "modules", "intermediate", r"\bimage patches?\b|\bfixed-size patches\b", ("patches",), True),
     ConceptRule("linear_projection", "Linear Projection of Flattened Patches", "modules", "projection", r"\blinear projection(?: of flattened patches)?\b|\blinearly embed\b", ("linear projection",), True),
     ConceptRule("class_token", "Class Token", "modules", "conditioning", r"\bclass(?:ification)? token\b|\bclass embedding\b", ("classification token", "class embedding"), True),
@@ -88,6 +89,32 @@ CONCEPT_RULES = (
     ConceptRule("valid_mask", "Valid Segmentation Mask", "outputs", "output", r"\bvalid masks?\b|\bobject masks?\b", ("valid masks", "valid mask"), True),
     ConceptRule("zero_shot_classifier", "Zero-Shot Classifier", "outputs", "inference output", r"\bzero[ -]?shot (?:linear )?classifier\b|\bzero[ -]?shot prediction\b", ("zero-shot linear classifier", "zero-shot prediction")),
     ConceptRule("rendered_image", "Rendered Image", "outputs", "output", r"\b(?:rendered|synthesi[sz]ed) (?:images?|views?)\b|\bsynthesi[sz]e images?\b|\bnovel views?\b", ("synthesized image", "synthesized view", "novel view")),
+    ConceptRule("source_tokens", "Inputs", "inputs", "source sequence", r"\bencoder maps an input sequence(?: of symbol representations)?\b|\blearned embeddings to convert the input\s+tokens\b", ("input sequence", "source tokens")),
+    ConceptRule("input_embedding", "Input Embedding", "modules", "embedding", r"\blearned embeddings to convert the input\s+tokens\b|\binput embeddings?\b", ("input embeddings",), context_pattern=r"\bencoder\b.*\bdecoder\b|\bencoder and decoder stacks\b"),
+    ConceptRule("encoder_stack", "Encoder Stack", "modules", "encoder", r"\bencoder is composed of a stack\b|\bencoder stack\b", ("encoder", "transformer encoder")),
+    ConceptRule("target_tokens", "Outputs (shifted right)", "inputs", "target sequence", r"\boutput embeddings? (?:are )?offset by one position\b|\binput\s+tokens and output tokens\b", ("target tokens", "target sequence", "outputs shifted right")),
+    ConceptRule("output_embedding", "Output Embedding", "modules", "embedding", r"\boutput embeddings?\b|\binput\s+tokens and output tokens\b", ("output embeddings",), context_pattern=r"\bencoder\b.*\bdecoder\b|\bencoder and decoder stacks\b"),
+    ConceptRule("decoder_stack", "Decoder Stack", "modules", "decoder", r"\bdecoder is also composed of a stack\b|\bdecoder stack\b", ("decoder", "transformer decoder")),
+    ConceptRule("output_linear", "Linear", "modules", "output projection", r"\blearned linear transfor(?:mation|\-\s*mation) and softmax function to convert the decoder output\b", ("linear layer", "output projection")),
+    ConceptRule("output_softmax", "Softmax", "modules", "output normalization", r"\blinear transfor(?:mation|\-\s*mation) and softmax function to convert the decoder output\b", ("softmax layer",)),
+    ConceptRule("output_probabilities", "Output Probabilities", "outputs", "output", r"\bpredicted next-token probabilities\b", ("predicted next-token probabilities", "next-token probabilities", "outputs")),
+    ConceptRule("input_tokens", "Input Sequence", "inputs", "input sequence", r"\brepresent the input\s+sequence\b|\bfor a given token, its input representation\b", ("input tokens", "token sequence"), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
+    ConceptRule("token_embeddings", "Token Embeddings", "modules", "embedding", r"\btoken embeddings?\b", (), context_pattern=r"\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
+    ConceptRule("segment_embeddings", "Segment Embeddings", "modules", "embedding", r"\b(?:segment|segmentation) embeddings?\b", ("segmentation embeddings",), context_pattern=r"\btoken embeddings?\b.*\bposition embeddings?\b"),
+    ConceptRule("bert_position_embeddings", "Position Embeddings", "modules", "embedding", r"\bposition embeddings?\b", (), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b"),
+    ConceptRule("input_representation", "Input Representation", "modules", "representation", r"\binput representation\b|\binput embeddings are the sum of\b", ("bert input representation",), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
+    ConceptRule("bidirectional_encoder", "Bidirectional Transformer Encoder", "modules", "encoder", r"\bmulti-layer bidirectional transformer en-?\s*coder\b|\bbidirectional transformer encoder\b", ("bert", "bert encoder")),
+    ConceptRule("masked_lm", "Masked LM", "modules", "training objective", r"\bmasked (?:language model(?:ing)?|lm)\b", ("masked language model", "masked language modeling", "mlm objective"), context_pattern=r"\bnext sentence prediction\b|\bNSP\b"),
+    ConceptRule("next_sentence", "Next Sentence Prediction", "modules", "training objective", r"\bnext sentence prediction\b|\bNSP\b", ("nsp",), context_pattern=r"\bmasked (?:language model(?:ing)?|lm)\b"),
+    ConceptRule("fine_tuning", "Fine-tuning", "modules", "adaptation", r"\bframework:\s*pre-training and fine-tuning\b|\bpre-trained model parameters are used to initialize models for different down-stream tasks\b", ("fine-tune", "fine tuning")),
+    ConceptRule("downstream_tasks", "Downstream Tasks", "outputs", "task outputs", r"\bmodels for different down-stream tasks\b|\blabeled data from the downstream tasks\b|\bmodel many downstream tasks\b", ("task-specific outputs", "fine-tuning tasks")),
+    ConceptRule("input_query", "Input Query", "inputs", "query", r"\bfor query x\b|\bgiven a query x\b|\bquery representation produced by a query encoder\b", ("query", "input x")),
+    ConceptRule("query_encoder", "Query Encoder", "modules", "encoder", r"\bquery encoder\b"),
+    ConceptRule("document_index", "Document Index", "modules", "non-parametric memory", r"\bdocument index\b|\bdense vector index\b", ("non-parametric memory", "wikipedia index")),
+    ConceptRule("retriever", "Retriever", "modules", "retriever", r"\b(?:pre-trained |neural )?retriever\b"),
+    ConceptRule("top_k_documents", "Top-K Documents", "modules", "retrieved context", r"\btop-?k documents\b|\btop k documents are retrieved\b", ("retrieved documents", "retrieved passages")),
+    ConceptRule("generator_module", "Generator", "modules", "generator", r"\bpre-trained seq2seq model\s*\(\s*generator\s*\)|\bgenerator p|\bgenerator component\b", ("generate", "seq2seq generator", "pre-trained generator")),
+    ConceptRule("output_sequence", "Output Sequence", "outputs", "generated output", r"\bgenerator produces the output sequence\b|\bgenerating the target sequence y\b|\bfinal prediction y\b", ("prediction y", "final prediction", "generated output", "output y")),
 )
 
 
@@ -157,20 +184,49 @@ RELATION_RULES = (
     ("volume_density", "volume_rendering", "rendering_input"),
     ("color", "volume_rendering", "rendering_input"),
     ("volume_rendering", "rendered_image", "data_flow"),
+    ("source_tokens", "input_embedding", "embedding"),
+    ("input_embedding", "encoder_stack", "data_flow"),
+    ("positional_encoding", "encoder_stack", "conditioning"),
+    ("target_tokens", "output_embedding", "embedding"),
+    ("output_embedding", "decoder_stack", "data_flow"),
+    ("positional_encoding", "decoder_stack", "conditioning"),
+    ("encoder_stack", "decoder_stack", "cross_attention"),
+    ("decoder_stack", "output_linear", "data_flow"),
+    ("output_linear", "output_softmax", "data_flow"),
+    ("output_softmax", "output_probabilities", "data_flow"),
+    ("input_tokens", "token_embeddings", "embedding"),
+    ("token_embeddings", "input_representation", "sum"),
+    ("segment_embeddings", "input_representation", "sum"),
+    ("bert_position_embeddings", "input_representation", "sum"),
+    ("input_representation", "bidirectional_encoder", "data_flow"),
+    ("bidirectional_encoder", "masked_lm", "training_objective"),
+    ("bidirectional_encoder", "next_sentence", "training_objective"),
+    ("bidirectional_encoder", "fine_tuning", "initialization"),
+    ("fine_tuning", "downstream_tasks", "data_flow"),
+    ("input_query", "query_encoder", "encoding"),
+    ("query_encoder", "retriever", "retrieval_query"),
+    ("document_index", "retriever", "memory_lookup"),
+    ("retriever", "top_k_documents", "retrieval"),
+    ("input_query", "generator_module", "generation_input"),
+    ("top_k_documents", "generator_module", "conditioning"),
+    ("generator_module", "output_sequence", "generation"),
 )
 
 
 def _overview_candidates(parsed: dict[str, Any], limit: int = 2) -> list[dict[str, Any]]:
-    positive = re.compile(r"\b(overview|framework|architecture|pipeline|procedure|approach|model|system|workflow|directly predicts)\b", re.IGNORECASE)
-    negative = re.compile(r"\b(comparison|performance|result|ablation|visualization|qualitative|attention|distribution)\b", re.IGNORECASE)
+    positive = re.compile(r"\b(overview|framework|architecture|pipeline|procedure|approach|model|system|workflow|representation|encoder|decoder|directly predicts)\b", re.IGNORECASE)
+    negative = re.compile(r"\b(comparison|differences?|versus|performance|result|ablation|visualization|qualitative|attention|distribution|interface)\b", re.IGNORECASE)
     ranked = []
     for index, figure in enumerate(parsed.get("document_index", {}).get("figures", [])):
         caption = str(figure.get("caption") or "")
-        score = (8 if positive.search(caption) else 0) + (4 if re.match(r"^(figure|fig\.)\s*[12]\b", caption, re.IGNORECASE) else 0)
+        positive_match = positive.search(caption)
+        if not positive_match:
+            continue
+        score = 8 + (4 if re.match(r"^(figure|fig\.)\s*[12]\b", caption, re.IGNORECASE) else 0)
         score += 3 if 160 <= len(caption) <= 1600 else 0
-        score -= 7 if negative.search(caption) else 0
+        score -= 14 if negative.search(caption) else 0
         ranked.append((score, -index, figure))
-    return [item for _, _, item in sorted(ranked, reverse=True)[:limit]]
+    return [item for score, _, item in sorted(ranked, reverse=True) if score > 0][:limit]
 
 
 def _evidence_for_figure(parsed: dict[str, Any], figure: dict[str, Any]) -> dict[str, Any] | None:
@@ -206,15 +262,37 @@ def _relevant_evidence(parsed: dict[str, Any]) -> tuple[list[dict[str, Any]], li
     return selected, relevant
 
 
+def _window_matches(pattern: re.Pattern[str], items: list[dict[str, Any]], max_window: int = 3) -> list[dict[str, Any]]:
+    for start in range(len(items)):
+        page = items[start].get("page")
+        for size in range(2, max_window + 1):
+            window = items[start:start + size]
+            if len(window) != size or any(item.get("page") != page for item in window):
+                break
+            if pattern.search(" ".join(str(item.get("text") or "") for item in window)):
+                return window
+    return []
+
+
 def _find_matches(rule: ConceptRule, selected: list[dict[str, Any]], relevant: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pattern = re.compile(rule.pattern, re.IGNORECASE)
+    if rule.context_pattern:
+        context = re.compile(rule.context_pattern, re.IGNORECASE | re.DOTALL)
+        context_text = " ".join(str(item.get("text") or "") for item in relevant)
+        if not context.search(context_text):
+            return []
     primary = [item for item in selected if pattern.search(str(item.get("text") or ""))]
     if primary:
         return primary[:2]
+    primary_window = _window_matches(pattern, selected)
+    if primary_window:
+        return primary_window
     if rule.requires_overview:
         return []
     secondary = [item for item in relevant if pattern.search(str(item.get("text") or ""))]
-    return secondary[:2]
+    if secondary:
+        return secondary[:2]
+    return _window_matches(pattern, relevant)
 
 
 def _find_existing(spec: dict[str, Any], rule: ConceptRule) -> tuple[str, dict[str, Any]] | None:
@@ -232,8 +310,69 @@ def _find_existing(spec: dict[str, Any], rule: ConceptRule) -> tuple[str, dict[s
     return None
 
 
+def _relation_bridge(source: dict[str, Any], target: dict[str, Any], relevant: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def terms(item: dict[str, Any]) -> set[str]:
+        values = set()
+        for word in re.findall(r"[a-z0-9]+", _label(item).casefold()):
+            if len(word) < 4 or word in {"shifted", "right", "stack", "module", "layer"}:
+                continue
+            values.add(word[:-1] if word.endswith("s") and len(word) > 4 else word)
+        return values
+
+    source_terms = terms(source)
+    target_terms = terms(target)
+    distinct_target_terms = target_terms - source_terms or target_terms
+    if not source_terms or not distinct_target_terms:
+        return None
+    return next(
+        (
+            item
+            for item in relevant
+            if any(term in _normalized(item.get("text")) for term in source_terms)
+            and any(term in _normalized(item.get("text")) for term in distinct_target_terms)
+        ),
+        None,
+    )
+
+
+def _ground_statement(item: object, relevant: list[dict[str, Any]]) -> list[str]:
+    if not isinstance(item, dict) or item.get("evidence_ids"):
+        return []
+    statement = str(item.get("text") or item.get("statement") or "").strip()
+    if not statement or statement.casefold() == "unknown":
+        return []
+    stop_words = {"a", "an", "and", "are", "as", "for", "in", "is", "of", "on", "or", "the", "to", "we", "with"}
+    target_terms = {word for word in re.findall(r"[a-z0-9]+", statement.casefold()) if len(word) >= 4 and word not in stop_words}
+    if not target_terms:
+        return []
+    best_score = 0.0
+    best_window: list[dict[str, Any]] = []
+    for start in range(len(relevant)):
+        page = relevant[start].get("page")
+        for size in range(1, 4):
+            window = relevant[start:start + size]
+            if len(window) != size or any(value.get("page") != page for value in window):
+                break
+            text_terms = set(re.findall(r"[a-z0-9]+", " ".join(str(value.get("text") or "") for value in window).casefold()))
+            score = len(target_terms & text_terms) / len(target_terms)
+            if score > best_score:
+                best_score = score
+                best_window = window
+    if best_score < 0.6:
+        item["text"] = "unknown"
+        item["status"] = "unknown"
+        return []
+    evidence_ids = [str(value.get("id")) for value in best_window if value.get("id")]
+    item["evidence_ids"] = evidence_ids
+    return evidence_ids
+
+
 def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     selected, relevant = _relevant_evidence(parsed)
+    grounded_statements = {
+        field: _ground_statement(spec.get(field), relevant)
+        for field in ("research_problem", "central_claim")
+    }
     found: dict[str, dict[str, Any]] = {}
     added_entities: list[str] = []
     upgraded_entities: list[str] = []
@@ -250,7 +389,9 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
             if str(item.get("role") or "") == "paper-derived stage requiring VLM verification":
                 item["role"] = rule.role
                 adopted_entities.append(str(item.get("id") or rule.key))
-            if _normalized(current) != _normalized(rule.label) and (_normalized(current) in _normalized(rule.label) or current.casefold().startswith(("neural network module", "learned "))):
+            accepted_names = {_normalized(rule.label), *(_normalized(value) for value in rule.aliases)}
+            exact_rule_id = _normalized(item.get("id")) == _normalized(rule.key)
+            if _normalized(current) != _normalized(rule.label) and (exact_rule_id or _normalized(current) in accepted_names or _normalized(current) in _normalized(rule.label) or current.casefold().startswith(("neural network module", "learned "))):
                 item["name"] = rule.label
                 upgraded_entities.append(str(item.get("id") or rule.key))
             item["evidence_ids"] = list(dict.fromkeys(list(item.get("evidence_ids", [])) + evidence_ids))
@@ -272,6 +413,7 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
     selected_ids = [str(item.get("id")) for item in selected if item.get("id")]
     evidence_by_id = {str(item.get("id")): item for item in relevant if item.get("id")}
     added_relations: list[str] = []
+    repaired_relations: list[str] = []
     for source_key, target_key, relation_type in RELATION_RULES:
         source = found.get(source_key)
         target = found.get(target_key)
@@ -282,9 +424,7 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
             continue
         evidence_ids = list(dict.fromkeys(list(source.get("evidence_ids", [])) + list(target.get("evidence_ids", []))))
         if selected_ids and not any(value in selected_ids for value in evidence_ids):
-            source_text = _label(source).casefold()
-            target_text = _label(target).casefold()
-            bridge = next((item for item in relevant if source_text.split()[-1] in str(item.get("text") or "").casefold() and target_text.split()[-1] in str(item.get("text") or "").casefold()), None)
+            bridge = _relation_bridge(source, target, relevant)
             source_pages = [int(evidence_by_id[value].get("page") or 0) for value in source.get("evidence_ids", []) if value in evidence_by_id]
             target_pages = [int(evidence_by_id[value].get("page") or 0) for value in target.get("evidence_ids", []) if value in evidence_by_id]
             nearby = bool(source_pages and target_pages and min(abs(left - right) for left in source_pages for right in target_pages) <= 3)
@@ -295,6 +435,30 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
         relations.append({"source": pair[0], "target": pair[1], "type": relation_type, "label": "", "evidence_ids": list(dict.fromkeys(evidence_ids))})
         existing_pairs.add(pair)
         added_relations.append(f"{pair[0]}->{pair[1]}")
+
+    endpoints = {
+        str(item.get("id")): item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in spec.get(field, []) if isinstance(item, dict) and item.get("id")
+    }
+    for relation in relations:
+        if not isinstance(relation, dict) or relation.get("evidence_ids"):
+            continue
+        source = endpoints.get(str(relation.get("source")))
+        target = endpoints.get(str(relation.get("target")))
+        if not source or not target:
+            continue
+        candidate_ids = list(dict.fromkeys(list(source.get("evidence_ids", [])) + list(target.get("evidence_ids", []))))
+        source_pages = [int(evidence_by_id[value].get("page") or 0) for value in source.get("evidence_ids", []) if value in evidence_by_id]
+        target_pages = [int(evidence_by_id[value].get("page") or 0) for value in target.get("evidence_ids", []) if value in evidence_by_id]
+        nearby = bool(source_pages and target_pages and min(abs(left - right) for left in source_pages for right in target_pages) <= 3)
+        bridge = _relation_bridge(source, target, relevant)
+        if not candidate_ids or not (any(value in selected_ids for value in candidate_ids) or nearby or bridge):
+            continue
+        if bridge and bridge.get("id"):
+            candidate_ids.append(str(bridge["id"]))
+        relation["evidence_ids"] = list(dict.fromkeys(candidate_ids))
+        repaired_relations.append(f"{relation.get('source')}->{relation.get('target')}")
 
     overview_terms = [rule.key for rule in CONCEPT_RULES if _find_matches(rule, selected, [])]
     covered_terms = [key for key in overview_terms if key in found]
@@ -308,5 +472,7 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
         "upgraded_entities": upgraded_entities,
         "adopted_entities": adopted_entities,
         "added_relations": added_relations,
+        "repaired_relations": repaired_relations,
+        "grounded_statements": {field: ids for field, ids in grounded_statements.items() if ids},
         "rules_are_evidence_gated": True,
     }

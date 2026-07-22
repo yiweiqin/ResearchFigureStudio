@@ -1,0 +1,30 @@
+{
+  "summary": "Human-authored semantic contract for the Transformer encoder-decoder architecture.",
+  "entities": [
+    {"id": "source_tokens", "label": "Inputs", "aliases": ["Input Sequence", "Source Tokens"], "role": "input", "required": true},
+    {"id": "input_embedding", "label": "Input Embedding", "aliases": ["Input Embeddings"], "role": "module", "required": true},
+    {"id": "position_encoding", "label": "Positional Encoding", "aliases": ["Position Encoding"], "role": "module", "required": true},
+    {"id": "encoder_stack", "label": "Encoder Stack", "aliases": ["Encoder", "N× Encoder"], "role": "module", "required": true},
+    {"id": "target_tokens", "label": "Outputs (shifted right)", "aliases": ["Target Tokens", "Target Sequence"], "role": "input", "required": true},
+    {"id": "output_embedding", "label": "Output Embedding", "aliases": ["Output Embeddings"], "role": "module", "required": true},
+    {"id": "decoder_stack", "label": "Decoder Stack", "aliases": ["Decoder", "N× Decoder"], "role": "module", "required": true},
+    {"id": "linear", "label": "Linear", "aliases": ["Linear Layer"], "role": "module", "required": true},
+    {"id": "softmax", "label": "Softmax", "role": "module", "required": true},
+    {"id": "output_probabilities", "label": "Output Probabilities", "aliases": ["Next-token Probabilities", "Outputs"], "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "source_tokens", "target": "input_embedding", "type": "embedding", "required": true},
+    {"source": "input_embedding", "target": "encoder_stack", "type": "data_flow", "required": true},
+    {"source": "position_encoding", "target": "encoder_stack", "type": "conditioning", "required": true},
+    {"source": "target_tokens", "target": "output_embedding", "type": "embedding", "required": true},
+    {"source": "output_embedding", "target": "decoder_stack", "type": "data_flow", "required": true},
+    {"source": "position_encoding", "target": "decoder_stack", "type": "conditioning", "required": true},
+    {"source": "encoder_stack", "target": "decoder_stack", "type": "cross_attention", "required": true},
+    {"source": "decoder_stack", "target": "linear", "type": "data_flow", "required": true},
+    {"source": "linear", "target": "softmax", "type": "data_flow", "required": true},
+    {"source": "softmax", "target": "output_probabilities", "type": "data_flow", "required": true}
+  ],
+  "forbidden_labels": ["Convolutional Backbone", "Recurrent Layer", "LSTM", "Region Proposals"],
+  "expected_reading_order": ["source_tokens", "input_embedding", "encoder_stack", "target_tokens", "output_embedding", "decoder_stack", "linear", "softmax", "output_probabilities"],
+  "topology_requirements": {"primary_flow": "encoder_decoder", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": false}
+}

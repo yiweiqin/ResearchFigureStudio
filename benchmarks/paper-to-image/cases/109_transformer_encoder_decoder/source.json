@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "Attention Is All You Need",
+  "venue": "NeurIPS",
+  "year": 2017,
+  "arxiv_id": "1706.03762",
+  "official_url": "https://papers.nips.cc/paper/7181-attention-is-all-you-need",
+  "paper_urls": ["https://arxiv.org/pdf/1706.03762", "https://export.arxiv.org/pdf/1706.03762"],
+  "target_figure": "Figure 1",
+  "verified_caption": "The Transformer model architecture contains encoder and decoder stacks, embeddings with positional encoding, attention and feed-forward sublayers, and a linear-softmax output path.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

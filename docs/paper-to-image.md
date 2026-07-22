@@ -17,9 +17,11 @@ Run all or selected paper benchmarks with aggregate reliability metrics:
 ```powershell
 rfs benchmark fast-suite --root benchmarks --out output/benchmarks/fast-suite --planner-mode heuristic --json
 rfs benchmark fast-suite --root benchmarks --out output/benchmarks/unseen --case-id 106_detr_set_prediction --case-id 107_clip_contrastive --json
+rfs benchmark fast-suite --root benchmarks --out output/benchmarks/nlp --case-id 109_transformer_encoder_decoder --case-id 110_bert_pretrain_finetune --case-id 111_rag_retrieval_generation --planner-mode vlm --json
 ```
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, and parser/semantic/total timings.
+The deterministic compiler can recover relations across adjacent PDF blocks, canonicalize evidence-backed VLM aliases, repair missing relation evidence, and ground or downgrade unsupported scalar claims. These repairs are paper-name agnostic and are covered by the NLP suite.
 
 ## Production Command
 

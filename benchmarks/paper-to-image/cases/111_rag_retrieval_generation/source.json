@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+  "venue": "NeurIPS",
+  "year": 2020,
+  "arxiv_id": "2005.11401",
+  "official_url": "https://papers.nips.cc/paper/2020/hash/6b493230205f780e1bc26945df7481e5-Abstract.html",
+  "paper_urls": ["https://arxiv.org/pdf/2005.11401", "https://export.arxiv.org/pdf/2005.11401"],
+  "target_figure": "Figure 1",
+  "verified_caption": "RAG combines a query encoder and non-parametric document index with a pre-trained seq2seq generator; retrieved top-K documents condition output generation.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

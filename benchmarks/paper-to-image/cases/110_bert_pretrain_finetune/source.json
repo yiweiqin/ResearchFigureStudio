@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+  "venue": "NAACL",
+  "year": 2019,
+  "arxiv_id": "1810.04805",
+  "official_url": "https://aclanthology.org/N19-1423/",
+  "paper_urls": ["https://arxiv.org/pdf/1810.04805", "https://export.arxiv.org/pdf/1810.04805"],
+  "target_figure": "Figures 1 and 2",
+  "verified_caption": "BERT uses the same bidirectional Transformer encoder for pre-training and fine-tuning; its input representation sums token, segment, and position embeddings.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

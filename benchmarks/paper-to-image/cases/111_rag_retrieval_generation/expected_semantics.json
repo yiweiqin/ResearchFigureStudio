@@ -1,0 +1,24 @@
+{
+  "summary": "Human-authored semantic contract for retrieval-augmented generation.",
+  "entities": [
+    {"id": "input_query", "label": "Input Query", "aliases": ["Query", "Input x"], "role": "input", "required": true},
+    {"id": "query_encoder", "label": "Query Encoder", "role": "module", "required": true},
+    {"id": "document_index", "label": "Document Index", "aliases": ["Non-parametric Memory", "Wikipedia Index"], "role": "module", "required": true},
+    {"id": "retriever", "label": "Retriever", "aliases": ["Neural Retriever"], "role": "module", "required": true},
+    {"id": "top_k_documents", "label": "Top-K Documents", "aliases": ["Retrieved Documents", "Retrieved Passages"], "role": "module", "required": true},
+    {"id": "generator", "label": "Generator", "aliases": ["Seq2seq Generator", "Pre-trained Generator"], "role": "module", "required": true},
+    {"id": "output_sequence", "label": "Output Sequence", "aliases": ["Generated Output", "Output y"], "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "input_query", "target": "query_encoder", "type": "encoding", "required": true},
+    {"source": "query_encoder", "target": "retriever", "type": "retrieval_query", "required": true},
+    {"source": "document_index", "target": "retriever", "type": "memory_lookup", "required": true},
+    {"source": "retriever", "target": "top_k_documents", "type": "retrieval", "required": true},
+    {"source": "input_query", "target": "generator", "type": "generation_input", "required": true},
+    {"source": "top_k_documents", "target": "generator", "type": "conditioning", "required": true},
+    {"source": "generator", "target": "output_sequence", "type": "generation", "required": true}
+  ],
+  "forbidden_labels": ["Image Encoder", "Object Queries", "Mask Decoder", "Convolutional Backbone"],
+  "expected_reading_order": ["input_query", "query_encoder", "document_index", "retriever", "top_k_documents", "generator", "output_sequence"],
+  "topology_requirements": {"primary_flow": "retrieval_then_generation", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": false}
+}
