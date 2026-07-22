@@ -76,6 +76,42 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertLess(text.index("LEFT COLUMN FIRST"), text.index("LEFT COLUMN THIRD"))
         self.assertLess(text.index("LEFT COLUMN THIRD"), text.index("RIGHT COLUMN SECOND"))
         self.assertGreaterEqual(parsed["pages"][0]["reading_order_confidence"], 0.8)
+        self.assertEqual(parsed["pages"][0]["column_count"], 2)
+
+    def test_three_column_blocks_are_sorted_column_major(self):
+        def draw(page):
+            page.insert_textbox((400, 100, 560, 170), "COLUMN THREE TOP complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((220, 100, 380, 170), "COLUMN TWO TOP complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((40, 100, 200, 170), "COLUMN ONE TOP complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((400, 220, 560, 290), "COLUMN THREE BOTTOM complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((220, 220, 380, 290), "COLUMN TWO BOTTOM complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((40, 220, 200, 290), "COLUMN ONE BOTTOM complete scientific paragraph.", fontsize=9)
+            page.insert_textbox((40, 40, 560, 75), "3 Method Architecture and System Overview Across Three Columns", fontsize=13)
+
+        parsed = parse_paper(self._pdf(draw))
+        text = parsed["pages"][0]["text"]
+
+        self.assertLess(text.index("COLUMN ONE TOP"), text.index("COLUMN ONE BOTTOM"))
+        self.assertLess(text.index("COLUMN ONE BOTTOM"), text.index("COLUMN TWO TOP"))
+        self.assertLess(text.index("COLUMN TWO BOTTOM"), text.index("COLUMN THREE TOP"))
+        self.assertEqual(parsed["pages"][0]["column_count"], 3)
+        self.assertEqual(parsed["extraction_report"]["max_column_count"], 3)
+
+    def test_rotated_page_uses_display_coordinate_space(self):
+        def draw(page):
+            page.insert_textbox((40, 40, 560, 85), "Rotated Paper Architecture Overview", fontsize=14)
+            page.insert_textbox((40, 120, 270, 220), "First scientific block with enough evidence for extraction.", fontsize=10)
+            page.insert_textbox((330, 120, 560, 220), "Second scientific block with enough evidence for extraction.", fontsize=10)
+            page.set_rotation(90)
+
+        parsed = parse_paper(self._pdf(draw))
+        page = parsed["pages"][0]
+
+        self.assertEqual(page["rotation"], 90)
+        self.assertEqual((page["width"], page["height"]), (800.0, 600.0))
+        self.assertTrue(all(0 <= block["bbox"][0] <= block["bbox"][2] <= page["width"] for block in page["blocks"]))
+        self.assertTrue(all(0 <= block["bbox"][1] <= block["bbox"][3] <= page["height"] for block in page["blocks"]))
+        self.assertEqual(parsed["extraction_report"]["rotated_pages"], [1])
 
     def test_unicode_normalization_keeps_math_symbols(self):
         def draw(page):

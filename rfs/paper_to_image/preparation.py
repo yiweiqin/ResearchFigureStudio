@@ -125,6 +125,19 @@ def _stable_id(prefix: str, value: str, index: int) -> str:
     return f"{prefix}_{slug or index}"
 
 
+def _statement_object(value: Any, fallback: Any = None) -> dict[str, Any]:
+    candidate = value if value is not None else fallback
+    if isinstance(candidate, dict):
+        item = dict(candidate)
+        text = str(item.get("text") or item.get("statement") or "unknown").strip() or "unknown"
+        item["text"] = text
+        item["evidence_ids"] = list(item.get("evidence_ids")) if isinstance(item.get("evidence_ids"), list) else []
+        return item
+    if isinstance(candidate, str) and candidate.strip():
+        return {"text": candidate.strip(), "evidence_ids": []}
+    return {"text": "unknown", "evidence_ids": [], "status": "unknown"}
+
+
 def _infer_topology(spec: dict[str, Any]) -> str:
     relations = [item for item in spec.get("relations", []) if isinstance(item, dict)]
     if any("feedback" in str(item.get("type") or "").casefold() for item in relations):
@@ -228,8 +241,8 @@ def _complete_from_overview_caption(spec: dict[str, Any], parsed: dict[str, Any]
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
     spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
-    spec.setdefault("research_problem", summary.get("research_problem") or {"text": "unknown", "evidence_ids": []})
-    spec.setdefault("central_claim", summary.get("central_claim") or {"text": "unknown", "evidence_ids": []})
+    spec["research_problem"] = _statement_object(spec.get("research_problem"), summary.get("research_problem"))
+    spec["central_claim"] = _statement_object(spec.get("central_claim"), summary.get("central_claim"))
     if not isinstance(spec.get("inputs"), list) or not spec.get("inputs"):
         spec["inputs"] = summary.get("inputs") if isinstance(summary.get("inputs"), list) else []
     if not isinstance(spec.get("outputs"), list) or not spec.get("outputs"):
@@ -553,7 +566,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 5, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 6, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -758,6 +771,9 @@ def prepare_paper_figure_contract(
             "readable_page_ratio": parsed["extraction_report"].get("readable_page_ratio"),
             "evidence_page_coverage_ratio": parsed["extraction_report"].get("evidence_page_coverage_ratio"),
             "evidence_char_count": parsed["extraction_report"].get("evidence_char_count"),
+            "max_column_count": parsed["extraction_report"].get("max_column_count"),
+            "multi_column_page_count": parsed["extraction_report"].get("multi_column_page_count"),
+            "rotated_pages": parsed["extraction_report"].get("rotated_pages", []),
             "section_coverage": parsed["extraction_report"].get("section_coverage", {}),
             "missing_priority_sections": [name for name, present in parsed["extraction_report"].get("section_coverage", {}).items() if not present],
             "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),

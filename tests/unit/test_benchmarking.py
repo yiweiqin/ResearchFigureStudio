@@ -89,6 +89,7 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("provider_success_rate", result["aggregate"])
             self.assertIn("mean_evidence_page_coverage_ratio", result["aggregate"])
             self.assertIn("ocr_scheduled_page_total", result["aggregate"])
+            self.assertIn("max_detected_column_count", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
     def test_paper_to_image_score_uses_hard_scientific_gates(self):

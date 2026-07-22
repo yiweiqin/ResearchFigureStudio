@@ -803,6 +803,8 @@ def run_fast_benchmark_suite(
         "mean_readable_page_ratio": _mean(extraction_metric("readable_page_ratio")),
         "mean_evidence_page_coverage_ratio": _mean(extraction_metric("evidence_page_coverage_ratio")),
         "mean_evidence_char_count": _mean(extraction_metric("evidence_char_count")),
+        "max_detected_column_count": max((int(value) for value in extraction_metric("max_column_count")), default=0),
+        "multi_column_page_total": sum(int(value) for value in extraction_metric("multi_column_page_count")),
         "ocr_candidate_page_total": sum(int(value) for value in extraction_metric("ocr_candidate_count")),
         "ocr_scheduled_page_total": sum(int(value) for value in extraction_metric("ocr_scheduled_count")),
         "ocr_completed_page_total": sum(int(value) for value in extraction_metric("ocr_completed_count")),

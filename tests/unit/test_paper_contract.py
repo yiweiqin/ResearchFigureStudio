@@ -42,6 +42,38 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(overlay["connectors"][0]["source"], "output")
         self.assertTrue(any(item["text"] == "Refined Output" for item in overlay["labels"]))
 
+    def test_contract_normalizes_scalar_claim_and_grounds_it_from_evidence(self):
+        parsed = {
+            "evidence": [
+                {
+                    "id": "E0001",
+                    "page": 3,
+                    "text": "The same architecture is used for pre-training and fine-tuning with task-specific output layers.",
+                    "confidence": 1.0,
+                }
+            ]
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": "Unified architecture for pre-training and fine-tuning.",
+                "central_claim": "The same architecture is used for pre-training and fine-tuning with task-specific output layers.",
+                "modules": [{"id": "encoder", "name": "Encoder", "evidence_ids": ["E0001"]}],
+                "inputs": [],
+                "outputs": [],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertEqual(spec["central_claim"]["evidence_ids"], ["E0001"])
+        self.assertEqual(spec["research_problem"]["evidence_ids"], ["E0001"])
+        self.assertTrue(validation["ok"])
+
     def test_grounding_rejects_relation_without_evidence(self):
         plan = {
             "figure_specification": {

@@ -65,38 +65,118 @@ def _block_kind(text: str, width_ratio: float = 0.0) -> str:
     return "paragraph"
 
 
+def _column_groups(items: list[dict[str, Any]], page_width: float, max_columns: int = 3) -> list[list[dict[str, Any]]]:
+    if len(items) < 4:
+        return [items]
+    positioned = sorted(items, key=lambda item: float(item["bbox"][0]))
+    gaps = [
+        (float(positioned[index + 1]["bbox"][0]) - float(positioned[index]["bbox"][0]), index)
+        for index in range(len(positioned) - 1)
+    ]
+    split_indexes = sorted(index for gap, index in sorted(gaps, reverse=True)[: max_columns - 1] if gap >= page_width * 0.12)
+    if not split_indexes:
+        return [items]
+    groups: list[list[dict[str, Any]]] = []
+    start = 0
+    for split in split_indexes:
+        groups.append(positioned[start:split + 1])
+        start = split + 1
+    groups.append(positioned[start:])
+    if len(groups) > max_columns or any(len(group) < 2 for group in groups):
+        return [items]
+
+    def median(values: list[float]) -> float:
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
+
+    ordered_groups = sorted(groups, key=lambda group: median([float(item["bbox"][0]) for item in group]))
+    minimum_vertical_span = page_width * 0.12
+    minimum_text = 40
+    for group in ordered_groups:
+        vertical_span = max(float(item["bbox"][3]) for item in group) - min(float(item["bbox"][1]) for item in group)
+        text_count = sum(len(_normalized_compare_text(str(item.get("text") or ""))) for item in group)
+        if vertical_span < minimum_vertical_span or text_count < minimum_text:
+            return [items]
+    for left, right in zip(ordered_groups, ordered_groups[1:]):
+        left_right = median([float(item["bbox"][2]) for item in left])
+        right_left = median([float(item["bbox"][0]) for item in right])
+        if left_right > right_left + page_width * 0.04:
+            return [items]
+    return ordered_groups
+
+
 def _reading_order(blocks: list[dict[str, Any]], page_width: float) -> tuple[list[dict[str, Any]], float]:
     if not blocks:
         return [], 0.0
     usable = [item for item in blocks if _clean(item.get("text", ""))]
     if not usable:
         return [], 0.0
-    midpoint = page_width / 2.0
     spanning = [item for item in usable if float(item["bbox"][2]) - float(item["bbox"][0]) >= page_width * 0.62]
-    left = [item for item in usable if item not in spanning and (float(item["bbox"][0]) + float(item["bbox"][2])) / 2 <= midpoint]
-    right = [item for item in usable if item not in spanning and item not in left]
-    two_column = len(left) >= 2 and len(right) >= 2
-    if not two_column:
+    non_spanning = [item for item in usable if item not in spanning]
+    detection_items = [
+        item
+        for item in non_spanning
+        if float(item["bbox"][2]) - float(item["bbox"][0]) >= page_width * 0.20
+        and len(_normalized_compare_text(str(item.get("text") or ""))) >= 20
+    ]
+    detected_columns = _column_groups(detection_items, page_width)
+    if len(detected_columns) == 1:
         ordered = sorted(usable, key=lambda item: (round(float(item["bbox"][1]), 1), float(item["bbox"][0])))
         confidence = 0.96
+        for item in ordered:
+            item["column"] = 0
     else:
+        def median_x0(column: list[dict[str, Any]]) -> float:
+            values = sorted(float(item["bbox"][0]) for item in column)
+            middle = len(values) // 2
+            return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2.0
+
+        anchors = [median_x0(column) for column in detected_columns]
+        columns = [[] for _ in anchors]
+        for item in non_spanning:
+            column_index = min(range(len(anchors)), key=lambda index: abs(float(item["bbox"][0]) - anchors[index]))
+            columns[column_index].append(item)
+        for column_index, column in enumerate(columns):
+            for item in column:
+                item["column"] = column_index
+        for item in spanning:
+            item["column"] = -1
         boundaries = sorted(spanning, key=lambda item: (float(item["bbox"][1]), float(item["bbox"][0])))
         ordered = []
         cursor = float("-inf")
         for boundary in boundaries + [None]:
             limit = float(boundary["bbox"][1]) if boundary else float("inf")
             segment = [item for item in usable if item not in spanning and cursor <= float(item["bbox"][1]) < limit]
-            ordered.extend(sorted((item for item in segment if item in left), key=lambda item: (float(item["bbox"][1]), float(item["bbox"][0]))))
-            ordered.extend(sorted((item for item in segment if item in right), key=lambda item: (float(item["bbox"][1]), float(item["bbox"][0]))))
+            for column in columns:
+                ordered.extend(sorted((item for item in segment if item in column), key=lambda item: (float(item["bbox"][1]), float(item["bbox"][0]))))
             if boundary:
                 ordered.append(boundary)
                 cursor = float(boundary["bbox"][3])
         seen: set[int] = set()
         ordered = [item for item in ordered if not (id(item) in seen or seen.add(id(item)))]
-        confidence = 0.88 if spanning else 0.82
+        confidence = (0.88 if spanning else 0.82) if len(columns) == 2 else (0.84 if spanning else 0.78)
     for index, item in enumerate(ordered, 1):
         item["reading_order"] = index
     return ordered, confidence
+
+
+def _rotate_blocks_to_page(blocks: list[dict[str, Any]], page: Any) -> list[dict[str, Any]]:
+    if not int(getattr(page, "rotation", 0) or 0):
+        return blocks
+    try:
+        import fitz
+
+        matrix = page.rotation_matrix
+        rotated = []
+        for item in blocks:
+            value = dict(item)
+            rect = fitz.Rect(*item["bbox"]) * matrix
+            value["bbox"] = [round(float(rect.x0), 3), round(float(rect.y0), 3), round(float(rect.x1), 3), round(float(rect.y1), 3)]
+            rotated.append(value)
+        return rotated
+    except Exception:
+        return blocks
 
 
 def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
@@ -445,10 +525,10 @@ def _read_pdf_pages(
     ocr_candidates: list[int] = []
     try:
         for index, page in enumerate(document, 1):
-            raw_blocks = _pymupdf_line_blocks(page)
+            raw_blocks = _rotate_blocks_to_page(_pymupdf_line_blocks(page), page)
             ordered, order_confidence = _reading_order(raw_blocks, float(page.rect.width))
             if len(_normalized_compare_text(" ".join(item["text"] for item in ordered))) < 80:
-                fallback_blocks = _pdfplumber_blocks(path, index)
+                fallback_blocks = _rotate_blocks_to_page(_pdfplumber_blocks(path, index), page)
                 fallback_ordered, fallback_confidence = _reading_order(fallback_blocks, float(page.rect.width))
                 if len(_normalized_compare_text(" ".join(item["text"] for item in fallback_ordered))) > len(_normalized_compare_text(" ".join(item["text"] for item in ordered))):
                     ordered, order_confidence = fallback_ordered, min(fallback_confidence, 0.9)
@@ -467,6 +547,8 @@ def _read_pdf_pages(
                 "page": index,
                 "width": round(float(page.rect.width), 3),
                 "height": round(float(page.rect.height), 3),
+                "rotation": int(page.rotation or 0),
+                "column_count": max((int(item.get("column", 0)) for item in ordered), default=0) + 1,
                 "blocks": ordered,
                 "text": page_text,
                 "char_count": len(page_text),
@@ -518,6 +600,7 @@ def _read_pdf_pages(
                     "replacement_character_rate": _replacement_rate(ocr_text),
                     "mojibake_rate": _mojibake_rate(ocr_text),
                     "reading_order_confidence": order_confidence,
+                    "column_count": max((int(item.get("column", 0)) for item in ordered), default=0) + 1,
                     "used_ocr": True,
                     "ocr_engine": used_engine,
                 })
@@ -825,6 +908,9 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "mojibake_rate": round(sum(page.get("mojibake_rate", 0.0) for page in pages) / max(1, len(pages)), 6),
         "cross_extractor_agreement": round(sum(agreements) / len(agreements), 4) if agreements else None,
         "reading_order_confidence": round(sum(page.get("reading_order_confidence", 0.0) for page in pages) / max(1, len(pages)), 4),
+        "max_column_count": max((int(page.get("column_count") or 1) for page in pages), default=1),
+        "multi_column_page_count": sum(int(page.get("column_count") or 1) > 1 for page in pages),
+        "rotated_pages": [int(page["page"]) for page in pages if int(page.get("rotation") or 0) % 360 != 0],
         "section_coverage": coverage,
         "figure_caption_count": len(index.get("figures", [])),
         "table_caption_count": len(index.get("tables", [])),
