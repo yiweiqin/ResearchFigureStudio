@@ -23,7 +23,7 @@ rfs benchmark fast-suite --root benchmarks --out output/benchmarks/nlp --case-id
 ```
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
-The deterministic compiler can recover relations across adjacent PDF blocks, canonicalize evidence-backed VLM aliases, repair missing relation evidence, and ground or downgrade unsupported scalar claims. These repairs are paper-name agnostic and are covered by the NLP suite.
+The deterministic compiler can recover relations across adjacent PDF blocks, canonicalize evidence-backed VLM aliases, repair missing relation evidence, and ground or downgrade unsupported scalar claims. It also normalizes string entities plus `source_id`/`target_id`/`relation_type` variants, resolves a missing endpoint only when the relation label exactly identifies one declared entity, grounds short uppercase acronyms through exact token matches, and removes unresolved relations into explicit uncertainties. These repairs are paper-name agnostic and are covered by the NLP suite.
 
 When a paper exceeds the evidence character budget, the extractor reserves representative evidence from every page, then prioritizes topology-defining statements and Abstract, Conclusion, Method, Introduction, and Experiments content. This prevents long introductions or appendices from silently excluding later conclusions and framework definitions.
 

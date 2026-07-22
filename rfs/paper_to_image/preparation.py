@@ -238,6 +238,128 @@ def _complete_from_overview_caption(spec: dict[str, Any], parsed: dict[str, Any]
                 relations.append({"source": pair[0], "target": pair[1], "type": "data_generation", "label": "", "evidence_ids": stage_evidence + evidence_ids})
         break
 
+
+def _normalize_contract_entities(raw_items: Any, field: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_items if isinstance(raw_items, list) else []):
+        if isinstance(raw, str) and raw.strip():
+            item = {"name": raw.strip(), "evidence_ids": []}
+        elif isinstance(raw, dict):
+            item = dict(raw)
+        else:
+            continue
+        label = _item_label(item)
+        if not label:
+            continue
+        item["id"] = str(item.get("id") or _stable_id(field.rstrip("s"), label, index)).strip()
+        item["evidence_ids"] = list(item.get("evidence_ids")) if isinstance(item.get("evidence_ids"), list) else []
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    aliases: dict[str, set[str]] = {}
+    endpoint_ids: set[str] = set()
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            item_id = str(item["id"])
+            endpoint_ids.add(item_id)
+            for value in (item_id, _item_label(item)):
+                normalized = _normalized_label(str(value))
+                if normalized:
+                    aliases.setdefault(normalized, set()).add(item_id)
+
+    def resolve(value: Any) -> str:
+        raw = str(value or "").strip()
+        if raw in endpoint_ids:
+            return raw
+        matches = aliases.get(_normalized_label(raw), set())
+        return next(iter(matches)) if len(matches) == 1 else raw
+
+    normalized_relations: list[dict[str, Any]] = []
+    for raw in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        source = resolve(item.get("source") or item.get("source_id"))
+        target = resolve(item.get("target") or item.get("target_id"))
+        if not source or not target:
+            continue
+        item["source"] = source
+        item["target"] = target
+        item["type"] = str(item.get("type") or item.get("relation_type") or "data_flow")
+        item["label"] = str(item.get("label") or "")
+        item["evidence_ids"] = list(item.get("evidence_ids")) if isinstance(item.get("evidence_ids"), list) else []
+        normalized_relations.append(item)
+    return normalized_relations
+
+
+def _repair_contract_relation_endpoints(spec: dict[str, Any]) -> dict[str, list[str]]:
+    endpoints = {
+        str(item.get("id")): item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    label_matches: dict[str, set[str]] = {}
+    for item_id, item in endpoints.items():
+        normalized = _normalized_label(_item_label(item))
+        if normalized:
+            label_matches.setdefault(normalized, set()).add(item_id)
+
+    replacements: dict[str, str] = {}
+    repaired: list[str] = []
+    relations = [item for item in spec.get("relations", []) if isinstance(item, dict)]
+    for relation in relations:
+        target = str(relation.get("target") or "")
+        if target in endpoints:
+            continue
+        label = _normalized_label(str(relation.get("label") or ""))
+        matches = label_matches.get(label, set())
+        if target and label and len(matches) == 1:
+            replacement = next(iter(matches))
+            replacements[target] = replacement
+            relation["target"] = replacement
+            repaired.append(f"{target}->{replacement}")
+
+    for relation in relations:
+        source = str(relation.get("source") or "")
+        target = str(relation.get("target") or "")
+        if source in replacements:
+            relation["source"] = replacements[source]
+        if target in replacements:
+            relation["target"] = replacements[target]
+
+    deduplicated: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    removed_duplicates: list[str] = []
+    removed_unresolved: list[str] = []
+    for relation in relations:
+        source = str(relation.get("source") or "")
+        target = str(relation.get("target") or "")
+        relation_type = str(relation.get("type") or "data_flow")
+        if source not in endpoints or target not in endpoints:
+            removed_unresolved.append(f"{source}->{target}")
+            continue
+        key = (source, target, relation_type)
+        existing = by_key.get(key)
+        if existing:
+            existing["evidence_ids"] = list(dict.fromkeys(list(existing.get("evidence_ids", [])) + list(relation.get("evidence_ids", []))))
+            if not existing.get("label") and relation.get("label"):
+                existing["label"] = relation["label"]
+            removed_duplicates.append(f"{source}->{target}:{relation_type}")
+            continue
+        by_key[key] = relation
+        deduplicated.append(relation)
+    spec["relations"] = deduplicated
+    return {
+        "repaired": list(dict.fromkeys(repaired)),
+        "removed_duplicates": list(dict.fromkeys(removed_duplicates)),
+        "removed_unresolved": list(dict.fromkeys(removed_unresolved)),
+    }
+
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
     spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
@@ -247,15 +369,12 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
         spec["inputs"] = summary.get("inputs") if isinstance(summary.get("inputs"), list) else []
     if not isinstance(spec.get("outputs"), list) or not spec.get("outputs"):
         spec["outputs"] = summary.get("outputs") if isinstance(summary.get("outputs"), list) else []
-    for field in ("inputs", "outputs", "innovations"):
-        normalized_items = []
-        for index, raw in enumerate(spec.get(field, []) if isinstance(spec.get(field), list) else []):
-            if not isinstance(raw, dict):
-                continue
-            item = dict(raw)
-            item.setdefault("id", _item_id(item, field, index))
-            normalized_items.append(item)
-        spec[field] = normalized_items
+    if not isinstance(spec.get("modules"), list) or not spec.get("modules"):
+        summary_modules = summary.get("core_modules") if isinstance(summary.get("core_modules"), list) else summary.get("modules")
+        spec["modules"] = summary_modules if isinstance(summary_modules, list) else []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        spec[field] = _normalize_contract_entities(spec.get(field), field)
+    spec["relations"] = _normalize_contract_relations(spec)
     completion_report = augment_contract_from_evidence(spec, parsed)
     plan["contract_completion_report"] = completion_report
     if len(completion_report.get("added_entities", [])) >= 3:
@@ -274,6 +393,14 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
             ]
             completion_report["removed_fallback_entities"] = sorted(fallback_ids)
     _complete_from_overview_caption(spec, parsed)
+    endpoint_report = _repair_contract_relation_endpoints(spec)
+    completion_report["relation_endpoint_repairs"] = endpoint_report["repaired"]
+    completion_report["removed_duplicate_relations"] = endpoint_report["removed_duplicates"]
+    completion_report["removed_unresolved_relations"] = endpoint_report["removed_unresolved"]
+    if endpoint_report["repaired"]:
+        secondary_completion = augment_contract_from_evidence(spec, parsed)
+        for key in ("added_entities", "upgraded_entities", "adopted_entities", "added_relations", "repaired_relations", "grounded_entities"):
+            completion_report[key] = list(dict.fromkeys(list(completion_report.get(key, [])) + list(secondary_completion.get(key, []))))
     modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
     encoder_modules = [item for item in modules if isinstance(item, dict) and "encoder" in _item_label(item).casefold() and "modality encoder" not in _item_label(item).casefold()]
     if len(encoder_modules) >= 3:
@@ -420,6 +547,10 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
                 labels.append(_item_label(item))
     spec["required_labels"] = list(dict.fromkeys(labels))
     raw_uncertainties = list(summary.get("unknowns", []) if isinstance(summary.get("unknowns"), list) else [])
+    raw_uncertainties.extend(
+        f"Dropped unresolved relation {value} because its endpoint was not declared."
+        for value in completion_report.get("removed_unresolved_relations", [])
+    )
     uncertainties = [
         str(item.get("statement") or item.get("text") or item.get("id") or "unknown") if isinstance(item, dict) else str(item)
         for item in raw_uncertainties
@@ -572,7 +703,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 15, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 17, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"

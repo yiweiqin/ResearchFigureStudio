@@ -375,7 +375,8 @@ def _ground_declared_entities(spec: dict[str, Any], relevant: list[dict[str, Any
                 continue
             label = _label(item)
             normalized_label = _normalized(label)
-            if len(normalized_label) < 8 or len(re.findall(r"[a-z0-9]+", label.casefold())) < 2:
+            acronym = bool(label.isupper() and 3 <= len(normalized_label) <= 12)
+            if not acronym and (len(normalized_label) < 8 or len(re.findall(r"[a-z0-9]+", label.casefold())) < 2):
                 continue
             match: list[dict[str, Any]] = []
             for start in range(len(relevant)):
@@ -384,8 +385,10 @@ def _ground_declared_entities(spec: dict[str, Any], relevant: list[dict[str, Any
                     window = relevant[start:start + size]
                     if len(window) != size or any(value.get("page") != page for value in window):
                         break
-                    combined = _normalized(" ".join(str(value.get("text") or "") for value in window))
-                    if normalized_label in combined:
+                    combined_text = " ".join(str(value.get("text") or "") for value in window)
+                    combined = _normalized(combined_text)
+                    exact_acronym = acronym and re.search(rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])", combined_text, re.IGNORECASE)
+                    if exact_acronym or normalized_label in combined:
                         match = window
                         break
                 if match:

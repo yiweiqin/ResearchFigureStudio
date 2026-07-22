@@ -153,6 +153,40 @@ class PaperContractTests(unittest.TestCase):
 
         self.assertFalse(any(item["source"] == "signal" for item in spec["relations"]))
 
+    def test_contract_normalizes_string_entities_and_relation_alias_fields(self):
+        parsed = {
+            "evidence": [
+                {"id": "E0001", "page": 1, "text": "The Image Encoder sends representations to the Mask Decoder.", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {
+                "unknowns": [],
+                "core_modules": ["Image Encoder", "Mask Decoder"],
+            },
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source_id": "Image Encoder", "target_id": "Mask Decoder", "relation_type": "feature_flow", "evidence_ids": ["E0001"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertEqual([item["name"] for item in spec["modules"]], ["Image Encoder", "Mask Decoder"])
+        self.assertEqual(spec["relations"][0]["source"], spec["modules"][0]["id"])
+        self.assertEqual(spec["relations"][0]["target"], spec["modules"][1]["id"])
+        self.assertEqual(spec["relations"][0]["type"], "feature_flow")
+        self.assertTrue(validation["ok"])
+
     def test_grounding_rejects_relation_without_evidence(self):
         plan = {
             "figure_specification": {
@@ -430,6 +464,47 @@ class PaperContractTests(unittest.TestCase):
         self.assertNotIn("Generate", ids)
         self.assertIn((ids["Document Index"], ids["Retriever"]), pairs)
         self.assertIn((ids["Top-K Documents"], ids["Generator"]), pairs)
+
+    def test_rag_contract_repairs_latent_endpoint_alias_and_acronym_evidence(self):
+        caption = "Figure 1: Overview of our approach. Query Encoder and Document Index use Maximum Inner Product Search (MIPS) to find the top-K documents z. The Generator conditions on those latent documents."
+        parsed = {
+            "page_count": 4,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [
+                    {"id": "query_encoder", "name": "Query Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "doc_index", "name": "Document Index", "evidence_ids": ["E0001"]},
+                    {"id": "generator", "name": "Generator", "evidence_ids": ["E0001"]},
+                    {"id": "mips", "name": "MIPS", "evidence_ids": []},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source": "mips", "target": "latent_z", "type": "branch", "label": "Top-K Documents", "evidence_ids": []},
+                    {"source": "latent_z", "target": "generator", "type": "conditioning", "label": "context", "evidence_ids": []},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        validation = validate_plan_grounding(plan, parsed)
+        ids = {item["name"]: item["id"] for item in spec["modules"]}
+        pairs = {(item["source"], item["target"]): item for item in spec["relations"]}
+
+        self.assertTrue(next(item for item in spec["modules"] if item["name"] == "MIPS")["evidence_ids"])
+        self.assertIn(("mips", ids["Top-K Documents"]), pairs)
+        self.assertIn((ids["Top-K Documents"], "generator"), pairs)
+        self.assertTrue(pairs[("mips", ids["Top-K Documents"])]["evidence_ids"])
+        self.assertFalse(any("latent_z" in (item["source"], item["target"]) for item in spec["relations"]))
+        self.assertTrue(validation["ok"])
 
     def test_generic_completion_repairs_vlm_ids_labels_and_relation_grounding(self):
         caption = "Figure 1: Pre-training and fine-tuning procedures."
