@@ -346,6 +346,81 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
         return [], engine, str(exc)
 
 
+def _prioritize_ocr_candidates(
+    pages: list[dict[str, Any]],
+    candidates: list[int],
+    max_pages: int,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    if max_pages <= 0 or not candidates:
+        return [], []
+    page_count = max(1, len(pages))
+    signals = {
+        "overview_figure": re.compile(r"\b(?:figure|fig\.)\s*[12]\b.*\b(?:overview|framework|architecture|pipeline|system|model)\b", re.IGNORECASE | re.DOTALL),
+        "method": re.compile(r"\b(?:methods?|methodology|approach|architecture|system overview|framework)\b", re.IGNORECASE),
+        "abstract": re.compile(r"\babstract\b", re.IGNORECASE),
+        "conclusion": re.compile(r"\b(?:conclusions?|discussion)\b", re.IGNORECASE),
+        "caption": re.compile(r"\b(?:figure|fig\.|table)\s*\d", re.IGNORECASE),
+    }
+    scored: list[tuple[int, int, list[str]]] = []
+    for page_number in candidates:
+        page = pages[page_number - 1] if 0 < page_number <= len(pages) else {}
+        text = str(page.get("text") or "")
+        reasons: list[str] = []
+        score = 0
+        for name, weight in (("overview_figure", 14), ("method", 10), ("abstract", 9), ("conclusion", 8), ("caption", 5)):
+            if signals[name].search(text):
+                score += weight
+                reasons.append(name)
+        if page_number == 1:
+            score += 7
+            reasons.append("first_page")
+        elif page_number <= 3:
+            score += 3
+            reasons.append("early_page")
+        scored.append((score, page_number, reasons))
+
+    selected: list[int] = []
+    reason_map: dict[int, list[str]] = {}
+    for score, page_number, reasons in sorted(scored, key=lambda item: (-item[0], item[1])):
+        if score <= 0 or len(selected) >= max_pages:
+            break
+        selected.append(page_number)
+        reason_map[page_number] = reasons
+
+    anchors = [
+        1,
+        min(2, page_count),
+        max(1, round(page_count * 0.25)),
+        max(1, round(page_count * 0.50)),
+        max(1, round(page_count * 0.75)),
+        max(1, round(page_count * 0.85)),
+    ]
+    for anchor in anchors:
+        if len(selected) >= max_pages:
+            break
+        if anchor in selected:
+            continue
+        available = [value for value in candidates if value not in selected]
+        if not available:
+            break
+        page_number = min(available, key=lambda value: (abs(value - anchor), value))
+        selected.append(page_number)
+        reason_map.setdefault(page_number, []).append(f"coverage_anchor_{anchor}")
+
+    for page_number in candidates:
+        if len(selected) >= max_pages:
+            break
+        if page_number not in selected:
+            selected.append(page_number)
+            reason_map.setdefault(page_number, []).append("remaining_candidate")
+
+    details = [
+        {"page": page_number, "rank": rank, "reasons": reason_map.get(page_number, [])}
+        for rank, page_number in enumerate(selected, 1)
+    ]
+    return selected, details
+
+
 def _read_pdf_pages(
     path: Path,
     max_chars: int,
@@ -402,15 +477,17 @@ def _read_pdf_pages(
                 "used_ocr": False,
             })
             used_chars += len(page_text)
-            if used_chars >= max_chars and "max_chars reached; remaining pages retain metadata but not full evidence text" not in warnings:
-                warnings.append("max_chars reached; remaining pages retain metadata but not full evidence text")
+            if used_chars >= max_chars and "document text exceeds evidence budget; evidence will be sampled across all pages" not in warnings:
+                warnings.append("document text exceeds evidence budget; evidence will be sampled across all pages")
     finally:
         pass
 
     ocr_pages: list[int] = []
     ocr_page_durations: list[dict[str, Any]] = []
+    prioritized: list[int] = []
+    ocr_priority: list[dict[str, Any]] = []
     if ocr_engine != "off":
-        prioritized = ocr_candidates[:max_ocr_pages]
+        prioritized, ocr_priority = _prioritize_ocr_candidates(pages, ocr_candidates, max_ocr_pages)
         for page_number in prioritized:
             if deadline_at is not None:
                 remaining = deadline_at - time.monotonic()
@@ -450,6 +527,8 @@ def _read_pdf_pages(
     return pages, {
         "metadata": metadata,
         "ocr_candidate_pages": ocr_candidates,
+        "ocr_priority_pages": prioritized,
+        "ocr_priority": ocr_priority,
         "ocr_pages": ocr_pages,
         "ocr_page_durations": ocr_page_durations,
         "warnings": warnings,
@@ -556,7 +635,7 @@ def _evidence_id(page: int, text: str, bbox: Any, kind: str) -> str:
 
 def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]], document_index: dict[str, Any], max_chars: int) -> list[dict[str, Any]]:
     section_positions = sorted(sections, key=lambda item: (item["page"], item.get("block_id", "")))
-    evidence = []
+    evidence: list[dict[str, Any]] = []
     used = 0
     for figure in document_index.get("figures", []):
         text = _clean(figure.get("caption", ""))
@@ -575,17 +654,26 @@ def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]],
             "char_count": len(text),
         })
         used += len(text)
+
+    block_candidates: list[dict[str, Any]] = []
     for page in pages:
         for block in page.get("blocks", []):
             text = _clean(block.get("text", ""))
-            if not text or used >= max_chars:
+            if not text or block.get("kind") == "caption":
                 continue
-            text = text[: max(0, max_chars - used)]
-            section = next((item["title"] for item in reversed(section_positions) if item["page"] <= page["page"]), None)
-            evidence.append({
+            block_id = str(block.get("id") or "")
+            section = next(
+                (
+                    item["title"]
+                    for item in reversed(section_positions)
+                    if (int(item["page"]), str(item.get("block_id") or "")) <= (int(page["page"]), block_id)
+                ),
+                None,
+            )
+            block_candidates.append({
                 "id": _evidence_id(int(page["page"]), text, block.get("bbox"), str(block.get("kind") or "paragraph")),
                 "page": page["page"],
-                "block_id": block.get("id"),
+                "block_id": block_id,
                 "bbox": block.get("bbox"),
                 "section_hint": section,
                 "kind": block.get("kind"),
@@ -594,7 +682,101 @@ def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]],
                 "text": text,
                 "char_count": len(text),
             })
-            used += len(text)
+
+    selected_ids: set[str] = set()
+    page_groups: dict[int, list[dict[str, Any]]] = {}
+    for item in block_candidates:
+        page_groups.setdefault(int(item["page"]), []).append(item)
+
+    def add(item: dict[str, Any], max_length: int | None = None) -> bool:
+        nonlocal used
+        item_id = str(item["id"])
+        if item_id in selected_ids or used >= max_chars:
+            return False
+        remaining = max_chars - used
+        if remaining <= 0:
+            return False
+        value = dict(item)
+        if max_length is not None and len(value["text"]) > max_length:
+            value["text"] = value["text"][:max_length].rstrip()
+            value["char_count"] = len(value["text"])
+            value["id"] = _evidence_id(int(value["page"]), value["text"], value.get("bbox"), str(value.get("kind") or "paragraph"))
+        if len(value["text"]) > remaining:
+            if remaining < 40:
+                return False
+            value["text"] = value["text"][:remaining].rstrip()
+            value["char_count"] = len(value["text"])
+            value["id"] = _evidence_id(int(value["page"]), value["text"], value.get("bbox"), str(value.get("kind") or "paragraph"))
+            item_id = str(value["id"])
+        evidence.append(value)
+        selected_ids.add(str(item["id"]))
+        selected_ids.add(item_id)
+        used += len(value["text"])
+        return True
+
+    # Reserve a representative block for every page before spending the budget
+    # on long early sections. This keeps conclusions and appendices discoverable.
+    representative_quota = max(80, min(600, max(1, max_chars - used) // max(1, len(page_groups))))
+    for page_number in sorted(page_groups):
+        candidates = page_groups[page_number]
+        representative = max(
+            candidates,
+            key=lambda item: (
+                1 if item.get("kind") in {"paragraph", "title"} else 0,
+                min(len(str(item.get("text") or "")), 600),
+            ),
+        )
+        add(representative, max_length=representative_quota)
+
+    section_priority = {
+        "abstract": 0,
+        "conclusion": 1,
+        "conclusions": 1,
+        "discussion": 1,
+        "method": 2,
+        "methods": 2,
+        "methodology": 2,
+        "approach": 2,
+        "architecture": 2,
+        "framework": 2,
+        "system overview": 2,
+        "introduction": 3,
+        "background": 3,
+        "experiment": 4,
+        "experiments": 4,
+        "evaluation": 4,
+        "results": 4,
+    }
+
+    def priority(item: dict[str, Any]) -> tuple[int, int, str]:
+        section = str(item.get("section_hint") or "").casefold()
+        text = str(item.get("text") or "")
+        topology_definition = bool(re.search(
+            r"\b(?:has|have|consists? of|comprises?|contains?)\b.{0,80}\b(?:stages?|components?|modules?|steps?)\b"
+            r"|\b(?:assisted[ -]manual|semi[ -]automatic|fully automatic)\b"
+            r"|\b(?:input|image|text|query|prompt)\b.{0,100}\b(?:encoder|decoder|retriever|generator)\b"
+            r"|\b(?:encoder|decoder|retriever|generator)\b.{0,100}\b(?:output|prediction|representation|embedding)\b",
+            text,
+            re.IGNORECASE,
+        ))
+        rank = min((value for name, value in section_priority.items() if name in section), default=5)
+        if topology_definition:
+            rank = -1
+        if item.get("kind") == "heading":
+            rank = min(rank, 2)
+        return rank, int(item.get("page") or 0), str(item.get("block_id") or "")
+
+    for item in sorted(block_candidates, key=priority):
+        add(item)
+
+    document_order = {
+        str(item["id"]): index
+        for index, item in enumerate(block_candidates)
+    }
+    caption_count = sum(1 for item in evidence if item.get("kind") == "caption")
+    caption_items = evidence[:caption_count]
+    body_items = sorted(evidence[caption_count:], key=lambda item: (int(item.get("page") or 0), document_order.get(str(item.get("id")), 10**9), str(item.get("block_id") or "")))
+    evidence = caption_items + body_items
     for index, item in enumerate(evidence, 1):
         item["legacy_id"] = f"E{index:04d}"
     return evidence
@@ -633,6 +815,8 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "readable_page_ratio": readable_ratio,
         "empty_or_low_text_pages": [page["page"] for page in pages if page not in readable],
         "ocr_candidate_pages": details.get("ocr_candidate_pages", []),
+        "ocr_priority_pages": details.get("ocr_priority_pages", []),
+        "ocr_priority": details.get("ocr_priority", []),
         "ocr_pages": details.get("ocr_pages", []),
         "ocr_page_durations": details.get("ocr_page_durations", []),
         "mean_ocr_confidence": mean_ocr_confidence,
@@ -674,6 +858,10 @@ def parse_paper(
     evidence = _build_evidence(pages, sections, document_index, max_chars)
     all_text = "\n\n".join(page.get("text", "") for page in pages)
     extraction_report = _extraction_report(source, pages, document_index, details)
+    evidence_pages = {int(item.get("page") or 0) for item in evidence if item.get("page")}
+    extraction_report["evidence_char_count"] = sum(int(item.get("char_count") or 0) for item in evidence)
+    extraction_report["evidence_page_count"] = len(evidence_pages)
+    extraction_report["evidence_page_coverage_ratio"] = round(len(evidence_pages) / max(1, len(pages)), 4)
     return {
         "summary": "Paper parsed into a structured, page-aware evidence model.",
         "source_path": str(source),

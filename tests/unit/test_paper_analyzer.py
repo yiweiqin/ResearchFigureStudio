@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _prioritize_ocr_candidates, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 
 
@@ -16,6 +16,21 @@ class PaperAnalyzerTests(unittest.TestCase):
         document = fitz.open()
         page = document.new_page(width=600, height=800)
         draw(page)
+        document.save(target)
+        document.close()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        return target
+
+    def _multipage_pdf(self, page_texts: list[list[str]]) -> Path:
+        root = Path(tempfile.mkdtemp())
+        target = root / "paper.pdf"
+        document = fitz.open()
+        for blocks in page_texts:
+            page = document.new_page(width=600, height=800)
+            top = 50
+            for text in blocks:
+                page.insert_textbox((45, top, 555, top + 110), text, fontsize=10)
+                top += 120
         document.save(target)
         document.close()
         self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
@@ -151,6 +166,62 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in first["evidence"]], [item["id"] for item in second["evidence"]])
         self.assertTrue(all(item["id"].startswith("E_P") for item in first["evidence"]))
+
+    def test_evidence_budget_preserves_late_document_coverage(self):
+        path = self._multipage_pdf([
+            ["Abstract", "Early context " * 90],
+            ["1 Introduction", "Our data engine has three stages:", "assisted-manual, semi-automatic, and fully automatic.", "Introduction evidence " * 24],
+            ["2 Method", "The encoder transforms inputs into representations. " * 18],
+            ["3 Experiments", "Experimental settings and evaluation metrics. " * 18],
+            ["4 Analysis", "Ablation and error analysis evidence. " * 18],
+            ["5 Conclusion", "The proposed method improves the final prediction while preserving scientific evidence. " * 12],
+        ])
+
+        parsed = parse_paper(path, max_chars=1800)
+        evidence_pages = {item["page"] for item in parsed["evidence"]}
+
+        self.assertEqual(evidence_pages, {1, 2, 3, 4, 5, 6})
+        self.assertTrue(any(item["page"] == 6 and "Conclusion" in item["text"] for item in parsed["evidence"]))
+        self.assertTrue(any("three stages" in item["text"] for item in parsed["evidence"]))
+        self.assertTrue(any("assisted-manual" in item["text"] for item in parsed["evidence"]))
+        self.assertEqual(parsed["extraction_report"]["evidence_page_coverage_ratio"], 1.0)
+        self.assertLessEqual(parsed["extraction_report"]["evidence_char_count"], 1800)
+
+    def test_ocr_priority_spreads_fully_scanned_long_document(self):
+        pages = [{"page": index, "text": ""} for index in range(1, 13)]
+
+        selected, details = _prioritize_ocr_candidates(pages, list(range(1, 13)), 6)
+
+        self.assertEqual(selected, [1, 2, 3, 6, 9, 10])
+        self.assertEqual([item["rank"] for item in details], [1, 2, 3, 4, 5, 6])
+
+    def test_ocr_priority_prefers_semantic_pages_before_coverage_anchors(self):
+        pages = [{"page": index, "text": ""} for index in range(1, 11)]
+        pages[3]["text"] = "Figure 1: Overview of the proposed architecture and system pipeline."
+        pages[7]["text"] = "8 Conclusion We summarize the method and its limitations."
+
+        selected, details = _prioritize_ocr_candidates(pages, [1, 4, 6, 8, 10], 3)
+
+        self.assertEqual(selected[:2], [4, 8])
+        self.assertIn("overview_figure", details[0]["reasons"])
+        self.assertIn("conclusion", details[1]["reasons"])
+
+    def test_scanned_pdf_report_records_adaptive_ocr_schedule(self):
+        path = self._multipage_pdf([[] for _ in range(12)])
+
+        def adapter(image_path, _lang):
+            page_number = int(Path(image_path).stem.rsplit("_", 1)[-1])
+            return [{
+                "text": f"Page {page_number} Abstract Method architecture evidence with enough reliable text for adaptive OCR scheduling and document recovery.",
+                "confidence": 0.97,
+                "quad": [[20, 20], [560, 20], [560, 70], [20, 70]],
+            }]
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter, max_ocr_pages=6)
+
+        self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 6, 9, 10])
+        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 6, 9, 10])
+        self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 6, 9, 10])
 
 
 if __name__ == "__main__":

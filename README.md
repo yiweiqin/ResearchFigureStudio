@@ -107,7 +107,7 @@ rfs fast-framework-prompt `
 
 This writes `paper.md`, `document_model.json`, `extraction_report.json`, `section_summary.md`, `key_evidence.json`, `figure_specification.json`, `contract_completion_report.json`, `image_prompt.md`, `overlay_spec.json`, and `run_report.json`. Fast mode gives the VLM a compact semantic-only task, compiles layout/style deterministically, and applies evidence-gated computer-paper primitives without checking paper names. Successful document extraction and contracts are cached separately by paper hash. Set `RFS_FAST_FRAMEWORK_MODEL` to override the default `gemini-2.5-flash` model.
 
-Use `rfs inspect-pdf` for parser-only diagnostics. `--ocr-engine auto` prefers RapidOCR when installed, then EasyOCR/PaddleOCR. OCR model downloads are disabled by default; set `RFS_OCR_ALLOW_DOWNLOAD=1` only for an explicit one-time EasyOCR download. `rfs doctor --json` reports OCR package and model readiness.
+Use `rfs inspect-pdf` for parser-only diagnostics. `--ocr-engine auto` prefers RapidOCR when installed, then EasyOCR/PaddleOCR. OCR page selection prioritizes semantic pages and spreads the remaining budget across the document. Long-paper evidence budgets preserve page-wide coverage before selecting topology definitions and priority sections. OCR model downloads are disabled by default; set `RFS_OCR_ALLOW_DOWNLOAD=1` only for an explicit one-time EasyOCR download. `rfs doctor --json` reports OCR package and model readiness.
 
 Run a repeatable fast suite with provider, cache, recall, and timing aggregation:
 

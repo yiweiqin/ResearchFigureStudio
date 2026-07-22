@@ -553,7 +553,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 4, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 5, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -752,6 +752,18 @@ def prepare_paper_figure_contract(
         "contract_source": contract_source,
         "cache_hit": bool(planner_metadata.get("cached")),
         "document_cache_hit": document_cache_hit,
+        "extraction_quality": {
+            "pdf_type": parsed["extraction_report"].get("pdf_type"),
+            "page_count": parsed["extraction_report"].get("page_count"),
+            "readable_page_ratio": parsed["extraction_report"].get("readable_page_ratio"),
+            "evidence_page_coverage_ratio": parsed["extraction_report"].get("evidence_page_coverage_ratio"),
+            "evidence_char_count": parsed["extraction_report"].get("evidence_char_count"),
+            "section_coverage": parsed["extraction_report"].get("section_coverage", {}),
+            "missing_priority_sections": [name for name, present in parsed["extraction_report"].get("section_coverage", {}).items() if not present],
+            "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),
+            "ocr_scheduled_count": len(parsed["extraction_report"].get("ocr_priority_pages", [])),
+            "ocr_completed_count": len(parsed["extraction_report"].get("ocr_pages", [])),
+        },
         "provider": provider_summary,
         "contract_completion": {
             "overview_term_coverage": completion_report.get("overview_term_coverage"),

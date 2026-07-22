@@ -732,6 +732,7 @@ def run_fast_benchmark_suite(
         benchmark = result.get("benchmark", {}) if isinstance(result.get("benchmark"), dict) else {}
         metrics = benchmark.get("metrics", {}) if isinstance(benchmark.get("metrics"), dict) else {}
         provider = run.get("provider", {}) if isinstance(run.get("provider"), dict) else {}
+        extraction_quality = run.get("extraction_quality", {}) if isinstance(run.get("extraction_quality"), dict) else {}
         results.append({
             "case_id": case_id,
             "ok": bool(result.get("ok")),
@@ -742,6 +743,7 @@ def run_fast_benchmark_suite(
             "document_cache_hit": bool(run.get("document_cache_hit")),
             "elapsed_seconds": run.get("elapsed_seconds"),
             "stage_timings": run.get("stage_timings", {}),
+            "extraction_quality": extraction_quality,
             "provider": provider,
             "plan_entity_recall": metrics.get("plan_entity_recall"),
             "plan_relation_recall": metrics.get("plan_relation_recall"),
@@ -760,6 +762,9 @@ def run_fast_benchmark_suite(
 
     def timing(name: str) -> list[float]:
         return [float(item.get("stage_timings", {}).get(name)) for item in results if isinstance(item.get("stage_timings", {}).get(name), (int, float))]
+
+    def extraction_metric(name: str) -> list[float]:
+        return [float(item.get("extraction_quality", {}).get(name)) for item in results if isinstance(item.get("extraction_quality", {}).get(name), (int, float))]
 
     def percentile(values: list[float], fraction: float) -> float:
         if not values:
@@ -795,6 +800,12 @@ def run_fast_benchmark_suite(
         "mean_document_preparation_seconds": _mean(timing("document_preparation_seconds")),
         "mean_document_extraction_seconds": _mean(timing("document_extraction_seconds")),
         "mean_semantic_compilation_seconds": _mean(timing("semantic_compilation_seconds")),
+        "mean_readable_page_ratio": _mean(extraction_metric("readable_page_ratio")),
+        "mean_evidence_page_coverage_ratio": _mean(extraction_metric("evidence_page_coverage_ratio")),
+        "mean_evidence_char_count": _mean(extraction_metric("evidence_char_count")),
+        "ocr_candidate_page_total": sum(int(value) for value in extraction_metric("ocr_candidate_count")),
+        "ocr_scheduled_page_total": sum(int(value) for value in extraction_metric("ocr_scheduled_count")),
+        "ocr_completed_page_total": sum(int(value) for value in extraction_metric("ocr_completed_count")),
         "provider_call_count": len(provider_calls),
         "provider_success_count": sum(bool(item.get("provider", {}).get("success")) for item in provider_calls),
         "provider_success_rate": round(sum(bool(item.get("provider", {}).get("success")) for item in provider_calls) / len(provider_calls), 4) if provider_calls else None,

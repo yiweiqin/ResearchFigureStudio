@@ -9,7 +9,7 @@ from typing import Any
 from ..utils import read_json, write_json
 
 
-DOCUMENT_CACHE_VERSION = 2
+DOCUMENT_CACHE_VERSION = 3
 
 
 def _cache_root() -> Path:
