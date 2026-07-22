@@ -8,7 +8,9 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from rfs.evaluation.benchmarking import (
+    _score_planning_contract,
     list_benchmark_cases,
+    run_fast_benchmark_case,
     score_benchmark_case,
     validate_benchmark_case,
 )
@@ -18,6 +20,33 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BenchmarkingTests(unittest.TestCase):
+    def test_planning_contract_treats_relation_labels_as_intermediate_artifacts(self):
+        expected = {
+            "entities": [
+                {"id": "generator", "label": "Generate"},
+                {"id": "draft", "label": "Initial Output"},
+                {"id": "critic", "label": "Feedback"},
+            ],
+            "relations": [
+                {"source": "generator", "target": "draft"},
+                {"source": "draft", "target": "critic"},
+            ],
+        }
+        specification = {
+            "modules": [
+                {"id": "init", "name": "Generate"},
+                {"id": "feedback", "name": "Feedback"},
+            ],
+            "relations": [
+                {"source": "init", "target": "feedback", "label": "Initial Output"},
+            ],
+        }
+
+        result = _score_planning_contract(expected, specification)
+
+        self.assertEqual(result["entity_recall"], 1.0)
+        self.assertEqual(result["relation_recall"], 1.0)
+
     def test_bundled_cases_validate_and_list(self):
         p2i = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
         i2p = ROOT / "benchmarks" / "image-to-ppt" / "cases" / "001_three_stage_layout"
@@ -33,6 +62,15 @@ class BenchmarkingTests(unittest.TestCase):
 
         self.assertTrue(validation["ok"])
         self.assertTrue((case_dir / "source.json").exists())
+
+    def test_fast_benchmark_command_runs_without_image_generation(self):
+        case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_fast_benchmark_case(case_dir, tmp, planner_mode="heuristic", ocr_engine="off")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue((Path(tmp) / "fast_benchmark_result.json").exists())
+            self.assertFalse((Path(tmp) / "selected_image.png").exists())
 
     def test_paper_to_image_score_uses_hard_scientific_gates(self):
         case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"

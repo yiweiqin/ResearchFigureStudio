@@ -86,8 +86,11 @@ Use the two independent suites to locate failures before changing the workflow:
 ```powershell
 rfs benchmark list --root benchmarks --json
 rfs benchmark fetch --case <case_dir> --json
+rfs benchmark fast --case <case_dir> --out <run_dir> --deadline 180 --json
 rfs benchmark run --case <case_dir> --out <run_dir> --json
 rfs benchmark score --case <case_dir> --run <run_dir> --json
 ```
 
 `paper-to-image` scientific and terminology errors are hard failures. `image-to-ppt` must reject full-slide reference images even when raster similarity is high.
+
+For prompt-only work, run `rfs fast-framework-prompt --paper <paper.pdf> --out <fast_result> --deadline 180 --json`. Inspect `extraction_report.json` first, then `planning_validation_report.json`; treat `engineering_only: true` as a non-production result even when deterministic topology coverage is high.

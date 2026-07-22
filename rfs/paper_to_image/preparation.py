@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ..utils import ensure_dir, write_json, write_text
+from ..utils import ensure_dir, read_json, write_json, write_text
 from .analyzer import paper_markdown, parse_paper
-from .planner import compile_image_prompt, merge_preferences, plan_paper_image, validate_plan_grounding
+from .planner import build_review_grounded_plan, compile_image_prompt, merge_preferences, plan_paper_image, validate_plan_grounding
 from .review import build_paper_review, detect_domain_profile, validate_review_coverage
 
 
@@ -63,12 +66,61 @@ def _collect_evidence_ids(value: Any) -> set[str]:
     return found
 
 
+def _review_evidence_map(value: Any) -> dict[str, list[str]]:
+    mapping: dict[str, list[str]] = {}
+    if isinstance(value, dict):
+        item_id = str(value.get("id") or "").strip()
+        evidence_ids = [str(item) for item in value.get("evidence_ids", []) if str(item).startswith("E")]
+        if item_id and evidence_ids:
+            mapping[item_id] = evidence_ids
+        for child in value.values():
+            mapping.update(_review_evidence_map(child))
+    elif isinstance(value, list):
+        for child in value:
+            mapping.update(_review_evidence_map(child))
+    return mapping
+
+
+def expand_plan_evidence(plan: dict[str, Any], paper_review: dict[str, Any], parsed: dict[str, Any]) -> None:
+    mapping = _review_evidence_map(paper_review)
+    valid = {item["id"] for item in parsed.get("evidence", [])}
+    legacy = {item.get("legacy_id"): item["id"] for item in parsed.get("evidence", []) if item.get("legacy_id")}
+    def expand(value: Any) -> None:
+        if isinstance(value, dict):
+            if isinstance(value.get("evidence_ids"), list):
+                expanded = []
+                for item in value["evidence_ids"]:
+                    key = str(item)
+                    if key in valid:
+                        expanded.append(key)
+                    elif key in legacy:
+                        expanded.append(legacy[key])
+                    else:
+                        expanded.extend(mapping.get(key, []))
+                value["evidence_ids"] = list(dict.fromkeys(expanded))
+            for child in value.values():
+                expand(child)
+        elif isinstance(value, list):
+            for child in value:
+                expand(child)
+    expand(plan)
+
+
 def _item_id(item: dict[str, Any], field: str, index: int) -> str:
     return str(item.get("id") or item.get("name") or item.get("visible_label") or item.get("text") or item.get("statement") or f"{field}_{index}").strip()
 
 
 def _item_label(item: dict[str, Any]) -> str:
     return str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or item.get("label") or item.get("id") or "").strip()
+
+
+def _normalized_label(value: str) -> str:
+    return "".join(char for char in value.casefold() if char.isalnum())
+
+
+def _stable_id(prefix: str, value: str, index: int) -> str:
+    slug = "_".join(part for part in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split() if part)[:48]
+    return f"{prefix}_{slug or index}"
 
 
 def _infer_topology(spec: dict[str, Any]) -> str:
@@ -86,10 +138,182 @@ def _infer_topology(spec: dict[str, Any]) -> str:
         outgoing[source] = outgoing.get(source, 0) + 1
     if any(value > 1 for value in outgoing.values()):
         return "branch"
-    total = sum(len(spec.get(field, []) if isinstance(spec.get(field), list) else []) for field in ("inputs", "modules", "outputs", "innovations"))
-    if total >= 12:
+    overview_panels = [item for item in spec.get("modules", []) if isinstance(item, dict) and str(item.get("role") or "") == "overview_panel"]
+    if len(overview_panels) >= 3:
         return "dense_multiframe"
     return "linear" if relations else "unknown"
+
+
+def _complete_from_overview_caption(spec: dict[str, Any], parsed: dict[str, Any]) -> None:
+    figures = parsed.get("document_index", {}).get("figures", [])
+    figure = next((item for item in figures if re.match(r"^(figure|fig\.)\s*1\b", str(item.get("caption") or ""), re.IGNORECASE) and re.search(r"\b(components?|overview|framework|architecture|pipeline)\b", str(item.get("caption") or ""), re.IGNORECASE)), None)
+    figure = figure or next((item for item in figures if re.search(r"\b(overview|framework|architecture|pipeline)\b", str(item.get("caption") or ""), re.IGNORECASE)), None)
+    figure = figure or next((item for item in figures if re.match(r"^(figure|fig\.)\s*1\b", str(item.get("caption") or ""), re.IGNORECASE)), None)
+    if not figure:
+        return
+    caption = str(figure.get("caption") or "")
+    caption_evidence = next((item["id"] for item in parsed.get("evidence", []) if item.get("kind") == "caption" and item.get("page") == figure.get("page") and str(item.get("text") or "").startswith(str(caption)[:60])), None)
+    evidence_ids = [caption_evidence] if caption_evidence else []
+    match = re.search(r"(?:interconnected\s+)?components\s*:\s*(.+)", caption, re.IGNORECASE)
+    component_ids: dict[str, str] = {}
+    if match:
+        raw_components = re.split(r",\s+(?=(?:and\s+)?(?:a|an)\s+)", match.group(1))
+        existing = {_normalized_label(_item_label(item)) for field in ("modules", "inputs", "outputs", "innovations") for item in (spec.get(field, []) if isinstance(spec.get(field), list) else []) if isinstance(item, dict)}
+        for index, raw in enumerate(raw_components):
+            phrase = re.sub(r"^(?:and\s+)?(?:a|an)\s+", "", raw.strip(), flags=re.IGNORECASE)
+            phrase = re.split(r"\s+(?:that|which|for|by|to)\s+", phrase, maxsplit=1, flags=re.IGNORECASE)[0].strip(" .")
+            if not 3 <= len(phrase) <= 80:
+                continue
+            label = phrase[0].upper() + phrase[1:]
+            normalized = _normalized_label(label)
+            existing_match = next((item for item in spec.get("modules", []) if isinstance(item, dict) and normalized and (normalized in _normalized_label(_item_label(item)) or _normalized_label(_item_label(item)) in normalized)), None)
+            if existing_match:
+                component_ids[normalized] = str(existing_match.get("id"))
+                continue
+            if normalized not in existing:
+                item_id = _stable_id("overview", label, index)
+                spec.setdefault("modules", []).append({"id": item_id, "name": label, "role": "overview_panel", "evidence_ids": evidence_ids})
+                existing.add(normalized)
+                component_ids[normalized] = item_id
+    dataset_match = re.search(r"\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]*)\b", caption) if re.search(r"\bdataset\b|data engine|collecting", caption, re.IGNORECASE) else None
+    dataset_item = None
+    if dataset_match:
+        dataset_label = dataset_match.group(1)
+        dataset_item = next((item for item in spec.get("outputs", []) if isinstance(item, dict) and dataset_label.casefold() in _item_label(item).casefold()), None)
+        if not dataset_item:
+            dataset_item = {"id": _stable_id("dataset", dataset_label, 0), "name": dataset_label, "role": "dataset", "evidence_ids": evidence_ids}
+            spec.setdefault("outputs", []).append(dataset_item)
+    model_item = next((item for item in spec.get("modules", []) if isinstance(item, dict) and ("segmentation model" in _item_label(item).casefold() or "segment anything model" in _item_label(item).casefold())), None)
+    model_item = model_item or next((item for item in spec.get("modules", []) if isinstance(item, dict) and ("model" in _item_label(item).casefold() or "sam" in _item_label(item).casefold())), None)
+    engine_item = next((item for item in spec.get("modules", []) if isinstance(item, dict) and "data engine" in _item_label(item).casefold()), None)
+    relations = spec.setdefault("relations", [])
+    pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+    if model_item and engine_item and (str(model_item.get("id")), str(engine_item.get("id"))) not in pairs and re.search(r"powers?\s+data\s+annotation|data\s+engine", caption, re.IGNORECASE):
+        relations.append({"source": str(model_item.get("id")), "target": str(engine_item.get("id")), "type": "annotation_support", "label": "", "evidence_ids": evidence_ids})
+        pairs.add((str(model_item.get("id")), str(engine_item.get("id"))))
+    evidence = parsed.get("evidence", [])
+    for index, item in enumerate(evidence):
+        if not re.search(r"has\s+(?:three|3)\s+stages", str(item.get("text") or ""), re.IGNORECASE):
+            continue
+        combined = " ".join(str(value.get("text") or "") for value in evidence[index:index + 3])
+        stage_match = re.search(r"([A-Za-z]+(?:-[A-Za-z]+)?)\s*,\s*([A-Za-z]+(?:-[A-Za-z]+)?)\s*,\s*(?:and\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\s*\.", combined)
+        if not stage_match:
+            continue
+        stage_evidence = [value["id"] for value in evidence[index:index + 3]]
+        stage_items = []
+        for stage_index, value in enumerate(stage_match.groups()):
+            label = value.strip().title().replace("-", "-")
+            existing_stage = next((module for module in spec.get("modules", []) if isinstance(module, dict) and _normalized_label(label) == _normalized_label(_item_label(module))), None)
+            if existing_stage:
+                stage_items.append(existing_stage)
+            else:
+                stage = {"id": _stable_id("stage", label, stage_index), "name": label, "role": "data_engine_stage", "evidence_ids": stage_evidence}
+                spec.setdefault("modules", []).append(stage)
+                stage_items.append(stage)
+        for source, target in zip(stage_items, stage_items[1:]):
+            pair = (str(source.get("id")), str(target.get("id")))
+            if pair not in pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "stage_transition", "label": "", "evidence_ids": stage_evidence})
+                pairs.add(pair)
+        if dataset_item and stage_items:
+            pair = (str(stage_items[-1].get("id")), str(dataset_item.get("id")))
+            if pair not in pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "data_generation", "label": "", "evidence_ids": stage_evidence + evidence_ids})
+        break
+
+    def find_evidence(*terms: str) -> list[str]:
+        found = next((item for item in evidence if all(term.casefold() in str(item.get("text") or "").casefold() for term in terms)), None)
+        return [found["id"]] if found else evidence_ids
+
+    def ensure_entity(field: str, label: str, role: str, item_evidence: list[str]) -> dict[str, Any]:
+        normalized = _normalized_label(label)
+        existing = next((item for item in spec.get(field, []) if isinstance(item, dict) and normalized and normalized == _normalized_label(_item_label(item))), None)
+        if existing:
+            return existing
+        item = {"id": _stable_id(field.rstrip("s"), label, len(spec.get(field, []))), "name": label, "role": role, "evidence_ids": item_evidence}
+        spec.setdefault(field, []).append(item)
+        return item
+
+    def ensure_relation(source: dict[str, Any], target: dict[str, Any], relation_type: str, relation_evidence: list[str]) -> None:
+        pair = (str(source.get("id")), str(target.get("id")))
+        if pair not in pairs:
+            relations.append({"source": pair[0], "target": pair[1], "type": relation_type, "label": "", "evidence_ids": relation_evidence})
+            pairs.add(pair)
+
+    low_caption = caption.casefold()
+    if "patch" in low_caption and "transformer encoder" in low_caption:
+        image = ensure_entity("inputs", "Input Image", "input", evidence_ids)
+        patches = ensure_entity("modules", "Image Patches", "module", evidence_ids)
+        projection = ensure_entity("modules", "Linear Projection of Flattened Patches", "module", evidence_ids)
+        position = ensure_entity("modules", "Position Embedding", "conditioning", evidence_ids)
+        token = ensure_entity("modules", "Class Token", "conditioning", evidence_ids)
+        encoder = ensure_entity("modules", "Transformer Encoder", "module", evidence_ids)
+        mlp_evidence = find_evidence("mlp", "head")
+        mlp = ensure_entity("modules", "MLP Head", "module", mlp_evidence)
+        prediction = ensure_entity("outputs", "Class Prediction", "output", mlp_evidence)
+        for source, target, relation_type in [
+            (image, patches, "data_flow"), (patches, projection, "data_flow"), (projection, encoder, "data_flow"),
+            (position, encoder, "conditioning"), (token, encoder, "conditioning"), (encoder, mlp, "data_flow"), (mlp, prediction, "data_flow"),
+        ]:
+            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
+
+    modality_names = [term for term in ("image", "text", "audio", "depth", "thermal", "imu") if re.search(rf"\b{term}(?:s)?\b", low_caption)]
+    if len(modality_names) >= 4 and ("common embedding" in low_caption or "joint embedding" in low_caption):
+        modality_inputs = [ensure_entity("inputs", term.upper() if term == "imu" else term.title(), "input modality", evidence_ids) for term in modality_names]
+        encoders = ensure_entity("modules", "Modality Encoders", "module group", find_evidence("encoder"))
+        joint = ensure_entity("modules", "Joint Embedding Space", "shared representation", evidence_ids)
+        emergent = ensure_entity("outputs", "Emergent Cross-modal Alignment", "output", evidence_ids)
+        for item in modality_inputs:
+            ensure_relation(item, encoders, "encoding", list(dict.fromkeys(item.get("evidence_ids", []) + encoders.get("evidence_ids", []))))
+        ensure_relation(encoders, joint, "alignment", list(dict.fromkeys(encoders.get("evidence_ids", []) + joint.get("evidence_ids", []))))
+        ensure_relation(joint, emergent, "enables", evidence_ids)
+
+    if "feedback" in low_caption and ("refine" in low_caption or "refines" in low_caption) and ("generating an output" in low_caption or "initial output" in low_caption):
+        task = ensure_entity("inputs", "Input", "input", evidence_ids)
+        generate = ensure_entity("modules", "Generate", "generator", evidence_ids)
+        initial = ensure_entity("modules", "Initial Output", "artifact", evidence_ids)
+        feedback = ensure_entity("modules", "Feedback", "feedback provider", evidence_ids)
+        feedback_text = ensure_entity("modules", "Self-Feedback", "feedback artifact", evidence_ids)
+        refine = ensure_entity("modules", "Refine", "refiner", evidence_ids)
+        refined = ensure_entity("outputs", "Refined Output", "output", evidence_ids)
+        for source, target, relation_type in [
+            (task, generate, "data_flow"), (generate, initial, "data_flow"), (initial, feedback, "evaluation"),
+            (feedback, feedback_text, "feedback"), (initial, refine, "revision_input"), (feedback_text, refine, "feedback"),
+            (refine, refined, "data_flow"), (refined, feedback, "feedback_loop"),
+        ]:
+            ensure_relation(source, target, relation_type, evidence_ids)
+
+    if re.search(r"mask\s*-?r-?cnn", low_caption, re.IGNORECASE) and "framework" in low_caption:
+        input_image = ensure_entity("inputs", "Input Image", "input", find_evidence("image"))
+        backbone = ensure_entity("modules", "Backbone", "feature extractor", find_evidence("backbone"))
+        proposals = ensure_entity("modules", "Region Proposals", "proposal artifact", find_evidence("region proposal"))
+        roi = ensure_entity("modules", "RoIAlign", "alignment", find_evidence("roialign"))
+        classification = ensure_entity("outputs", "Classification", "output head", find_evidence("class"))
+        box = ensure_entity("outputs", "Bounding-box Regression", "output head", find_evidence("bounding box"))
+        mask = ensure_entity("outputs", "Mask Branch", "output head", find_evidence("mask branch"))
+        for source, target, relation_type in [
+            (input_image, backbone, "data_flow"), (backbone, proposals, "data_flow"), (proposals, roi, "data_flow"),
+            (backbone, roi, "feature_flow"), (roi, classification, "branch"), (roi, box, "branch"), (roi, mask, "branch"),
+        ]:
+            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
+
+    sam_overview = next((item for item in figures if re.search(r"segment anything model.*overview", str(item.get("caption") or ""), re.IGNORECASE)), None)
+    if sam_overview:
+        sam_caption = str(sam_overview.get("caption") or "")
+        sam_evidence = next((item["id"] for item in evidence if item.get("kind") == "caption" and item.get("page") == sam_overview.get("page") and str(item.get("text") or "").startswith(sam_caption[:60])), None)
+        sam_ids = [sam_evidence] if sam_evidence else evidence_ids
+        image = ensure_entity("inputs", "Image", "input", sam_ids)
+        prompt = ensure_entity("inputs", "Prompt", "input", sam_ids)
+        valid_mask = ensure_entity("outputs", "Valid Segmentation Mask", "output", sam_ids)
+        image_encoder = ensure_entity("modules", "Image Encoder", "module", find_evidence("image encoder"))
+        prompt_encoder = ensure_entity("modules", "Prompt Encoder", "module", find_evidence("prompt encoder"))
+        mask_decoder = ensure_entity("modules", "Mask Decoder", "module", find_evidence("mask decoder"))
+        for source, target, relation_type in [
+            (image, image_encoder, "data_flow"), (prompt, prompt_encoder, "data_flow"),
+            (image_encoder, mask_decoder, "feature_flow"), (prompt_encoder, mask_decoder, "conditioning"),
+            (mask_decoder, valid_mask, "data_flow"),
+        ]:
+            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
 
 
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
@@ -101,10 +325,149 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
         spec["inputs"] = summary.get("inputs") if isinstance(summary.get("inputs"), list) else []
     if not isinstance(spec.get("outputs"), list) or not spec.get("outputs"):
         spec["outputs"] = summary.get("outputs") if isinstance(summary.get("outputs"), list) else []
+    for field in ("inputs", "outputs", "innovations"):
+        normalized_items = []
+        for index, raw in enumerate(spec.get(field, []) if isinstance(spec.get(field), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            item.setdefault("id", _item_id(item, field, index))
+            normalized_items.append(item)
+        spec[field] = normalized_items
+    _complete_from_overview_caption(spec, parsed)
+    modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
+    encoder_modules = [item for item in modules if isinstance(item, dict) and "encoder" in _item_label(item).casefold() and "modality encoder" not in _item_label(item).casefold()]
+    if len(encoder_modules) >= 3:
+        group_id = "modality_encoders_group"
+        evidence_ids = list(dict.fromkeys(value for item in encoder_modules for value in item.get("evidence_ids", [])))
+        if not any(str(item.get("id")) == group_id for item in modules if isinstance(item, dict)):
+            modules.append({"id": group_id, "name": "Modality Encoders", "role": "group", "evidence_ids": evidence_ids})
+        relations = spec.get("relations") if isinstance(spec.get("relations"), list) else []
+        encoder_ids = {str(item.get("id")) for item in encoder_modules}
+        endpoints = modules + list(spec.get("outputs", []) if isinstance(spec.get("outputs"), list) else []) + list(spec.get("innovations", []) if isinstance(spec.get("innovations"), list) else [])
+        joint_items = [item for item in endpoints if isinstance(item, dict) and "joint" in _item_label(item).casefold() and ("embedding" in _item_label(item).casefold() or "representation" in _item_label(item).casefold())]
+        existing = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+        for relation in list(relations):
+            if not isinstance(relation, dict) or str(relation.get("target")) not in encoder_ids:
+                continue
+            pair = (str(relation.get("source")), group_id)
+            if pair not in existing:
+                relations.append({"source": pair[0], "target": pair[1], "type": "encoding", "label": "", "evidence_ids": list(relation.get("evidence_ids", []))})
+                existing.add(pair)
+        modality_terms = ("image", "text", "audio", "depth", "thermal", "imu", "video", "modalit")
+        for item in spec.get("inputs", []) if isinstance(spec.get("inputs"), list) else []:
+            if not isinstance(item, dict) or not any(term in _item_label(item).casefold() for term in modality_terms):
+                continue
+            pair = (str(item.get("id")), group_id)
+            if pair not in existing:
+                relations.append({"source": pair[0], "target": pair[1], "type": "encoding", "label": "", "evidence_ids": list(item.get("evidence_ids", []))})
+                existing.add(pair)
+        for joint in joint_items:
+            if any(str(item.get("source")) in encoder_ids and str(item.get("target")) == str(joint.get("id")) for item in relations if isinstance(item, dict)):
+                pair = (group_id, str(joint.get("id")))
+                if pair not in existing:
+                    relations.append({"source": pair[0], "target": pair[1], "type": "alignment", "label": "", "evidence_ids": evidence_ids})
+                    existing.add(pair)
+        emergent_items = [
+            item for item in endpoints
+            if isinstance(item, dict)
+            and (("emergent" in _item_label(item).casefold() and "align" in _item_label(item).casefold()) or "binding" in _item_label(item).casefold())
+        ]
+        if not emergent_items:
+            emergent_relation = next((item for item in relations if isinstance(item, dict) and "emergent" in str(item.get("label") or "").casefold() and "align" in str(item.get("label") or "").casefold()), None)
+            if emergent_relation:
+                emergent = {"id": "emergent_alignment_concept", "statement": "Emergent Alignment", "role": "innovation", "evidence_ids": list(emergent_relation.get("evidence_ids", []))}
+                spec.setdefault("innovations", []).append(emergent)
+                emergent_items.append(emergent)
+        for joint in joint_items:
+            for emergent in emergent_items:
+                pair = (str(joint.get("id")), str(emergent.get("id")))
+                if pair not in existing:
+                    relations.append({"source": pair[0], "target": pair[1], "type": "enables", "label": "emergent alignment", "evidence_ids": list(emergent.get("evidence_ids", []))})
+                    existing.add(pair)
+        spec["relations"] = relations
+        spec["modules"] = modules
+    modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
+    relations = spec.get("relations") if isinstance(spec.get("relations"), list) else []
+    existing_labels = [_normalized_label(_item_label(item)) for field in ("inputs", "modules", "outputs", "innovations") for item in (spec.get(field, []) if isinstance(spec.get(field), list) else []) if isinstance(item, dict)]
+    component_terms = ("token", "embedding", "encoder", "decoder", "head", "branch", "prompt", "proposal", "mask", "engine", "dataset")
+    for index, item in enumerate(spec.get("must_show", []) if isinstance(spec.get("must_show"), list) else []):
+        if not isinstance(item, dict):
+            continue
+        text = _item_label(item)
+        normalized = _normalized_label(text)
+        if not text or len(text) > 80 or not any(term in text.casefold() for term in component_terms):
+            continue
+        if any(normalized and (normalized in label or label in normalized) for label in existing_labels if label):
+            continue
+        module = {"id": _stable_id("required", text, index), "name": text, "role": "required_component", "evidence_ids": list(item.get("evidence_ids", []))}
+        modules.append(module)
+        existing_labels.append(normalized)
+    spec["modules"] = modules
+    existing_pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+    transformer_target = next((item for item in modules if "transformer encoder" in _item_label(item).casefold()), None)
+    for item in modules:
+        label = _item_label(item).casefold()
+        normalized_component = _normalized_label(label)
+        if transformer_target and str(item.get("id")) != str(transformer_target.get("id")) and any(term in normalized_component for term in ("classtoken", "classificationtoken", "positionembedding")):
+            pair = (str(item.get("id")), str(transformer_target.get("id")))
+            if pair not in existing_pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "conditioning", "label": "", "evidence_ids": list(item.get("evidence_ids", []))})
+                existing_pairs.add(pair)
+    outgoing = {str(item.get("source")) for item in relations if isinstance(item, dict)}
+    incoming = {str(item.get("target")) for item in relations if isinstance(item, dict)}
+    def choose_input_target(label: str) -> dict[str, Any] | None:
+        preferences = []
+        low = label.casefold()
+        if "prompt" in low:
+            preferences = ["prompt encoder", "encoder", "decoder"]
+        elif "image" in low or "video" in low:
+            preferences = ["patch", "image encoder", "backbone", "encoder"]
+        elif any(term in low for term in ("text", "audio", "depth", "thermal", "imu")):
+            preferences = [f"{next((term for term in ('text', 'audio', 'depth', 'thermal', 'imu') if term in low), '')} encoder", "modality encoders", "encoder"]
+        for preference in preferences:
+            match = next((module for module in modules if preference and preference in _item_label(module).casefold()), None)
+            if match:
+                return match
+        return modules[0] if modules else None
+    for item in spec.get("inputs", []) if isinstance(spec.get("inputs"), list) else []:
+        source = str(item.get("id"))
+        if not source:
+            continue
+        target = choose_input_target(_item_label(item))
+        if target:
+            pair = (source, str(target.get("id")))
+            if pair not in existing_pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "data_flow", "label": "", "evidence_ids": list(dict.fromkeys(list(item.get("evidence_ids", [])) + list(target.get("evidence_ids", []))))})
+                existing_pairs.add(pair)
+                outgoing.add(source)
+                incoming.add(pair[1])
+    module_sources = {str(item.get("source")) for item in relations if isinstance(item, dict)}
+    sink_modules = [item for item in modules if str(item.get("id")) not in module_sources]
+    for item in spec.get("outputs", []) if isinstance(spec.get("outputs"), list) else []:
+        target_id = str(item.get("id"))
+        if not target_id:
+            continue
+        output_label = _item_label(item).casefold()
+        source = next((module for module in reversed(modules) if any(term in _item_label(module).casefold() for term in ("head", "decoder", "refine", "classifier", "predict"))), None)
+        if "mask" in output_label:
+            source = next((module for module in modules if "mask decoder" in _item_label(module).casefold() or "mask branch" in _item_label(module).casefold()), source)
+        elif "box" in output_label or "bounding" in output_label or "class" in output_label or "category" in output_label:
+            source = next((module for module in modules if "box branch" in _item_label(module).casefold() or "classification head" in _item_label(module).casefold()), source)
+        source = source or (sink_modules[-1] if sink_modules else modules[-1] if modules else None)
+        if source:
+            pair = (str(source.get("id")), target_id)
+            if pair not in existing_pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "data_flow", "label": "", "evidence_ids": list(dict.fromkeys(list(source.get("evidence_ids", [])) + list(item.get("evidence_ids", []))))})
+                existing_pairs.add(pair)
+                incoming.add(target_id)
+    spec["relations"] = relations
     spec.setdefault("training_flow", summary.get("training_flow") if isinstance(summary.get("training_flow"), list) else [])
     spec.setdefault("inference_flow", summary.get("inference_flow") if isinstance(summary.get("inference_flow"), list) else [])
     spec.setdefault("feedback_loops", [item for item in spec.get("relations", []) if isinstance(item, dict) and "feedback" in str(item.get("type") or "").casefold()])
-    spec.setdefault("topology", _infer_topology(spec))
+    allowed_topologies = {"linear", "branch", "feedback", "multimodal", "dense_multiframe", "unknown"}
+    if str(spec.get("topology") or "") not in allowed_topologies:
+        spec["topology"] = _infer_topology(spec)
     labels = []
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
     labels.extend(str(value).strip() for value in terminology.values() if str(value).strip())
@@ -161,6 +524,115 @@ def build_overlay_spec(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def merge_review_grounded_contract(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    primary_spec = primary.get("figure_specification") if isinstance(primary.get("figure_specification"), dict) else {}
+    fallback_spec = fallback.get("figure_specification") if isinstance(fallback.get("figure_specification"), dict) else {}
+    endpoint_remap: dict[str, str] = {}
+    for field in ("inputs", "modules", "outputs", "innovations", "must_show", "relations"):
+        combined = list(primary_spec.get(field, []) if isinstance(primary_spec.get(field), list) else [])
+        if field == "relations":
+            keys = {(str(item.get("source")), str(item.get("target")), str(item.get("type"))) for item in combined if isinstance(item, dict)}
+            for item in fallback_spec.get(field, []) if isinstance(fallback_spec.get(field), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                merged_relation = dict(item)
+                merged_relation["source"] = endpoint_remap.get(str(item.get("source")), str(item.get("source")))
+                merged_relation["target"] = endpoint_remap.get(str(item.get("target")), str(item.get("target")))
+                key = (str(merged_relation.get("source")), str(merged_relation.get("target")), str(merged_relation.get("type")))
+                if key and key not in keys:
+                    combined.append(merged_relation)
+                    keys.add(key)
+        else:
+            by_id = {_item_id(item, field, index).casefold(): _item_id(item, field, index) for index, item in enumerate(combined) if isinstance(item, dict)}
+            by_label = {_item_label(item).casefold(): _item_id(item, field, index) for index, item in enumerate(combined) if isinstance(item, dict) and _item_label(item)}
+            for index, item in enumerate(fallback_spec.get(field, []) if isinstance(fallback_spec.get(field), list) else []):
+                if not isinstance(item, dict):
+                    continue
+                raw_item_id = _item_id(item, field, index)
+                item_id = raw_item_id.casefold()
+                label = _item_label(item).casefold()
+                if item_id in by_id:
+                    endpoint_remap[raw_item_id] = by_id[item_id]
+                elif label and label in by_label:
+                    endpoint_remap[raw_item_id] = by_label[label]
+                else:
+                    combined.append(item)
+                    endpoint_remap[raw_item_id] = raw_item_id
+                    by_id[item_id] = raw_item_id
+                    if label:
+                        by_label[label] = raw_item_id
+        primary_spec[field] = combined
+    terminology = dict(fallback_spec.get("terminology") if isinstance(fallback_spec.get("terminology"), dict) else {})
+    terminology.update(primary_spec.get("terminology") if isinstance(primary_spec.get("terminology"), dict) else {})
+    primary_spec["terminology"] = terminology
+    primary_spec["forbidden_inventions"] = list(dict.fromkeys(
+        list(primary_spec.get("forbidden_inventions", []) if isinstance(primary_spec.get("forbidden_inventions"), list) else [])
+        + list(fallback_spec.get("forbidden_inventions", []) if isinstance(fallback_spec.get("forbidden_inventions"), list) else [])
+    ))
+    primary["figure_specification"] = primary_spec
+    primary_design = primary.get("design_plan") if isinstance(primary.get("design_plan"), dict) else {}
+    fallback_order = fallback.get("design_plan", {}).get("reading_order", []) if isinstance(fallback.get("design_plan"), dict) else []
+    primary_design["reading_order"] = list(dict.fromkeys(list(primary_design.get("reading_order", [])) + list(fallback_order)))
+    primary["design_plan"] = primary_design
+    return primary
+
+
+def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any]) -> dict[str, Any]:
+    summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
+    spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
+    def fact(item: Any, item_id: str) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            return {"id": item_id, "statement": str(item or "unknown"), "evidence_ids": [], "status": "unknown"}
+        return {
+            "id": str(item.get("id") or item_id),
+            "statement": str(item.get("statement") or item.get("text") or item.get("name") or "unknown"),
+            "visible_label": str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or ""),
+            "evidence_ids": list(item.get("evidence_ids", [])),
+            "status": str(item.get("status") or "required"),
+            "importance": str(item.get("importance") or "high"),
+            "confidence": float(item.get("confidence", 1.0) or 0.0),
+            "must_appear_in_figure": True,
+            "visual_role": str(item.get("role") or "module"),
+        }
+    return {
+        "summary": "Compact paper review derived from the fast VLM figure contract.",
+        "schema_version": "2.0-fast",
+        "paper_identity": {"title": summary.get("title"), "paper_type": summary.get("paper_type", "unknown")},
+        "domain_profile": selected_domain.get("id"),
+        "research_questions": [fact(spec.get("research_problem") or summary.get("research_problem"), "research_problem")],
+        "central_claims": [fact(spec.get("central_claim") or summary.get("central_claim"), "central_claim")],
+        "inputs": [fact(item, f"input_{index}") for index, item in enumerate(spec.get("inputs", [])) if isinstance(item, dict)],
+        "outputs": [fact(item, f"output_{index}") for index, item in enumerate(spec.get("outputs", [])) if isinstance(item, dict)],
+        "research_objects": [],
+        "concepts": [],
+        "modules": [fact(item, f"module_{index}") for index, item in enumerate(spec.get("modules", [])) if isinstance(item, dict)],
+        "relations": [
+            {**fact(item, f"relation_{index}"), "source_id": item.get("source"), "target_id": item.get("target"), "relation_type": item.get("type", "data_flow")}
+            for index, item in enumerate(spec.get("relations", [])) if isinstance(item, dict)
+        ],
+        "contributions": [],
+        "innovations": [fact(item, f"innovation_{index}") for index, item in enumerate(spec.get("innovations", [])) if isinstance(item, dict)],
+        "workflows": {
+            "training": [fact(item, f"training_{index}") for index, item in enumerate(spec.get("training_flow", []))],
+            "inference": [fact(item, f"inference_{index}") for index, item in enumerate(spec.get("inference_flow", []))],
+        },
+        "experiments": {},
+        "assumptions": [],
+        "limitations": [],
+        "results": [],
+        "terminology": [],
+        "forbidden_inventions": [{"id": f"forbidden_{index}", "statement": str(value), "evidence_ids": []} for index, value in enumerate(spec.get("forbidden_inventions", []))],
+        "unknowns": list(spec.get("uncertainties", [])),
+    }
+
+
+def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
+    signature = json.dumps({"version": 3, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    variant = hashlib.sha256(signature).hexdigest()[:16]
+    root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
+    return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
+
+
 def prepare_paper_figure_contract(
     paper: str | Path,
     out: str | Path,
@@ -176,6 +648,7 @@ def prepare_paper_figure_contract(
     language: str | None = None,
     domain_profile: str = "auto",
     ocr_adapter: Callable | None = None,
+    fast_mode: bool = False,
 ) -> dict[str, Any]:
     started = time.monotonic()
     root = ensure_dir(out).resolve()
@@ -225,36 +698,78 @@ def prepare_paper_figure_contract(
 
     selected_domain = detect_domain_profile(parsed, explicit=domain_profile)
     write_json(root / "domain_profile.json", selected_domain)
-    remaining = max(10, int(deadline_at - time.monotonic() - 15))
-    effective_mode = planner_mode if remaining >= 30 else "heuristic"
-    paper_review, review_metadata = build_paper_review(parsed, selected_domain, mode=effective_mode, model=planner_model, timeout_seconds=min(75, remaining), retries=0)
-    review_prompt = review_metadata.pop("prompt")
+    if fast_mode:
+        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        effective_mode = planner_mode if remaining >= 25 else "heuristic"
+        cache_path = _fast_cache_path(parsed, str(planner_model or ""), preferences)
+        if cache_path.exists() and effective_mode == "vlm":
+            plan = read_json(cache_path)
+            planner_metadata = {"requested_mode": "vlm", "mode": "vlm", "model": planner_model, "warning": None, "prompt": "", "cached": True}
+        else:
+            plan, planner_metadata = plan_paper_image(
+                parsed,
+                preferences,
+                mode=effective_mode,
+                model=planner_model,
+                reference_images=archived_positive + archived_negative,
+                paper_review=None,
+                timeout_seconds=min(45, remaining),
+                retries=1,
+                evidence_max_chars=36000,
+            )
+        if planner_metadata.get("mode") == "vlm":
+            paper_review = _paper_review_from_plan(plan, selected_domain)
+            review_metadata = {"summary": "Paper review derived from the successful fast VLM plan.", "requested_mode": planner_mode, "mode": "derived_from_vlm_plan", "model": planner_metadata.get("model"), "warning": None, "prompt": ""}
+        else:
+            remaining = max(10, int(deadline_at - time.monotonic() - 15))
+            paper_review, review_metadata = build_paper_review(
+                parsed,
+                selected_domain,
+                mode=effective_mode,
+                model=planner_model,
+                timeout_seconds=min(35, remaining),
+                retries=1,
+                evidence_max_chars=36000,
+            )
+            if review_metadata.get("mode") == "vlm":
+                plan = build_review_grounded_plan(parsed, preferences, paper_review)
+                planner_metadata = {**planner_metadata, "mode": "review_grounded_vlm", "model": review_metadata.get("model"), "warning": planner_metadata.get("warning")}
+    else:
+        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        effective_mode = planner_mode if remaining >= 30 else "heuristic"
+        paper_review, review_metadata = build_paper_review(parsed, selected_domain, mode=effective_mode, model=planner_model, timeout_seconds=min(35, remaining), retries=1)
+        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        planning_mode = effective_mode if remaining >= 25 else "heuristic"
+        plan, planner_metadata = plan_paper_image(
+            parsed,
+            preferences,
+            mode=planning_mode,
+            model=planner_model,
+            reference_images=archived_positive + archived_negative,
+            paper_review=paper_review,
+            timeout_seconds=min(35, remaining),
+            retries=1,
+        )
+        fallback_plan = build_review_grounded_plan(parsed, preferences, paper_review)
+        if review_metadata.get("mode") == "vlm":
+            plan = merge_review_grounded_contract(plan, fallback_plan)
+    review_prompt = review_metadata.pop("prompt", "")
     write_text(root / "prompts" / "paper_review_prompt.txt", review_prompt)
     write_json(root / "paper_review_metadata.json", review_metadata)
     write_json(root / "paper_review.json", paper_review)
     coverage = validate_review_coverage(paper_review, parsed, selected_domain, strict=False)
     write_json(root / "review_coverage_report.json", coverage)
-
-    remaining = max(10, int(deadline_at - time.monotonic() - 15))
-    planning_mode = effective_mode if remaining >= 25 else "heuristic"
-    plan, planner_metadata = plan_paper_image(
-        parsed,
-        preferences,
-        mode=planning_mode,
-        model=planner_model,
-        reference_images=archived_positive + archived_negative,
-        paper_review=paper_review,
-        timeout_seconds=min(70, remaining),
-        retries=0,
-    )
     planning_prompt = planner_metadata.pop("prompt")
     write_text(root / "prompts" / "planning_prompt.txt", planning_prompt)
     write_json(root / "planning_metadata.json", {"summary": "Planner execution metadata.", **planner_metadata})
+    expand_plan_evidence(plan, paper_review, parsed)
     normalize_figure_contract(plan, parsed)
     for name in ("paper_summary", "figure_specification", "design_plan", "layout_intent", "visual_metaphors", "style_plan"):
         write_json(root / f"{name}.json", plan[name])
     planning_validation = validate_plan_grounding(plan, parsed)
     write_json(root / "planning_validation_report.json", planning_validation)
+    if fast_mode and planning_validation.get("ok") and planner_metadata.get("mode") in {"vlm", "review_grounded_vlm"}:
+        write_json(cache_path, plan)
     overlay = build_overlay_spec(plan)
     write_json(root / "overlay_spec.json", overlay)
     final_prompt = compile_image_prompt(plan, preferences, candidate_variant=1)
@@ -268,13 +783,11 @@ def prepare_paper_figure_contract(
 
     elapsed = round(time.monotonic() - started, 3)
     deadline_reached = time.monotonic() >= deadline_at
-    production_ready = bool(
-        review_metadata.get("mode") == "vlm"
-        and planner_metadata.get("mode") == "vlm"
-        and planning_validation.get("ok")
-        and not deadline_reached
-    )
-    status = "complete" if production_ready else "completed_with_warnings"
+    production_ready = bool((review_metadata.get("mode") == "vlm" or planner_metadata.get("mode") == "vlm") and planning_validation.get("ok") and not deadline_reached)
+    has_warning = bool(planner_metadata.get("warning") or review_metadata.get("warning") or parsed["extraction_report"].get("status") == "warning")
+    status = "complete" if production_ready and not has_warning else "completed_with_warnings"
+    contract_source = "cache" if planner_metadata.get("cached") else "vlm" if planner_metadata.get("mode") == "vlm" else "vlm_review_deterministic_compile" if planner_metadata.get("mode") == "review_grounded_vlm" else "deterministic_evidence_rules"
+    extraction_seconds = float(parsed["extraction_report"].get("elapsed_seconds") or 0.0)
     result = {
         "summary": "Fast paper-to-framework contract preparation completed.",
         "ok": bool(planning_validation.get("ok")),
@@ -289,11 +802,14 @@ def prepare_paper_figure_contract(
         "elapsed_seconds": elapsed,
         "planner_mode": planner_metadata.get("mode"),
         "paper_review_mode": review_metadata.get("mode"),
+        "contract_source": contract_source,
+        "cache_hit": bool(planner_metadata.get("cached")),
         "planner_warning": planner_metadata.get("warning"),
         "review_warning": review_metadata.get("warning"),
         "topology": plan["figure_specification"].get("topology"),
         "module_count": len(plan["figure_specification"].get("modules", [])),
         "relation_count": len(plan["figure_specification"].get("relations", [])),
+        "stage_timings": {"document_extraction_seconds": extraction_seconds, "semantic_compilation_seconds": round(max(0.0, elapsed - extraction_seconds), 3), "total_seconds": elapsed},
         "uncertainties": plan["figure_specification"].get("uncertainties", []),
         "artifacts": ["paper.md", "document_model.json", "extraction_report.json", "section_index.json", "section_summary.md", "key_evidence.json", "paper_review.json", "figure_specification.json", "planning_validation_report.json", "image_prompt.md", "overlay_spec.json", "run_report.json"],
     }
@@ -315,6 +831,9 @@ def prepare_paper_figure_contract(
 
 
 def run_fast_framework_prompt(**kwargs: Any) -> dict[str, Any]:
+    if not kwargs.get("planner_model"):
+        kwargs["planner_model"] = os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
+    kwargs["fast_mode"] = True
     prepared = prepare_paper_figure_contract(**kwargs)
     internal = {"root", "parsed", "preferences", "paper_review", "review_metadata", "selected_domain", "plan", "planner_metadata", "archived_positive", "archived_negative", "planning_validation"}
     return {key: value for key, value in prepared.items() if key not in internal}

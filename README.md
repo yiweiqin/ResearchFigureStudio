@@ -95,6 +95,18 @@ For offline engineering validation only, add `--image-asset-mode placeholder --r
 
 ## Paper To Image Without PPTX
 
+For the fast “paper to evidence-grounded framework prompt” path, without image generation:
+
+```powershell
+rfs fast-framework-prompt `
+  --paper "C:\path\paper.pdf" `
+  --out "output\fast_result" `
+  --deadline 180 `
+  --json
+```
+
+This writes `paper.md`, `document_model.json`, `extraction_report.json`, `section_summary.md`, `key_evidence.json`, `figure_specification.json`, `image_prompt.md`, `overlay_spec.json`, and `run_report.json`. It uses one compact VLM request by default, falls back to evidence-driven topology rules, and caches successful contracts by paper hash. Set `RFS_FAST_FRAMEWORK_MODEL` to override the default `gemini-2.5-flash` model. `rfs inspect-pdf` runs only the local extraction and quality checks.
+
 Use `paper-to-image` when the required endpoint is a generated raster framework
 figure rather than an editable PowerPoint file. The production route performs a
 universal evidence-grounded paper review, loads a domain extension, converts

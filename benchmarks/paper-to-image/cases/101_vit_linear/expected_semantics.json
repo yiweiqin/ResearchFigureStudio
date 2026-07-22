@@ -1,14 +1,14 @@
 {
   "summary": "Human-authored semantic contract for the Vision Transformer architecture.",
   "entities": [
-    {"id": "input_image", "label": "Input Image", "role": "input", "required": true},
-    {"id": "image_patches", "label": "Image Patches", "role": "module", "required": true},
-    {"id": "linear_projection", "label": "Linear Projection of Flattened Patches", "role": "module", "required": true},
+    {"id": "input_image", "label": "Input Image", "aliases": ["2D Image", "Image"], "role": "input", "required": true},
+    {"id": "image_patches", "label": "Image Patches", "aliases": ["Patches"], "role": "module", "required": true},
+    {"id": "linear_projection", "label": "Linear Projection of Flattened Patches", "aliases": ["Linear Projection"], "role": "module", "required": true},
     {"id": "position_embedding", "label": "Position Embedding", "role": "module", "required": true},
-    {"id": "class_token", "label": "Class Token", "role": "module", "required": true},
+    {"id": "class_token", "label": "Class Token", "aliases": ["Class Embedding", "[class] Embedding"], "role": "module", "required": true},
     {"id": "transformer_encoder", "label": "Transformer Encoder", "role": "module", "required": true},
     {"id": "mlp_head", "label": "MLP Head", "role": "module", "required": true},
-    {"id": "class_prediction", "label": "Class Prediction", "role": "output", "required": true}
+    {"id": "class_prediction", "label": "Class Prediction", "aliases": ["Image Classification Predictions", "Classification Predictions", "Class Label"], "role": "output", "required": true}
   ],
   "relations": [
     {"source": "input_image", "target": "image_patches", "type": "data_flow", "required": true},

@@ -68,7 +68,7 @@ def detect_domain_profile(parsed: dict, explicit: str = "auto") -> dict:
     return {"summary": profile["summary"], "id": selected, "selection": "automatic", "scores": scores, **profile}
 
 
-def _review_prompt(parsed: dict, domain_profile: dict) -> str:
+def _review_prompt(parsed: dict, domain_profile: dict, evidence_max_chars: int = 65000) -> str:
     return f"""
 # Summary
 
@@ -143,7 +143,7 @@ Rules:
 - Short visible labels should normally be at most 32 characters.
 
 Paper evidence:
-{evidence_excerpt(parsed, max_chars=65000)}
+{evidence_excerpt(parsed, max_chars=evidence_max_chars)}
 """.strip()
 
 
@@ -235,7 +235,9 @@ def normalize_review(raw: dict, domain_profile: dict) -> dict:
 
 def _expand_evidence(review: dict, parsed: dict) -> None:
     evidence = {item["id"]: item for item in parsed.get("evidence", [])}
+    aliases = {item.get("legacy_id"): item["id"] for item in parsed.get("evidence", []) if item.get("legacy_id")}
     def expand(item: dict) -> None:
+        item["evidence_ids"] = list(dict.fromkeys(aliases.get(str(value), str(value)) for value in item.get("evidence_ids", [])))
         item["evidence_refs"] = [{"evidence_id": value, "page": evidence[value].get("page"), "section": evidence[value].get("section_hint"), "quote": evidence[value].get("text", "")[:600]} for value in item.get("evidence_ids", []) if value in evidence]
     for field in ["research_questions", "central_claims", "inputs", "outputs", "research_objects", "concepts", "modules", "relations", "contributions", "innovations", "assumptions", "limitations", "results", "terminology", "forbidden_inventions", "unknowns"]:
         for item in review.get(field, []):
@@ -326,8 +328,8 @@ def validate_review_coverage(review: dict, parsed: dict, domain_profile: dict, s
     }
 
 
-def build_paper_review(parsed: dict, domain_profile: dict, mode: str = "vlm", model: str | None = None, timeout_seconds: int = 300, retries: int = 1) -> tuple[dict, dict]:
-    prompt = _review_prompt(parsed, domain_profile)
+def build_paper_review(parsed: dict, domain_profile: dict, mode: str = "vlm", model: str | None = None, timeout_seconds: int = 300, retries: int = 1, evidence_max_chars: int = 65000) -> tuple[dict, dict]:
+    prompt = _review_prompt(parsed, domain_profile, evidence_max_chars=evidence_max_chars)
     metadata = {"summary": "Paper-review execution metadata.", "requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt}
     if mode == "vlm" and vlm_credentials_available():
         resolved = resolve_vlm_model("RFS_PAPER_REVIEW_MODEL", "RFS_PAPER_TO_IMAGE_MODEL", explicit_model=model)

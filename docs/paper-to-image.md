@@ -2,6 +2,16 @@
 
 `rfs paper-to-image` produces a reviewed raster scientific framework image without creating PPTX. Production mode requires successful VLM paper review, a content-free architecture blueprint, reference-conditioned Image2 edit generation, and four production quality gates.
 
+## Three-Minute Fast Contract
+
+```powershell
+rfs fast-framework-prompt --paper paper.pdf --out output/fast --deadline 180 --json
+```
+
+The fast path stops before image generation. It uses structured block-level PDF extraction, complete Figure 1/overview captions, stable page/content-hash evidence IDs, one compact VLM contract call, deterministic evidence rules, and a local SHA-256 contract cache. A cached paper normally completes in seconds. If no VLM succeeds, the command returns an engineering result with explicit uncertainties instead of claiming production readiness.
+
+Use `rfs inspect-pdf --paper paper.pdf --out output/inspection --json` to diagnose reading order, Unicode, OCR, section coverage, captions, and parser agreement without model calls.
+
 ## Production Command
 
 ```powershell

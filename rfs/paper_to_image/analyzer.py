@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ def _clean(text: str) -> str:
     value = re.sub(r"\bANIMAGE\b", "AN IMAGE", value)
     value = re.sub(r"\(\s*([A-Z])\s+([A-Z])\s+([A-Z])\s*\)", r"(\1\2\3)", value)
     value = re.sub(r"[ \t]+", " ", value)
+    value = re.sub(r"(?<=\w)-\s+(?=\w)", "", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()
 
@@ -98,7 +100,7 @@ def _reading_order(blocks: list[dict[str, Any]], page_width: float) -> tuple[lis
 def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
     records = []
     payload = page.get_text("dict")
-    for block in payload.get("blocks", []):
+    for parent_index, block in enumerate(payload.get("blocks", []), 1):
         if int(block.get("type", 0)) != 0:
             continue
         for line in block.get("lines", []):
@@ -114,7 +116,7 @@ def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
                 round(max(float(value[2]) for value in bbox_values), 3),
                 round(max(float(value[3]) for value in bbox_values), 3),
             ]
-            records.append({"bbox": bbox, "text": text, "source": "pymupdf", "confidence": 1.0})
+            records.append({"bbox": bbox, "text": text, "source": "pymupdf", "confidence": 1.0, "parent_block": parent_index})
     return records
 
 
@@ -389,9 +391,18 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
     tables = []
     formulas = []
     for page in pages:
-        for block in page.get("blocks", []):
+        page_blocks = page.get("blocks", [])
+        for block_index, block in enumerate(page_blocks):
             record = {"page": page["page"], "block_id": block["id"], "bbox": block.get("bbox"), "caption": block.get("text", "")}
             if block.get("kind") == "caption":
+                parent = block.get("parent_block")
+                continuation = []
+                for following in page_blocks[block_index + 1:]:
+                    if parent is None or following.get("parent_block") != parent or re.match(r"^(figure|fig\.|table)\s*\d", str(following.get("text") or ""), re.IGNORECASE):
+                        break
+                    continuation.append(str(following.get("text") or ""))
+                if continuation:
+                    record["caption"] = _clean(record["caption"] + " " + " ".join(continuation))
                 figures.append({"id": f"figure_{len(figures) + 1:03d}", **record})
             elif block.get("kind") == "table":
                 tables.append({"id": f"table_{len(tables) + 1:03d}", **record})
@@ -409,10 +420,32 @@ def _section_coverage(pages: list[dict[str, Any]], sections: list[dict[str, Any]
     }
 
 
-def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
+def _evidence_id(page: int, text: str, bbox: Any, kind: str) -> str:
+    payload = json.dumps({"page": page, "text": _clean(text), "bbox": bbox, "kind": kind}, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return f"E_P{int(page):03d}_{hashlib.sha1(payload).hexdigest()[:12]}"
+
+
+def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]], document_index: dict[str, Any], max_chars: int) -> list[dict[str, Any]]:
     section_positions = sorted(sections, key=lambda item: (item["page"], item.get("block_id", "")))
     evidence = []
     used = 0
+    for figure in document_index.get("figures", []):
+        text = _clean(figure.get("caption", ""))
+        if not text or used + len(text) > max_chars:
+            continue
+        evidence.append({
+            "id": _evidence_id(int(figure.get("page") or 0), text, figure.get("bbox"), "caption"),
+            "page": figure.get("page"),
+            "block_id": figure.get("block_id"),
+            "bbox": figure.get("bbox"),
+            "section_hint": "Figure Captions",
+            "kind": "caption",
+            "source": "pymupdf",
+            "confidence": 1.0,
+            "text": text,
+            "char_count": len(text),
+        })
+        used += len(text)
     for page in pages:
         for block in page.get("blocks", []):
             text = _clean(block.get("text", ""))
@@ -421,7 +454,7 @@ def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]],
             text = text[: max(0, max_chars - used)]
             section = next((item["title"] for item in reversed(section_positions) if item["page"] <= page["page"]), None)
             evidence.append({
-                "id": f"E{len(evidence) + 1:04d}",
+                "id": _evidence_id(int(page["page"]), text, block.get("bbox"), str(block.get("kind") or "paragraph")),
                 "page": page["page"],
                 "block_id": block.get("id"),
                 "bbox": block.get("bbox"),
@@ -433,6 +466,8 @@ def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]],
                 "char_count": len(text),
             })
             used += len(text)
+    for index, item in enumerate(evidence, 1):
+        item["legacy_id"] = f"E{index:04d}"
     return evidence
 
 
@@ -494,7 +529,7 @@ def parse_paper(
         details = {"warnings": [], "ocr_candidate_pages": [], "ocr_pages": [], "poppler_available": False, "elapsed_seconds": 0.0}
     sections = _heading_candidates(pages)
     document_index = _document_index(pages, sections)
-    evidence = _build_evidence(pages, sections, max_chars)
+    evidence = _build_evidence(pages, sections, document_index, max_chars)
     all_text = "\n\n".join(page.get("text", "") for page in pages)
     if not evidence:
         raise ValueError("No readable paper text was extracted")
@@ -528,7 +563,11 @@ def evidence_excerpt(parsed: dict, max_chars: int = 58000) -> str:
     prioritized = sorted(
         parsed.get("evidence", []),
         key=lambda item: (
-            0 if any(term in str(item.get("section_hint") or "").casefold() for term in ("abstract", "method", "approach", "architecture", "framework", "conclusion")) else 1,
+            0 if item.get("kind") == "caption" and re.match(r"^(figure|fig\.)\s*1\b", str(item.get("text") or ""), re.IGNORECASE) and re.search(r"\b(components?|overview|framework|architecture|pipeline)\b", str(item.get("text") or ""), re.IGNORECASE) else
+            1 if item.get("kind") == "caption" and re.search(r"\b(overview|framework|architecture|pipeline)\b", str(item.get("text") or ""), re.IGNORECASE) else
+            2 if item.get("kind") == "caption" and re.match(r"^(figure|fig\.)\s*1\b", str(item.get("text") or ""), re.IGNORECASE) else
+            3 if item.get("kind") == "caption" else
+            4 if any(term in str(item.get("section_hint") or "").casefold() for term in ("abstract", "introduction", "method", "approach", "architecture", "framework", "conclusion")) else 5,
             int(item.get("page") or 0),
             str(item.get("block_id") or ""),
         ),

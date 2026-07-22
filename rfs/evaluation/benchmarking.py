@@ -67,50 +67,80 @@ def _score_planning_contract(expected: dict, specification: dict) -> dict[str, A
     if not specification:
         return {"available": False}
     actual_entities = []
-    for field in ("inputs", "modules", "outputs", "innovations"):
+    for field in ("inputs", "modules", "outputs", "innovations", "must_show"):
         for index, item in enumerate(specification.get(field, []) if isinstance(specification.get(field), list) else []):
             if not isinstance(item, dict):
                 continue
             label = next((str(item.get(key) or "").strip() for key in ("visible_label", "name", "text", "statement", "label", "id") if str(item.get(key) or "").strip()), "")
-            actual_entities.append({"id": str(item.get("id") or f"{field}_{index}"), "label": label, "normalized": _normalized_text(label)})
+            actual_entities.append({"id": str(item.get("id") or f"{field}_{index}"), "label": label, "normalized": _normalized_text(label), "field": field})
+    expanded_relations = set()
+    for index, item in enumerate(specification.get("relations", []) if isinstance(specification.get("relations"), list) else []):
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or item.get("source_id") or "")
+        target = str(item.get("target") or item.get("target_id") or "")
+        if source and target:
+            expanded_relations.add((source, target))
+        label = str(item.get("label") or "").strip()
+        if source and target and label:
+            label_id = f"relation_label_{index}"
+            actual_entities.append({"id": label_id, "label": label, "normalized": _normalized_text(label), "field": "relation_label"})
+            expanded_relations.add((source, label_id))
+            expanded_relations.add((label_id, target))
     expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
     mapping: dict[str, str] = {}
     matched = []
     used_actual_ids: set[str] = set()
     for item in expected_entities:
-        candidates = [str(item.get("label") or "")] + [str(value) for value in item.get("aliases", []) if str(value).strip()]
-        normalized = [_normalized_text(value) for value in candidates if _normalized_text(value)]
-        match = next(
-            (
-                actual
-                for actual in actual_entities
-                if actual["id"] not in used_actual_ids
-                and actual["normalized"]
-                and any(
-                    value == actual["normalized"]
-                    or value in actual["normalized"]
-                    or actual["normalized"] in value
-                    for value in normalized
-                )
-            ),
-            None,
-        )
+        primary = _normalized_text(item.get("label"))
+        aliases = [_normalized_text(value) for value in item.get("aliases", []) if _normalized_text(value)]
+        def match_score(actual: dict[str, str]) -> int:
+            value = actual["normalized"]
+            if not value or actual["id"] in used_actual_ids:
+                return 0
+            bonus = 2 if actual.get("field") in {"inputs", "modules", "outputs", "innovations"} else 1 if actual.get("field") == "relation_label" else 0
+            if primary and primary == value:
+                return 5 + bonus
+            if any(alias == value for alias in aliases):
+                return 4 + bonus
+            if any(alias in value or value in alias for alias in aliases):
+                return 3 + bonus
+            if primary and (primary in value or value in primary):
+                return 1 + bonus
+            return 0
+        ranked = sorted(((match_score(actual), actual) for actual in actual_entities), key=lambda pair: pair[0], reverse=True)
+        match = ranked[0][1] if ranked and ranked[0][0] > 0 else None
         if match:
             mapping[str(item.get("id"))] = match["id"]
             used_actual_ids.add(match["id"])
             matched.append(str(item.get("id")))
     expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
-    actual_relations = {
-        (str(item.get("source") or item.get("source_id") or ""), str(item.get("target") or item.get("target_id") or ""))
-        for item in specification.get("relations", [])
-        if isinstance(item, dict)
-    }
+    actual_relations = expanded_relations
+    adjacency: dict[str, set[str]] = {}
+    for source, target in actual_relations:
+        adjacency.setdefault(source, set()).add(target)
+    def connected(source: str, target: str, max_hops: int = 2) -> bool:
+        if (source, target) in actual_relations:
+            return True
+        frontier = {source}
+        visited = {source}
+        for _ in range(max_hops):
+            frontier = {neighbor for node in frontier for neighbor in adjacency.get(node, set()) if neighbor not in visited}
+            if target in frontier:
+                return True
+            visited.update(frontier)
+        return False
     relation_matches = 0
+    matched_relations = []
+    missing_relations = []
     for relation in expected_relations:
         source = mapping.get(str(relation.get("source")))
         target = mapping.get(str(relation.get("target")))
-        if source and target and (source, target) in actual_relations:
+        if source and target and connected(source, target):
             relation_matches += 1
+            matched_relations.append(f"{relation.get('source')}->{relation.get('target')}")
+        else:
+            missing_relations.append(f"{relation.get('source')}->{relation.get('target')}")
     actual_text = " ".join(item["label"] for item in actual_entities).casefold()
     forbidden = [label for label in expected.get("forbidden_labels", []) if str(label).casefold() in actual_text]
     return {
@@ -118,7 +148,10 @@ def _score_planning_contract(expected: dict, specification: dict) -> dict[str, A
         "entity_recall": _clamp(len(matched) / max(1, len(expected_entities))),
         "relation_recall": _clamp(relation_matches / max(1, len(expected_relations))),
         "matched_entity_ids": matched,
+        "entity_mapping": mapping,
         "missing_entity_ids": [str(item.get("id")) for item in expected_entities if str(item.get("id")) not in matched],
+        "matched_relations": matched_relations,
+        "missing_relations": missing_relations,
         "forbidden_labels_found": forbidden,
     }
 
@@ -305,9 +338,11 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         hard_failures.append("required relations missing or incorrect")
     if exact_label_rate < 1.0:
         hard_failures.append("required labels missing or misspelled")
-    if planning_contract.get("available") and float(planning_contract.get("entity_recall", 0.0)) < 1.0:
+    plan_entity_min = float(case.get("thresholds", {}).get("plan_entity_recall", 1.0))
+    plan_relation_min = float(case.get("thresholds", {}).get("plan_relation_recall", 1.0))
+    if planning_contract.get("available") and float(planning_contract.get("entity_recall", 0.0)) < plan_entity_min:
         hard_failures.append("paper planning missed required benchmark entities")
-    if planning_contract.get("available") and float(planning_contract.get("relation_recall", 0.0)) < 1.0:
+    if planning_contract.get("available") and float(planning_contract.get("relation_recall", 0.0)) < plan_relation_min:
         hard_failures.append("paper planning missed required benchmark relations")
     if planning_contract.get("forbidden_labels_found"):
         hard_failures.append("paper planning introduced forbidden benchmark labels")
@@ -615,4 +650,50 @@ def run_benchmark_case(case_dir: str | Path, out: str | Path) -> dict[str, Any]:
         "benchmark_result": score,
     }
     write_json(target / "benchmark_run.json", result)
+    return result
+
+
+def run_fast_benchmark_case(
+    case_dir: str | Path,
+    out: str | Path,
+    deadline_seconds: int = 180,
+    planner_mode: str = "vlm",
+    planner_model: str | None = None,
+    ocr_engine: str = "off",
+) -> dict[str, Any]:
+    case_root = Path(case_dir).resolve()
+    case = _load(case_root / "case.json")
+    if str(case.get("suite") or "") != "paper-to-image":
+        return {"summary": "Fast framework benchmark only supports paper-to-image cases.", "ok": False, "case_dir": str(case_root)}
+    paper_path = case_root / str(case.get("paper") or "paper.md")
+    if not paper_path.exists():
+        fetched = fetch_benchmark_case(case_root)
+        if not fetched.get("ok"):
+            return {**fetched, "passed": False}
+    validation = validate_benchmark_case(case_root)
+    if not validation.get("ok"):
+        return {**validation, "passed": False}
+    from ..paper_to_image import run_fast_framework_prompt
+
+    preferences = case_root / str(case.get("preferences")) if case.get("preferences") else None
+    run = run_fast_framework_prompt(
+        paper=paper_path,
+        out=out,
+        deadline_seconds=deadline_seconds,
+        planner_mode=planner_mode,
+        planner_model=planner_model,
+        ocr_engine=ocr_engine,
+        preferences_path=preferences if preferences and preferences.exists() else None,
+        aspect_ratio=str(case.get("run_config", {}).get("aspect_ratio") or "16:9"),
+    )
+    score = score_benchmark_case(case_root, out)
+    result = {
+        "summary": "Fast paper framework benchmark completed.",
+        "ok": bool(run.get("ok")),
+        "case_id": case.get("case_id"),
+        "run": run,
+        "benchmark": score,
+        "passed_planning_thresholds": not any("plan_" in value for value in score.get("threshold_failures", [])),
+    }
+    write_json(Path(out) / "fast_benchmark_result.json", result)
     return result

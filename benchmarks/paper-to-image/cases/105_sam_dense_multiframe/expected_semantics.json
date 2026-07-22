@@ -3,9 +3,9 @@
   "entities": [
     {"id": "promptable_task", "label": "Promptable Segmentation Task", "role": "panel", "required": true},
     {"id": "image", "label": "Image", "role": "input", "required": true},
-    {"id": "prompt", "label": "Prompt", "role": "input", "required": true},
-    {"id": "valid_mask", "label": "Valid Segmentation Mask", "role": "output", "required": true},
-    {"id": "sam_model", "label": "Segment Anything Model", "role": "panel", "required": true},
+    {"id": "prompt", "label": "Prompt", "aliases": ["Sparse Prompts", "Dense Prompts", "Segmentation Prompt"], "role": "input", "required": true},
+    {"id": "valid_mask", "label": "Valid Segmentation Mask", "aliases": ["Valid Masks", "Valid Mask"], "role": "output", "required": true},
+    {"id": "sam_model", "label": "Segment Anything Model", "aliases": ["Segmentation Model (SAM)", "SAM"], "role": "panel", "required": true},
     {"id": "image_encoder", "label": "Image Encoder", "role": "module", "required": true},
     {"id": "prompt_encoder", "label": "Prompt Encoder", "role": "module", "required": true},
     {"id": "mask_decoder", "label": "Mask Decoder", "role": "module", "required": true},

@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
-from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, score_benchmark_case, validate_benchmark_case
+from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, run_fast_benchmark_case, score_benchmark_case, validate_benchmark_case
 from .paper_to_image import inspect_paper, run_fast_framework_prompt, run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
@@ -68,6 +68,7 @@ def _doctor() -> dict:
         "pdftoppm": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm")},
         "easyocr": {"available": importlib.util.find_spec("easyocr") is not None},
         "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
+        "fast_contract_cache": {"available": True, "path": str(Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio")))},
     }
     ok = all(item["available"] for item in deps.values())
     return {
@@ -90,6 +91,7 @@ def _doctor() -> dict:
             "Use rfs presentations-qa as an optional inspection pass; RFS remains the authoritative PPTX compiler.",
             "Use rfs coevolve-image to run whole-image Creator Agent and Online/Frozen Judge refinement before PPTX conversion.",
             "Use rfs paper-to-image for evidence-grounded paper summarization, whole-image prompt compilation, candidate generation, and selected_image.png without PPTX.",
+            "Use rfs fast-framework-prompt for the one-call, cached paper-to-contract fast path; RFS_FAST_FRAMEWORK_MODEL defaults to gemini-2.5-flash.",
             "Production paper-to-image uses a content-free template blueprint and requires an Image2 edit endpoint; placeholder output is engineering-only.",
         ],
     }
@@ -284,13 +286,17 @@ def build_parser() -> argparse.ArgumentParser:
     coevolution_report.add_argument("--json", action="store_true", help="Emit JSON.")
 
     benchmark = sub.add_parser("benchmark", help="List, validate, run, or score ResearchFigureStudio benchmark cases.")
-    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "run", "score"])
+    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "fast", "run", "score"])
     benchmark.add_argument("--suite", choices=["paper-to-image", "image-to-ppt"], help="Optional suite filter for list.")
     benchmark.add_argument("--root", default="benchmarks", help="Benchmark root for list. Default: benchmarks.")
     benchmark.add_argument("--case", help="Benchmark case directory for validate, fetch, run, or score.")
     benchmark.add_argument("--run", dest="run_dir", help="Existing workflow output directory for score.")
     benchmark.add_argument("--out", help="Output directory for run, or optional score report destination.")
     benchmark.add_argument("--force", action="store_true", help="Re-fetch an existing local benchmark paper input.")
+    benchmark.add_argument("--deadline", type=int, default=180, help="Soft deadline for benchmark fast. Default: 180.")
+    benchmark.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm", help="Planner mode for benchmark fast.")
+    benchmark.add_argument("--planner-model", help="Optional model for benchmark fast.")
+    benchmark.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for benchmark fast.")
     benchmark.add_argument("--json", action="store_true", help="Emit JSON.")
 
     validate = sub.add_parser("validate", help="Validate an existing ResearchFigureStudio output directory.")
@@ -544,6 +550,10 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.case or not args.out:
                     parser.error("benchmark run requires --case and --out")
                 result = run_benchmark_case(args.case, args.out)
+            elif args.benchmark_action == "fast":
+                if not args.case or not args.out:
+                    parser.error("benchmark fast requires --case and --out")
+                result = run_fast_benchmark_case(args.case, args.out, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
             else:
                 if not args.case or not args.run_dir:
                     parser.error("benchmark score requires --case and --run")

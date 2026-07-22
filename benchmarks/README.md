@@ -22,6 +22,7 @@ A full-slide copy of the reference image is a hard failure even if pixel similar
 rfs benchmark list --root benchmarks --json
 rfs benchmark validate --case benchmarks/paper-to-image/cases/001_linear_pipeline --json
 rfs benchmark fetch --case benchmarks/paper-to-image/cases/101_vit_linear --json
+rfs benchmark fast --case benchmarks/paper-to-image/cases/101_vit_linear --out output/benchmarks/vit_fast --planner-mode heuristic --json
 rfs benchmark run --case benchmarks/paper-to-image/cases/001_linear_pipeline --out output/benchmarks/p2i_001 --json
 rfs benchmark score --case benchmarks/image-to-ppt/cases/001_three_stage_layout --run output/rebuild_case --json
 ```
@@ -37,5 +38,6 @@ Real-paper cases commit `source.json` and human-authored Ground Truth, while `be
 ## Evaluation tiers
 
 - Offline contract tier: placeholder assets, deterministic validation, CI-safe.
+- Fast planning tier: entity recall, relation recall, forbidden content, evidence grounding, deadline, and cache behavior without image generation.
 - Production quality tier: real VLM/image models, frozen judge, repeated seeds, and human calibration.
 - Human audit tier: blinded pairwise ratings for aesthetics, clarity, and information density.

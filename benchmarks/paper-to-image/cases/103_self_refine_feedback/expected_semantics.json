@@ -1,12 +1,12 @@
 {
   "summary": "Human-authored semantic contract for Self-Refine.",
   "entities": [
-    {"id": "task_input", "label": "Input", "role": "input", "required": true},
-    {"id": "initial_generator", "label": "Generate", "role": "module", "required": true},
+    {"id": "task_input", "label": "Input", "aliases": ["Task Prompt", "Task Instruction"], "role": "input", "required": true},
+    {"id": "initial_generator", "label": "Generate", "aliases": ["INIT", "Generator"], "role": "module", "required": true},
     {"id": "initial_output", "label": "Initial Output", "role": "module", "required": true},
-    {"id": "feedback_module", "label": "Feedback", "role": "module", "required": true},
-    {"id": "feedback_text", "label": "Feedback", "role": "control", "required": true},
-    {"id": "refinement_module", "label": "Refine", "role": "module", "required": true},
+    {"id": "feedback_module", "label": "Feedback", "aliases": ["FEEDBACK", "Feedback Provider"], "role": "module", "required": true},
+    {"id": "feedback_text", "label": "Feedback", "aliases": ["Self-Feedback", "Self-Feedback (NL)"], "role": "control", "required": true},
+    {"id": "refinement_module", "label": "Refine", "aliases": ["ITERATE / REFINE", "Refiner"], "role": "module", "required": true},
     {"id": "refined_output", "label": "Refined Output", "role": "output", "required": true}
   ],
   "relations": [

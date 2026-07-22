@@ -1,12 +1,12 @@
 {
   "summary": "Human-authored semantic contract for Mask R-CNN.",
   "entities": [
-    {"id": "input_image", "label": "Input Image", "role": "input", "required": true},
-    {"id": "backbone", "label": "Backbone", "role": "module", "required": true},
-    {"id": "region_proposals", "label": "Region Proposals", "role": "module", "required": true},
+    {"id": "input_image", "label": "Input Image", "aliases": ["Image"], "role": "input", "required": true},
+    {"id": "backbone", "label": "Backbone", "aliases": ["Backbone Architecture"], "role": "module", "required": true},
+    {"id": "region_proposals", "label": "Region Proposals", "aliases": ["Region Proposal Network (RPN)", "RPN", "Proposals"], "role": "module", "required": true},
     {"id": "roi_align", "label": "RoIAlign", "role": "module", "required": true},
-    {"id": "classification_head", "label": "Classification", "role": "output", "required": true},
-    {"id": "box_head", "label": "Bounding-box Regression", "role": "output", "required": true},
+    {"id": "classification_head", "label": "Classification", "aliases": ["Class Label", "Classification Head"], "role": "output", "required": true},
+    {"id": "box_head", "label": "Bounding-box Regression", "aliases": ["Bounding Box", "Box Branch", "Box Regression"], "role": "output", "required": true},
     {"id": "mask_head", "label": "Mask Branch", "role": "output", "required": true}
   ],
   "relations": [

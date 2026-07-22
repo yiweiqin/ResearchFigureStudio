@@ -35,6 +35,17 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertIn("Introduction", parsed["headings"])
         self.assertTrue(all(item.get("block_id") for item in parsed["evidence"]))
 
+    def test_multiline_figure_caption_is_combined_into_priority_evidence(self):
+        def draw(page):
+            page.insert_textbox((50, 80, 550, 150), "Figure 1: Three interconnected components: a promptable task,\na model, and a data engine for collecting a large dataset.", fontsize=10)
+            page.insert_textbox((50, 180, 550, 250), "1 Introduction\nA sufficiently long introduction paragraph for quality validation.", fontsize=10)
+
+        parsed = parse_paper(self._pdf(draw))
+
+        caption = parsed["document_index"]["figures"][0]["caption"]
+        self.assertIn("data engine", caption)
+        self.assertTrue(any(item["kind"] == "caption" and "data engine" in item["text"] for item in parsed["evidence"]))
+
     def test_two_column_blocks_are_sorted_left_then_right(self):
         def draw(page):
             page.insert_textbox((330, 100, 560, 180), "RIGHT COLUMN SECOND with enough words to form a complete paragraph.", fontsize=10)
@@ -85,6 +96,15 @@ class PaperAnalyzerTests(unittest.TestCase):
 
             self.assertTrue(first["document_model"])
             self.assertEqual(second["status"], "cached")
+
+    def test_evidence_ids_are_stable_across_repeated_parses(self):
+        path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "1 Method\nA stable block of scientific evidence for repeated parsing.", fontsize=10))
+
+        first = parse_paper(path)
+        second = parse_paper(path)
+
+        self.assertEqual([item["id"] for item in first["evidence"]], [item["id"] for item in second["evidence"]])
+        self.assertTrue(all(item["id"].startswith("E_P") for item in first["evidence"]))
 
 
 if __name__ == "__main__":

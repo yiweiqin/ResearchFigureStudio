@@ -35,7 +35,7 @@ def merge_preferences(raw: dict | None, aspect_ratio: str | None = None, languag
     return merged
 
 
-def _planner_prompt(parsed: dict, preferences: dict, paper_review: dict | None = None) -> str:
+def _planner_prompt(parsed: dict, preferences: dict, paper_review: dict | None = None, evidence_max_chars: int = 58000) -> str:
     return f"""
 # Summary
 
@@ -44,6 +44,15 @@ You are a paper-to-scientific-figure planner. Return JSON only.
 Build a scientifically faithful plan for generating ONE complete raster framework figure from the supplied paper evidence. Do not create PPTX instructions. Do not invent stock modules such as encoder, retriever, memory, agent, reinforcement learning, knowledge base, or decoder unless supported by evidence.
 
 Every important factual item must include one or more evidence_ids copied exactly from the supplied evidence labels. Mark uncertain fields as unknown. Use the paper's exact terminology.
+
+Contract completeness rules:
+- Treat Figure 1 and captions containing "overview", "framework", "architecture", or "pipeline" as high-priority evidence for the intended paper overview figure.
+- Identify every major contribution pillar from the abstract and introduction. For system, dataset, or foundation-model papers, do not omit a data engine, dataset construction process, training loop, or deployment stage when it is a central contribution.
+- Represent each separately named scientific component as a separate entity. Do not merge conditioning signals, special tokens, encoders, heads, inputs, or outputs into composite nodes when the paper names them independently.
+- Give every input and output a stable id and include the boundary relations from input to the first processing entity and from the final processing entity to the output.
+- Every relation endpoint must be an id declared in inputs, modules, outputs, or innovations.
+- Include feedback and control edges explicitly instead of describing them only in prose.
+- Before returning, check that every item in must_show is represented by a distinct entity or an explicit relation label.
 
 Return this schema:
 {{
@@ -72,8 +81,8 @@ Return this schema:
     "must_show": [{{"text": "...", "evidence_ids": ["E0001"]}}],
     "modules": [{{"id": "...", "name": "...", "role": "...", "evidence_ids": ["E0001"]}}],
     "relations": [{{"source": "module_id", "target": "module_id", "type": "data_flow|control_flow|training_only|inference_only|comparison|feedback", "label": "", "evidence_ids": ["E0001"]}}],
-    "inputs": [],
-    "outputs": [],
+    "inputs": [{{"id": "stable_input_id", "name": "exact paper term", "evidence_ids": ["E0001"]}}],
+    "outputs": [{{"id": "stable_output_id", "name": "exact paper term", "evidence_ids": ["E0001"]}}],
     "innovations": [],
     "feedback_loops": [],
     "training_flow": [],
@@ -126,7 +135,7 @@ Universal structured paper review:
 {json.dumps(paper_review or {}, ensure_ascii=False, indent=2)}
 
 Paper evidence:
-{evidence_excerpt(parsed)}
+{evidence_excerpt(parsed, max_chars=evidence_max_chars)}
 """.strip()
 
 
@@ -137,18 +146,40 @@ def _first_sentence(text: str) -> str:
 
 def _heuristic_plan(parsed: dict, preferences: dict, paper_review: dict | None = None) -> dict:
     if paper_review and paper_review.get("modules"):
-        review_modules = paper_review.get("modules", [])[:10]
+        review_modules = [item for item in (list(paper_review.get("modules", [])) + list(paper_review.get("research_objects", [])) + list(paper_review.get("concepts", []))) if item.get("evidence_ids")][:16]
         modules = [{"id": str(item.get("id")), "name": str(item.get("visible_label") or item.get("statement") or item.get("id")), "role": str(item.get("visual_role") or "module"), "evidence_ids": list(item.get("evidence_ids", []))} for item in review_modules]
-        relations = [{"source": str(item.get("source_id") or item.get("source") or ""), "target": str(item.get("target_id") or item.get("target") or ""), "type": str(item.get("relation_type") or item.get("type") or "data_flow"), "label": str(item.get("statement") or "")[:48], "evidence_ids": list(item.get("evidence_ids", []))} for item in paper_review.get("relations", []) if (item.get("source_id") or item.get("source")) and (item.get("target_id") or item.get("target"))]
+        relations = [{"source": str(item.get("source_id") or item.get("source") or ""), "target": str(item.get("target_id") or item.get("target") or ""), "type": str(item.get("relation_type") or item.get("type") or "data_flow"), "label": str(item.get("statement") or "")[:48], "evidence_ids": list(item.get("evidence_ids", []))} for item in paper_review.get("relations", []) if (item.get("source_id") or item.get("source")) and (item.get("target_id") or item.get("target")) and item.get("evidence_ids")]
         terminology = {str(item.get("statement")): str(item.get("visible_label") or item.get("statement")) for item in paper_review.get("terminology", []) if str(item.get("statement") or "").strip()}
         title = str(paper_review.get("paper_identity", {}).get("title") or parsed.get("source_name"))
         research_questions = paper_review.get("research_questions", [])
         claims = paper_review.get("central_claims", [])
         figure_goal = str((claims or research_questions or [{"statement": "Explain the paper method faithfully."}])[0].get("statement"))
-        innovations = paper_review.get("innovations", [])
+        innovations = [item for item in paper_review.get("innovations", []) if item.get("evidence_ids")]
         forbidden = [str(item.get("statement")) for item in paper_review.get("forbidden_inventions", [])]
-        inputs = paper_review.get("inputs", [])
-        outputs = paper_review.get("outputs", [])
+        inputs = [item for item in paper_review.get("inputs", []) if item.get("evidence_ids")]
+        outputs = [item for item in paper_review.get("outputs", []) if item.get("evidence_ids")]
+        known_modalities = ["image", "text", "audio", "depth", "thermal", "imu", "video"]
+        expanded_inputs = []
+        for item in inputs:
+            statement = str(item.get("visible_label") or item.get("name") or item.get("statement") or "")
+            present = [term for term in known_modalities if re.search(rf"\b{term}(?:s)?\b", statement, re.IGNORECASE)]
+            if len(present) >= 3:
+                for term in present:
+                    expanded_inputs.append({"id": f"input_{term}", "name": term.upper() if term == "imu" else term.title(), "role": "input modality", "evidence_ids": list(item.get("evidence_ids", []))})
+            else:
+                expanded_inputs.append(item)
+        inputs = expanded_inputs
+        if modules:
+            relation_pairs = {(item["source"], item["target"]) for item in relations}
+            for item in inputs:
+                input_id = str(item.get("id") or "")
+                if input_id and (input_id, modules[0]["id"]) not in relation_pairs:
+                    relations.append({"source": input_id, "target": modules[0]["id"], "type": "data_flow", "label": "encoding", "evidence_ids": list(item.get("evidence_ids", []))})
+            if outputs and innovations:
+                output_id = str(outputs[0].get("id") or "")
+                innovation_id = str(innovations[0].get("id") or "")
+                if output_id and innovation_id and (output_id, innovation_id) not in relation_pairs:
+                    relations.append({"source": output_id, "target": innovation_id, "type": "enables", "label": "emergent alignment", "evidence_ids": list(innovations[0].get("evidence_ids", []))})
         return {
             "summary": "Paper-review-grounded fallback planning result.",
             "paper_summary": {"summary": "Structured paper summary derived from paper_review.json.", "title": title, "paper_type": paper_review.get("paper_identity", {}).get("paper_type", "unknown"), "research_problem": (research_questions or [{}])[0], "central_claim": (claims or [{}])[0], "inputs": inputs, "outputs": outputs, "core_modules": modules, "innovations": innovations, "training_flow": paper_review.get("workflows", {}).get("training", []), "inference_flow": paper_review.get("workflows", {}).get("inference", []), "terminology": terminology, "unknowns": paper_review.get("unknowns", [])},
@@ -241,6 +272,11 @@ def _heuristic_plan(parsed: dict, preferences: dict, paper_review: dict | None =
     }
 
 
+def build_review_grounded_plan(parsed: dict, preferences: dict, paper_review: dict) -> dict:
+    """Compile a deterministic figure plan from an evidence-validated paper review."""
+    return normalize_plan(_heuristic_plan(parsed, preferences, paper_review=paper_review), preferences)
+
+
 def _ensure_summary(value: Any, fallback: str) -> dict:
     data = value if isinstance(value, dict) else {}
     data.setdefault("summary", fallback)
@@ -260,8 +296,8 @@ def normalize_plan(raw: dict, preferences: dict) -> dict:
     return result
 
 
-def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1) -> tuple[dict, dict]:
-    prompt = _planner_prompt(parsed, preferences, paper_review=paper_review)
+def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1, evidence_max_chars: int = 58000) -> tuple[dict, dict]:
+    prompt = _planner_prompt(parsed, preferences, paper_review=paper_review, evidence_max_chars=evidence_max_chars)
     metadata = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt}
     if mode == "vlm" and vlm_credentials_available():
         resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_MODEL", "RFS_PAPER_PLANNER_MODEL", explicit_model=model)
@@ -337,6 +373,8 @@ Hard requirements:
 - Avoid commercial-poster styling, cyberpunk effects, unrelated robots, generic brains, and repeated dashboard cards.
 - Treat the supplied blueprint as a hard macro-layout guide, but replace all reference content with this paper's content.
 - Every visible scientific word must come from the exact label whitelist; do not paraphrase labels.
+- Keep separately named scientific components as separately editable nodes; do not collapse special tokens, embeddings, heads, inputs, or outputs into composite labels.
+- Include explicit input-boundary and output-boundary connectors.
 """.strip()
 
 

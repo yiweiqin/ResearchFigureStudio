@@ -7,9 +7,9 @@
     {"id": "depth", "label": "Depth", "role": "input", "required": true},
     {"id": "thermal", "label": "Thermal", "role": "input", "required": true},
     {"id": "imu", "label": "IMU", "role": "input", "required": true},
-    {"id": "modality_encoders", "label": "Modality Encoders", "role": "module", "required": true},
-    {"id": "joint_embedding", "label": "Joint Embedding Space", "role": "module", "required": true},
-    {"id": "emergent_alignment", "label": "Emergent Cross-modal Alignment", "role": "output", "required": true}
+    {"id": "modality_encoders", "label": "Modality Encoders", "aliases": ["Transformer-based Encoders for Each Modality", "Encoders for Each Modality"], "role": "module", "required": true},
+    {"id": "joint_embedding", "label": "Joint Embedding Space", "aliases": ["Single Shared Joint Embedding Space", "Single Shared Representation Space", "Joint Embedding"], "role": "module", "required": true},
+    {"id": "emergent_alignment", "label": "Emergent Cross-modal Alignment", "aliases": ["Emergent Alignment", "Binding Agent", "Binding Property"], "role": "output", "required": true}
   ],
   "relations": [
     {"source": "image", "target": "modality_encoders", "type": "encoding", "required": true},

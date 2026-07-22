@@ -159,6 +159,13 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.deadline, 180)
         self.assertEqual(args.planner_mode, "vlm")
 
+    def test_benchmark_fast_cli_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(["benchmark", "fast", "--case", "benchmarks/case", "--out", "output/fast"])
+        self.assertEqual(args.benchmark_action, "fast")
+        self.assertEqual(args.deadline, 180)
+        self.assertEqual(args.planner_mode, "vlm")
+
     def test_domain_profiles_detect_method_and_survey(self):
         method = {"evidence": [{"text": "A neural model is optimized with a training loss and used during inference."}]}
         survey = {"evidence": [{"text": "This systematic survey presents a taxonomy and review of the landscape."}]}
