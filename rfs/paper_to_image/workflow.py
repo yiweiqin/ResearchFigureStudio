@@ -68,6 +68,8 @@ def run_paper_to_image(
     planner_metadata = prepared["planner_metadata"]
     planning_validation = prepared["planning_validation"]
     production_mode = asset_mode == "image2"
+    if production_mode and not parsed.get("extraction_report", {}).get("scientific_scope_complete", True):
+        raise RuntimeError("Production Image2 generation requires full-document scientific scope; sampled scanned-paper contracts are engineering-only")
     coverage = validate_review_coverage(paper_review, parsed, selected_domain, strict=production_mode)
     write_json(root / "review_coverage_report.json", coverage)
     if production_mode and review_metadata.get("mode") != "vlm":

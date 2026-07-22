@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import fitz
 from PIL import Image
 
 from rfs.cli import _doctor, build_parser
@@ -158,6 +159,63 @@ class PaperToImageTests(unittest.TestCase):
             self.assertFalse((out / "selected_image.png").exists())
             overlay = json.loads((out / "overlay_spec.json").read_text(encoding="utf-8"))
             self.assertTrue(overlay["labels"])
+
+    def test_long_scanned_paper_produces_explicit_sampled_engineering_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paper = root / "scan.pdf"
+            document = fitz.open()
+            for _ in range(12):
+                document.new_page(width=600, height=800)
+            document.save(paper)
+            document.close()
+
+            def adapter(image_path, _lang):
+                page_number = int(Path(image_path).stem.rsplit("_", 1)[-1])
+                return [{
+                    "text": f"Page {page_number} Abstract Method Input Image enters a CNN Backbone and Transformer Encoder Decoder to produce Class Predictions and Bounding Box Predictions with Bipartite Matching.",
+                    "confidence": 0.97,
+                    "quad": [[20, 20], [920, 20], [920, 100], [20, 100]],
+                }]
+
+            out = root / "fast"
+            result = run_fast_framework_prompt(
+                paper=paper,
+                out=out,
+                deadline_seconds=180,
+                planner_mode="heuristic",
+                ocr_engine="easyocr",
+                ocr_adapter=adapter,
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "completed_with_warnings")
+            self.assertFalse(result["production_ready"])
+            self.assertEqual(result["extraction_quality"]["semantic_scope"], "sampled_pages_only")
+            self.assertTrue(result["extraction_quality"]["sampled_scan_ready"])
+            self.assertTrue(any("sample pages" in item for item in result["uncertainties"]))
+
+    def test_production_image_generation_rejects_sampled_scan_scope(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prepared = {
+                "ok": True,
+                "root": root,
+                "paper": str(root / "paper.pdf"),
+                "archived_positive": [],
+                "archived_negative": [],
+                "preferences": {"aspect_ratio": "16:9"},
+                "parsed": {"extraction_report": {"scientific_scope_complete": False}},
+                "selected_domain": {"id": "general"},
+                "paper_review": {},
+                "review_metadata": {"mode": "vlm"},
+                "plan": _plan(),
+                "planner_metadata": {"mode": "vlm"},
+                "planning_validation": {"ok": True},
+            }
+            with patch("rfs.paper_to_image.workflow.prepare_paper_figure_contract", return_value=prepared):
+                with self.assertRaisesRegex(RuntimeError, "full-document scientific scope"):
+                    run_paper_to_image(paper=root / "paper.pdf", out=root / "run", asset_mode="image2")
 
     def test_fast_framework_cli_defaults(self):
         parser = build_parser()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,7 +11,14 @@ from PIL import Image
 
 OCR_LOW_CONFIDENCE = 0.65
 _EASYOCR_READERS: dict[tuple[str, ...], Any] = {}
-_RAPIDOCR_ENGINE: Any | None = None
+_RAPIDOCR_LOCAL = threading.local()
+
+
+def _positive_ocr_setting(explicit: int | None, env_name: str, default: int) -> int:
+    try:
+        return max(1, int(explicit if explicit is not None else os.getenv(env_name) or default))
+    except (TypeError, ValueError):
+        return max(1, int(default))
 
 
 def _round4(value: float) -> float:
@@ -181,14 +189,25 @@ def run_easyocr(image_path: str | Path, lang: str) -> list[dict[str, Any]]:
     return records
 
 
-def run_rapidocr(image_path: str | Path, lang: str) -> list[dict[str, Any]]:
+def run_rapidocr(image_path: str | Path, lang: str, *, threads: int | None = None, batch_size: int | None = None) -> list[dict[str, Any]]:
     del lang
-    global _RAPIDOCR_ENGINE
-    if _RAPIDOCR_ENGINE is None:
+    thread_count = _positive_ocr_setting(threads, "RFS_RAPIDOCR_THREADS", 1)
+    recognition_batch = _positive_ocr_setting(batch_size, "RFS_RAPIDOCR_BATCH", 6)
+    engines = getattr(_RAPIDOCR_LOCAL, "engines", None)
+    if engines is None:
+        engines = {}
+        _RAPIDOCR_LOCAL.engines = engines
+    engine_key = (thread_count, recognition_batch)
+    if engine_key not in engines:
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
 
-        _RAPIDOCR_ENGINE = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_side_len=512)
-    result, _timings = _RAPIDOCR_ENGINE(str(image_path))
+        engines[engine_key] = RapidOCR(
+            intra_op_num_threads=thread_count,
+            inter_op_num_threads=1,
+            det_limit_side_len=512,
+            rec_batch_num=recognition_batch,
+        )
+    result, _timings = engines[engine_key](str(image_path))
     records = []
     for item in result or []:
         if not isinstance(item, (list, tuple)) or len(item) < 3:

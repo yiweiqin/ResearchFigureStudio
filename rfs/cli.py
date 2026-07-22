@@ -78,7 +78,13 @@ def _doctor() -> dict:
         "pdftotext": {"available": bool(shutil.which("pdftotext")), "path": shutil.which("pdftotext")},
         "pdftoppm": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm")},
         "easyocr": {"available": importlib.util.find_spec("easyocr") is not None, "models": easyocr_models},
-        "rapidocr": {"available": importlib.util.find_spec("rapidocr_onnxruntime") is not None, "runtime": "onnxruntime", "thread_policy": "1 intra-op / 1 inter-op"},
+        "rapidocr": {
+            "available": importlib.util.find_spec("rapidocr_onnxruntime") is not None,
+            "runtime": "onnxruntime",
+            "worker_policy": "up to 3 page workers; 2 intra-op threads for a single page",
+            "worker_override": os.getenv("RFS_OCR_WORKERS"),
+            "thread_override": os.getenv("RFS_RAPIDOCR_THREADS"),
+        },
         "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
         "fast_contract_cache": {"available": True, "path": str(Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio")))},
     }

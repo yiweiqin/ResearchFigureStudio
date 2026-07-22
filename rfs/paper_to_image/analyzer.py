@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 import time
 import unicodedata
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +43,16 @@ def _clean(text: str) -> str:
 
 def _normalized_compare_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", _clean(text).casefold())
+
+
+def _token_overlap_agreement(left: str, right: str) -> float | None:
+    token_pattern = re.compile(r"[a-z]{3,}|[\u3400-\u9fff]{2,}", re.IGNORECASE)
+    left_tokens = token_pattern.findall(_clean(left).casefold())
+    right_tokens = token_pattern.findall(_clean(right).casefold())
+    if not left_tokens or not right_tokens:
+        return None
+    overlap = sum((Counter(left_tokens) & Counter(right_tokens)).values())
+    return round(overlap / max(1, len(left_tokens)), 4)
 
 
 def _replacement_rate(text: str) -> float:
@@ -262,7 +275,7 @@ def _pdf_metadata(path: Path) -> dict[str, Any]:
         return {"page_count": None, "encrypted": None, "metadata": {}, "warning": "pypdf unavailable"}
 
 
-def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None) -> tuple[list[dict[str, Any]], str]:
+def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str]:
     if adapter:
         return list(adapter(image_path, lang) or []), "adapter"
     from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
@@ -279,7 +292,7 @@ def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | N
             except Exception:
                 requested = "paddle"
     if requested == "rapidocr":
-        return run_rapidocr(image_path, lang), "rapidocr"
+        return run_rapidocr(image_path, lang, threads=rapidocr_threads), "rapidocr"
     if requested == "easyocr":
         return run_easyocr(image_path, lang), "easyocr"
     if requested == "paddle":
@@ -387,14 +400,45 @@ def _assign_ocr_parent_blocks(lines: list[dict[str, Any]], image_width: float) -
     return ordered
 
 
-def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Callable | None) -> tuple[list[dict[str, Any]], str, str | None]:
+def _filter_ocr_margin_noise(records: list[dict[str, Any]], image_width: float) -> tuple[list[dict[str, Any]], int]:
+    anchors = [
+        item
+        for item in records
+        if len(_normalized_compare_text(str(item.get("text") or ""))) >= 20
+        and float(item["bbox"][2]) - float(item["bbox"][0]) >= image_width * 0.30
+    ]
+    if len(anchors) < 3:
+        return records, 0
+    left = sorted(float(item["bbox"][0]) for item in anchors)[max(0, len(anchors) // 10 - 1)]
+    right_values = sorted(float(item["bbox"][2]) for item in anchors)
+    right = right_values[min(len(right_values) - 1, len(right_values) - max(1, len(anchors) // 10))]
+    margin = image_width * 0.035
+    kept = []
+    removed = 0
+    for item in records:
+        bbox = item.get("bbox") or [0, 0, 0, 0]
+        outside = float(bbox[2]) < left - margin or float(bbox[0]) > right + margin
+        width = max(1.0, float(bbox[2]) - float(bbox[0]))
+        height = max(1.0, float(bbox[3]) - float(bbox[1]))
+        short = len(_normalized_compare_text(str(item.get("text") or ""))) < 12
+        vertical = height > width * 1.15
+        outer_band = float(bbox[2]) < image_width * 0.12 or float(bbox[0]) > image_width * 0.88
+        compact_margin_fragment = outer_band and short and (vertical or width < image_width * 0.08)
+        if (outside and (short or vertical)) or compact_margin_fragment:
+            removed += 1
+            continue
+        kept.append(item)
+    return kept, removed
+
+
+def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str, str | None, dict[str, Any]]:
     try:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / f"page_{page_number:03d}.png"
             dpi = 72 if adapter is None and engine in {"auto", "easyocr", "rapidocr"} else 160
             pixmap = page.get_pixmap(dpi=dpi, alpha=False)
             pixmap.save(str(target))
-            records, used_engine = _ocr_records(target, engine, lang, adapter)
+            records, used_engine = _ocr_records(target, engine, lang, adapter, rapidocr_threads=rapidocr_threads)
             if used_engine != "rapidocr":
                 records = _group_ocr_words(records, float(pixmap.width))
             else:
@@ -407,6 +451,7 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
                     ys = [float(point[1]) for point in quad]
                     normalized_records.append({"bbox": [min(xs), min(ys), max(xs), max(ys)], "text": _clean(record.get("text", "")), "confidence": float(record.get("confidence") or 0.0)})
                 records = _assign_ocr_parent_blocks(normalized_records, float(pixmap.width))
+            records, margin_noise_removed = _filter_ocr_margin_noise(records, float(pixmap.width))
             blocks = []
             scale_x = float(page.rect.width) / max(1, pixmap.width)
             scale_y = float(page.rect.height) / max(1, pixmap.height)
@@ -421,9 +466,24 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
                     "confidence": round(float(record.get("confidence") or 0.0), 4),
                     "parent_block": record.get("parent_block"),
                 })
-            return blocks, used_engine, None
+            return blocks, used_engine, None, {"margin_noise_removed": margin_noise_removed}
     except Exception as exc:
-        return [], engine, str(exc)
+        return [], engine, str(exc), {"margin_noise_removed": 0}
+
+
+def _rapidocr_worker_count(engine: str, adapter: Callable | None, page_count: int) -> int:
+    if adapter is not None or page_count < 2 or engine not in {"auto", "rapidocr"}:
+        return 1
+    if engine == "auto":
+        try:
+            import rapidocr_onnxruntime  # noqa: F401
+        except Exception:
+            return 1
+    try:
+        configured = int(os.getenv("RFS_OCR_WORKERS") or 3)
+    except ValueError:
+        configured = 3
+    return max(1, min(int(page_count), configured, int(os.cpu_count() or 1)))
 
 
 def _prioritize_ocr_candidates(
@@ -539,8 +599,9 @@ def _read_pdf_pages(
             poppler_page = poppler_text[index - 1] if index - 1 < len(poppler_text) else ""
             native_norm = _normalized_compare_text(page_text)
             poppler_norm = _normalized_compare_text(poppler_page)
-            agreement = round(SequenceMatcher(None, native_norm[:20000], poppler_norm[:20000]).ratio(), 4) if native_norm and poppler_norm else None
-            abnormal = len(native_norm) < 80 or _replacement_rate(page_text) > 0.005 or _mojibake_rate(page_text) > 0.005 or (agreement is not None and agreement < 0.35)
+            order_agreement = round(SequenceMatcher(None, native_norm[:20000], poppler_norm[:20000]).ratio(), 4) if native_norm and poppler_norm else None
+            agreement = _token_overlap_agreement(page_text, poppler_page)
+            abnormal = len(native_norm) < 80 or _replacement_rate(page_text) > 0.005 or _mojibake_rate(page_text) > 0.005 or (agreement is not None and agreement < 0.65)
             if abnormal:
                 ocr_candidates.append(index)
             pages.append({
@@ -555,6 +616,7 @@ def _read_pdf_pages(
                 "replacement_character_rate": _replacement_rate(page_text),
                 "mojibake_rate": _mojibake_rate(page_text),
                 "poppler_agreement": agreement,
+                "poppler_order_agreement": order_agreement,
                 "reading_order_confidence": order_confidence,
                 "used_ocr": False,
             })
@@ -568,30 +630,23 @@ def _read_pdf_pages(
     ocr_page_durations: list[dict[str, Any]] = []
     prioritized: list[int] = []
     ocr_priority: list[dict[str, Any]] = []
+    ocr_worker_count = 1
     if ocr_engine != "off":
         prioritized, ocr_priority = _prioritize_ocr_candidates(pages, ocr_candidates, max_ocr_pages)
-        for page_number in prioritized:
-            if deadline_at is not None:
-                remaining = deadline_at - time.monotonic()
-                completed_times = [float(item["elapsed_seconds"]) for item in ocr_page_durations if isinstance(item.get("elapsed_seconds"), (int, float))]
-                estimated = (sum(completed_times) / len(completed_times) * 1.25) if completed_times else 45.0
-                if remaining < estimated + 20:
-                    warnings.append("OCR stopped to preserve deadline validation budget")
-                    break
-            page = document[page_number - 1]
-            ocr_started = time.monotonic()
-            blocks, used_engine, error = _ocr_page(page, page_number, ocr_engine, ocr_lang, ocr_adapter)
-            ocr_elapsed = round(time.monotonic() - ocr_started, 3)
-            ocr_page_durations.append({"page": page_number, "engine": used_engine, "elapsed_seconds": ocr_elapsed, "success": not bool(error)})
+        ocr_worker_count = _rapidocr_worker_count(ocr_engine, ocr_adapter, len(prioritized))
+
+        def consume_ocr_result(page_number: int, result: tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], ocr_elapsed: float) -> None:
+            blocks, used_engine, error, ocr_diagnostics = result
+            ocr_page_durations.append({"page": page_number, "engine": used_engine, "elapsed_seconds": round(ocr_elapsed, 3), "success": not bool(error), **ocr_diagnostics})
             if error:
                 warnings.append(f"page {page_number} OCR unavailable: {error}")
-                continue
-            ordered, order_confidence = _reading_order(blocks, float(page.rect.width))
+                return
+            current = pages[page_number - 1]
+            ordered, order_confidence = _reading_order(blocks, float(current["width"]))
             for block_index, block in enumerate(ordered, 1):
                 block["id"] = f"P{page_number:03d}_B{block_index:03d}"
-                block["kind"] = _block_kind(block["text"], (block["bbox"][2] - block["bbox"][0]) / max(1.0, float(page.rect.width)))
+                block["kind"] = _block_kind(block["text"], (block["bbox"][2] - block["bbox"][0]) / max(1.0, float(current["width"])))
             ocr_text = "\n\n".join(item["text"] for item in ordered)
-            current = pages[page_number - 1]
             if len(_normalized_compare_text(ocr_text)) > len(_normalized_compare_text(current["text"])):
                 current.update({
                     "blocks": ordered,
@@ -603,8 +658,50 @@ def _read_pdf_pages(
                     "column_count": max((int(item.get("column", 0)) for item in ordered), default=0) + 1,
                     "used_ocr": True,
                     "ocr_engine": used_engine,
+                    "ocr_margin_noise_removed": int(ocr_diagnostics.get("margin_noise_removed") or 0),
                 })
                 ocr_pages.append(page_number)
+
+        def deadline_allows_wave() -> bool:
+            if deadline_at is not None:
+                remaining = deadline_at - time.monotonic()
+                completed_times = [float(item["elapsed_seconds"]) for item in ocr_page_durations if isinstance(item.get("elapsed_seconds"), (int, float))]
+                estimated = (max(completed_times) * 1.25) if completed_times else 45.0
+                if remaining < estimated + 20:
+                    warnings.append("OCR stopped to preserve deadline validation budget")
+                    return False
+            return True
+
+        if ocr_worker_count > 1:
+            def isolated_ocr(page_number: int) -> tuple[tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], float]:
+                ocr_started = time.monotonic()
+                try:
+                    local_document = fitz.open(str(path))
+                    try:
+                        result = _ocr_page(local_document[page_number - 1], page_number, ocr_engine, ocr_lang, ocr_adapter, rapidocr_threads=1)
+                        return result, time.monotonic() - ocr_started
+                    finally:
+                        local_document.close()
+                except Exception as exc:
+                    return ([], ocr_engine, str(exc), {"margin_noise_removed": 0}), time.monotonic() - ocr_started
+
+            with ThreadPoolExecutor(max_workers=ocr_worker_count) as pool:
+                for start in range(0, len(prioritized), ocr_worker_count):
+                    if not deadline_allows_wave():
+                        break
+                    batch = prioritized[start:start + ocr_worker_count]
+                    futures = {page_number: pool.submit(isolated_ocr, page_number) for page_number in batch}
+                    for page_number in batch:
+                        result, ocr_elapsed = futures[page_number].result()
+                        consume_ocr_result(page_number, result, ocr_elapsed)
+        else:
+            rapidocr_threads = 2 if ocr_engine in {"auto", "rapidocr"} and ocr_adapter is None else 1
+            for page_number in prioritized:
+                if not deadline_allows_wave():
+                    break
+                ocr_started = time.monotonic()
+                result = _ocr_page(document[page_number - 1], page_number, ocr_engine, ocr_lang, ocr_adapter, rapidocr_threads=rapidocr_threads)
+                consume_ocr_result(page_number, result, time.monotonic() - ocr_started)
     document.close()
     elapsed = round(time.monotonic() - started, 3)
     return pages, {
@@ -614,6 +711,7 @@ def _read_pdf_pages(
         "ocr_priority": ocr_priority,
         "ocr_pages": ocr_pages,
         "ocr_page_durations": ocr_page_durations,
+        "ocr_worker_count": ocr_worker_count,
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
         "elapsed_seconds": elapsed,
@@ -870,7 +968,9 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     readable_ratio = round(len(readable) / max(1, len(pages)), 4)
     ocr_count = sum(1 for page in pages if page.get("used_ocr"))
     candidate_count = len(details.get("ocr_candidate_pages", []))
-    pdf_type = "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count or (pages and candidate_count == len(pages)) else "born_digital"
+    fully_scanned_source = bool(pages and candidate_count == len(pages))
+    partial_scan = bool(fully_scanned_source and 0 < ocr_count < len(pages))
+    pdf_type = "scanned" if fully_scanned_source else "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count else "born_digital"
     coverage = _section_coverage(pages, index.get("sections", []))
     warnings = list(details.get("warnings", []))
     ocr_blocks = [block for page in pages if page.get("used_ocr") for block in page.get("blocks", []) if isinstance(block, dict)]
@@ -878,8 +978,18 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     mean_ocr_confidence = round(sum(ocr_confidences) / max(1, len(ocr_confidences)), 4) if ocr_blocks else None
     short_ocr_blocks = [block for block in ocr_blocks if len(_normalized_compare_text(str(block.get("text") or ""))) < 3]
     short_ocr_block_ratio = round(len(short_ocr_blocks) / max(1, len(ocr_blocks)), 4) if ocr_blocks else None
-    if readable_ratio < 0.6:
+    sampled_scan_ready = bool(
+        partial_scan
+        and len(readable) >= min(6, len(pages))
+        and coverage.get("abstract")
+        and coverage.get("method")
+        and mean_ocr_confidence is not None
+        and mean_ocr_confidence >= 0.75
+    )
+    if readable_ratio < 0.6 and not sampled_scan_ready:
         warnings.append("fewer than 60% of pages contain reliable text")
+    if sampled_scan_ready:
+        warnings.append("fully scanned document was only partially OCRed; semantic scope is limited to sampled pages")
     if mean_ocr_confidence is not None and mean_ocr_confidence < 0.5:
         warnings.append("mean OCR confidence is below 0.50")
     if short_ocr_block_ratio is not None and short_ocr_block_ratio > 0.3:
@@ -887,7 +997,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     if not coverage.get("abstract") or not coverage.get("method"):
         warnings.append("abstract or method-like section was not confidently located")
     agreements = [page["poppler_agreement"] for page in pages if isinstance(page.get("poppler_agreement"), (int, float))]
-    report_status = "fail" if readable_ratio < 0.6 or (mean_ocr_confidence is not None and mean_ocr_confidence < 0.35) else "warning" if warnings else "pass"
+    report_status = "fail" if (readable_ratio < 0.6 and not sampled_scan_ready) or (mean_ocr_confidence is not None and mean_ocr_confidence < 0.35) else "warning" if warnings else "pass"
     return {
         "summary": "PDF extraction quality and fallback report.",
         "status": report_status,
@@ -896,12 +1006,17 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "page_count": len(pages),
         "readable_page_count": len(readable),
         "readable_page_ratio": readable_ratio,
+        "semantic_scope": "sampled_pages_only" if partial_scan else "full_document",
+        "scientific_scope_complete": not partial_scan,
+        "sampled_scan_ready": sampled_scan_ready,
         "empty_or_low_text_pages": [page["page"] for page in pages if page not in readable],
         "ocr_candidate_pages": details.get("ocr_candidate_pages", []),
         "ocr_priority_pages": details.get("ocr_priority_pages", []),
         "ocr_priority": details.get("ocr_priority", []),
         "ocr_pages": details.get("ocr_pages", []),
         "ocr_page_durations": details.get("ocr_page_durations", []),
+        "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
+        "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,
         "short_ocr_block_ratio": short_ocr_block_ratio,
         "replacement_character_rate": round(sum(page.get("replacement_character_rate", 0.0) for page in pages) / max(1, len(pages)), 6),

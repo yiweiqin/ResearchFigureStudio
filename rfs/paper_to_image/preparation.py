@@ -429,6 +429,8 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
             valid_records = [record for record in evidence if record]
             if valid_records and all(float(record.get("confidence", 1.0)) < 0.75 and str(record.get("source") or "").casefold() in {"easyocr", "paddle", "adapter"} for record in valid_records):
                 uncertainties.append(f"{_item_id(item, field, 0)} relies only on low-confidence OCR evidence")
+    if parsed.get("extraction_report", {}).get("semantic_scope") == "sampled_pages_only":
+        uncertainties.append("The source is a long scanned document; only scheduled sample pages were OCRed, so unprocessed pages may contain additional scientific details.")
     spec["uncertainties"] = list(dict.fromkeys(str(item) for item in uncertainties if str(item).strip()))
     spec.setdefault("forbidden_inventions", [])
     plan["figure_specification"] = spec
@@ -566,7 +568,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 6, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 12, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -728,7 +730,8 @@ def prepare_paper_figure_contract(
 
     elapsed = round(time.monotonic() - started, 3)
     deadline_reached = time.monotonic() >= deadline_at
-    production_ready = bool((review_metadata.get("mode") == "vlm" or planner_metadata.get("mode") == "vlm") and planning_validation.get("ok") and not deadline_reached)
+    scientific_scope_complete = bool(parsed["extraction_report"].get("scientific_scope_complete", True))
+    production_ready = bool((review_metadata.get("mode") == "vlm" or planner_metadata.get("mode") == "vlm") and planning_validation.get("ok") and not deadline_reached and scientific_scope_complete)
     has_warning = bool(planner_metadata.get("warning") or review_metadata.get("warning") or parsed["extraction_report"].get("status") == "warning")
     status = "complete" if production_ready and not has_warning else "completed_with_warnings"
     contract_source = "cache" if planner_metadata.get("cached") else "vlm" if planner_metadata.get("mode") == "vlm" else "vlm_review_deterministic_compile" if planner_metadata.get("mode") == "review_grounded_vlm" else "deterministic_evidence_rules"
@@ -769,6 +772,9 @@ def prepare_paper_figure_contract(
             "pdf_type": parsed["extraction_report"].get("pdf_type"),
             "page_count": parsed["extraction_report"].get("page_count"),
             "readable_page_ratio": parsed["extraction_report"].get("readable_page_ratio"),
+            "semantic_scope": parsed["extraction_report"].get("semantic_scope", "full_document"),
+            "scientific_scope_complete": scientific_scope_complete,
+            "sampled_scan_ready": parsed["extraction_report"].get("sampled_scan_ready", False),
             "evidence_page_coverage_ratio": parsed["extraction_report"].get("evidence_page_coverage_ratio"),
             "evidence_char_count": parsed["extraction_report"].get("evidence_char_count"),
             "max_column_count": parsed["extraction_report"].get("max_column_count"),
@@ -779,6 +785,8 @@ def prepare_paper_figure_contract(
             "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),
             "ocr_scheduled_count": len(parsed["extraction_report"].get("ocr_priority_pages", [])),
             "ocr_completed_count": len(parsed["extraction_report"].get("ocr_pages", [])),
+            "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
+            "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
         },
         "provider": provider_summary,
         "contract_completion": {

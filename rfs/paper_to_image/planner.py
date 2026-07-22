@@ -222,6 +222,9 @@ Return exactly this compact schema:
 Candidate overview captions:
 {json.dumps(candidates, ensure_ascii=False, indent=2)}
 
+Extraction scope (do not claim coverage beyond this scope):
+{json.dumps({key: parsed.get('extraction_report', {}).get(key) for key in ('pdf_type', 'semantic_scope', 'readable_page_ratio', 'ocr_pages', 'warnings')}, ensure_ascii=False, indent=2)}
+
 User preferences relevant to wording only:
 {json.dumps({key: preferences.get(key) for key in ('language', 'must_show', 'must_not_show')}, ensure_ascii=False, indent=2)}
 

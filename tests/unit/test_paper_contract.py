@@ -74,6 +74,32 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(spec["research_problem"]["evidence_ids"], ["E0001"])
         self.assertTrue(validation["ok"])
 
+    def test_contract_grounds_declared_multword_entity_by_exact_paper_term(self):
+        parsed = {
+            "page_count": 6,
+            "evidence": [
+                {"id": "E0001", "page": 6, "text": "Transformer encoder. First, a convolution reduces the channel dimension.", "confidence": 0.98},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "modules": [{"id": "encoder", "name": "Transformer Encoder", "evidence_ids": []}],
+                "inputs": [],
+                "outputs": [],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["modules"][0]["evidence_ids"], ["E0001"])
+        self.assertIn("encoder", plan["contract_completion_report"]["grounded_entities"])
+
     def test_grounding_rejects_relation_without_evidence(self):
         plan = {
             "figure_specification": {

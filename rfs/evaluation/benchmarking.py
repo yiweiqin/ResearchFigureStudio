@@ -808,6 +808,8 @@ def run_fast_benchmark_suite(
         "ocr_candidate_page_total": sum(int(value) for value in extraction_metric("ocr_candidate_count")),
         "ocr_scheduled_page_total": sum(int(value) for value in extraction_metric("ocr_scheduled_count")),
         "ocr_completed_page_total": sum(int(value) for value in extraction_metric("ocr_completed_count")),
+        "max_ocr_worker_count": max((int(value) for value in extraction_metric("ocr_worker_count")), default=1),
+        "ocr_margin_noise_removed_total": sum(int(value) for value in extraction_metric("ocr_margin_noise_removed_count")),
         "provider_call_count": len(provider_calls),
         "provider_success_count": sum(bool(item.get("provider", {}).get("success")) for item in provider_calls),
         "provider_success_rate": round(sum(bool(item.get("provider", {}).get("success")) for item in provider_calls) / len(provider_calls), 4) if provider_calls else None,

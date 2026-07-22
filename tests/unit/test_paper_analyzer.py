@@ -5,8 +5,9 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _prioritize_ocr_candidates, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _filter_ocr_margin_noise, _prioritize_ocr_candidates, _rapidocr_worker_count, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
+from rfs.reference_text_extractor import _positive_ocr_setting
 
 
 class PaperAnalyzerTests(unittest.TestCase):
@@ -78,6 +79,24 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertGreaterEqual(parsed["pages"][0]["reading_order_confidence"], 0.8)
         self.assertEqual(parsed["pages"][0]["column_count"], 2)
 
+    def test_cross_extractor_token_agreement_ignores_column_order(self):
+        native = "left column first passage left column second passage right column first passage"
+        poppler = "left column first passage right column first passage left column second passage"
+
+        self.assertEqual(_token_overlap_agreement(native, poppler), 1.0)
+
+    def test_cross_extractor_token_agreement_ignores_equation_variable_layout(self):
+        native = "The projected point gives the origin and direction. ax x z ay y z az bz."
+        poppler = "The projected point gives the origin and direction. a x x/z a y y/z a z + b z."
+
+        self.assertEqual(_token_overlap_agreement(native, poppler), 1.0)
+
+    def test_cross_extractor_token_agreement_allows_poppler_hidden_text(self):
+        native = "The network architecture contains an encoder and decoder."
+        poppler = native + " hidden latex accessibility expansion with many additional formula tokens"
+
+        self.assertEqual(_token_overlap_agreement(native, poppler), 1.0)
+
     def test_three_column_blocks_are_sorted_column_major(self):
         def draw(page):
             page.insert_textbox((400, 100, 560, 170), "COLUMN THREE TOP complete scientific paragraph.", fontsize=9)
@@ -140,6 +159,28 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertTrue(parsed["pages"][0]["used_ocr"])
         self.assertIn("Image Encoder", parsed["pages"][0]["text"])
 
+    def test_cross_extractor_content_disagreement_still_triggers_ocr(self):
+        path = self._pdf(lambda page: page.insert_textbox(
+            (40, 80, 560, 220),
+            "Abstract Method The native parser returns a sufficiently long but unsupported passage about an encoder and decoder.",
+            fontsize=10,
+        ))
+        ocr_text = "Abstract Method The verified page contains an image encoder, transformer decoder, training objective, inference output, and complete scientific evidence for the recovered framework."
+        with patch("rfs.paper_to_image.analyzer._poppler_pages", return_value=(["Completely unrelated alternate parser content about chemistry molecules and laboratory measurements."], None)):
+            parsed = parse_paper(
+                path,
+                ocr_engine="easyocr",
+                ocr_adapter=lambda _image, _lang: [{
+                    "text": ocr_text,
+                    "confidence": 0.96,
+                    "quad": [[20, 20], [950, 20], [950, 120], [20, 120]],
+                }],
+            )
+
+        self.assertEqual(parsed["extraction_report"]["ocr_candidate_pages"], [1])
+        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1])
+        self.assertIn("verified page", parsed["pages"][0]["text"])
+
     def test_empty_ocr_result_returns_failed_document_model_instead_of_raising(self):
         path = self._pdf(lambda _page: None)
 
@@ -175,6 +216,38 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual({item["parent_block"] for item in grouped[:3]}, {1})
         self.assertNotEqual(grouped[2]["parent_block"], grouped[3]["parent_block"])
+
+    def test_ocr_margin_filter_removes_vertical_watermark_fragments(self):
+        records = [
+            {"bbox": [130, 100 + index * 30, 730, 124 + index * 30], "text": f"Complete scientific body line number {index} with reliable method evidence."}
+            for index in range(6)
+        ]
+        records.extend([
+            {"bbox": [35, 120, 70, 190], "text": "May"},
+            {"bbox": [38, 210, 68, 245], "text": "28"},
+            {"bbox": [90, 400, 180, 425], "text": "CNN"},
+        ])
+
+        filtered, removed = _filter_ocr_margin_noise(records, 842)
+
+        self.assertEqual(removed, 2)
+        self.assertIn("CNN", [item["text"] for item in filtered])
+
+    def test_ocr_margin_filter_removes_fragments_even_when_body_starts_left(self):
+        records = [
+            {"bbox": [70, 300 + index * 30, 770, 324 + index * 30], "text": f"Long body line {index} establishes the left boundary near the page margin."}
+            for index in range(6)
+        ]
+        records.extend([
+            {"bbox": [35, 120, 70, 190], "text": "May"},
+            {"bbox": [40, 220, 66, 246], "text": "S"},
+            {"bbox": [63, 40, 790, 75], "text": "End-to-End Object Detection with Transformers"},
+        ])
+
+        filtered, removed = _filter_ocr_margin_noise(records, 842)
+
+        self.assertEqual(removed, 2)
+        self.assertIn("End-to-End Object Detection with Transformers", [item["text"] for item in filtered])
 
     def test_inspection_reuses_matching_document_cache(self):
         path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "Abstract Method A sufficiently long scientific paragraph for deterministic PDF inspection.", fontsize=10))
@@ -231,6 +304,16 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(selected, [1, 2, 3, 6, 9, 10])
         self.assertEqual([item["rank"] for item in details], [1, 2, 3, 4, 5, 6])
 
+    def test_rapidocr_worker_count_is_bounded_and_adapter_safe(self):
+        with patch.dict("os.environ", {"RFS_OCR_WORKERS": "3"}, clear=False):
+            self.assertEqual(_rapidocr_worker_count("rapidocr", None, 6), min(3, __import__("os").cpu_count() or 1))
+            self.assertEqual(_rapidocr_worker_count("rapidocr", lambda *_args: [], 6), 1)
+            self.assertEqual(_rapidocr_worker_count("easyocr", None, 6), 1)
+
+    def test_invalid_rapidocr_environment_setting_falls_back(self):
+        with patch.dict("os.environ", {"RFS_RAPIDOCR_THREADS": "invalid"}, clear=False):
+            self.assertEqual(_positive_ocr_setting(None, "RFS_RAPIDOCR_THREADS", 1), 1)
+
     def test_ocr_priority_prefers_semantic_pages_before_coverage_anchors(self):
         pages = [{"page": index, "text": ""} for index in range(1, 11)]
         pages[3]["text"] = "Figure 1: Overview of the proposed architecture and system pipeline."
@@ -258,6 +341,10 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 6, 9, 10])
         self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 6, 9, 10])
         self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 6, 9, 10])
+        self.assertEqual(parsed["extraction_report"]["status"], "warning")
+        self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
+        self.assertEqual(parsed["extraction_report"]["semantic_scope"], "sampled_pages_only")
+        self.assertFalse(parsed["extraction_report"]["scientific_scope_complete"])
 
 
 if __name__ == "__main__":
