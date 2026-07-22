@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from PIL import Image
 
-from ..reference_text_extractor import run_easyocr, run_paddle_ocr
+from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
 
 
@@ -39,6 +39,8 @@ def _local_ocr(path: Path, engine: str, lang: str, adapter: Callable | None = No
         if adapter:
             records = adapter(path, lang)
             return records, "adapter", None
+        if engine == "rapidocr":
+            return run_rapidocr(path, lang), "rapidocr", None
         if engine == "easyocr":
             return run_easyocr(path, lang), "easyocr", None
         if engine == "paddle":

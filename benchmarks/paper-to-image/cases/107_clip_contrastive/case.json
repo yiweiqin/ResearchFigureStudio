@@ -1,0 +1,15 @@
+{
+  "summary": "ICML 2021 CLIP case requiring explicit separation of contrastive training and zero-shot inference.",
+  "case_id": "107_clip_contrastive",
+  "suite": "paper-to-image",
+  "tier": "real-paper-unseen-generalization",
+  "topology": "multimodal",
+  "paper": "inputs/paper.pdf",
+  "source": "source.json",
+  "expected_semantics": "expected_semantics.json",
+  "preferences": "../../preferences/top_conference.json",
+  "positive_references": [],
+  "negative_references": [],
+  "run_config": {"planner_mode": "heuristic", "image_asset_mode": "placeholder", "image_candidates": 2, "review_mode": "heuristic", "aspect_ratio": "16:9", "ocr_engine": "off"},
+  "thresholds": {"entity_recall": 1.0, "relation_recall": 1.0, "exact_label_rate": 1.0, "plan_entity_recall": 0.8, "plan_relation_recall": 0.7, "hallucination_count": 0, "forbidden_content_count": 0, "plan_forbidden_content_count": 0}
+}

@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
-from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, run_fast_benchmark_case, score_benchmark_case, validate_benchmark_case
+from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, run_fast_benchmark_case, run_fast_benchmark_suite, score_benchmark_case, validate_benchmark_case
 from .paper_to_image import inspect_paper, run_fast_framework_prompt, run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
@@ -63,10 +63,22 @@ def _doctor() -> dict:
         "RFS_IMAGE_EDIT_URL": {"present": env_present("RFS_IMAGE_EDIT_URL"), "value": os.getenv("RFS_IMAGE_EDIT_URL") if env_present("RFS_IMAGE_EDIT_URL") else None},
         "MODEL_VLM": {"present": env_present("MODEL_VLM"), "value": os.getenv("MODEL_VLM") if env_present("MODEL_VLM") else None},
     }
+    easyocr_model_dir = Path(os.getenv("EASYOCR_MODULE_PATH", "").strip() or (Path.home() / ".EasyOCR" / "model"))
+    easyocr_files = {path.name: path.stat().st_size for path in easyocr_model_dir.glob("*.pth")} if easyocr_model_dir.exists() else {}
+    easyocr_models = {
+        "model_dir": str(easyocr_model_dir),
+        "detector_ready": "craft_mlt_25k.pth" in easyocr_files,
+        "en_ready": "english_g2.pth" in easyocr_files,
+        "ch_ready": "zh_sim_g2.pth" in easyocr_files,
+        "en_ch_ready": "craft_mlt_25k.pth" in easyocr_files and "zh_sim_g2.pth" in easyocr_files,
+        "allow_download": str(os.getenv("RFS_OCR_ALLOW_DOWNLOAD") or "").strip().casefold() in {"1", "true", "yes", "on"},
+        "files": easyocr_files,
+    }
     optional_pdf = {
         "pdftotext": {"available": bool(shutil.which("pdftotext")), "path": shutil.which("pdftotext")},
         "pdftoppm": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm")},
-        "easyocr": {"available": importlib.util.find_spec("easyocr") is not None},
+        "easyocr": {"available": importlib.util.find_spec("easyocr") is not None, "models": easyocr_models},
+        "rapidocr": {"available": importlib.util.find_spec("rapidocr_onnxruntime") is not None, "runtime": "onnxruntime", "thread_policy": "1 intra-op / 1 inter-op"},
         "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
         "fast_contract_cache": {"available": True, "path": str(Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio")))},
     }
@@ -109,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_pdf.add_argument("--paper", required=True, help="Paper PDF or supported document path.")
     inspect_pdf.add_argument("--out", required=True, help="Output directory for the document model and extraction report.")
     inspect_pdf.add_argument("--deadline", type=int, default=180, help="Soft processing deadline in seconds. Default: 180.")
-    inspect_pdf.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="auto")
+    inspect_pdf.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="auto")
     inspect_pdf.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
     inspect_pdf.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -123,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     fast_prompt.add_argument("--domain-profile", choices=["auto", "general", "ai-ml-method", "system-platform", "dataset-benchmark", "empirical-science", "survey-review"], default="auto")
     fast_prompt.add_argument("--aspect-ratio", default="16:9")
     fast_prompt.add_argument("--language", default="English")
-    fast_prompt.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="auto")
+    fast_prompt.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="auto")
     fast_prompt.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
     fast_prompt.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -151,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     make.add_argument("--critic-model", help="Optional VLM model for asset review and final critic. Defaults to RFS_CRITIC_MODEL/MODEL_VLM.")
     make.add_argument("--critic-iterations", type=int, default=0, help="VLM layout correction iterations, clamped to 0-3. Default: 0.")
     make.add_argument("--text-extractor-mode", choices=["heuristic", "ocr"], default="ocr", help="Editable text layer source. Default ocr uses local OCR when available and falls back to heuristic.")
-    make.add_argument("--ocr-engine", choices=["paddle", "easyocr", "off"], default="paddle", help="Local OCR engine for reference text extraction. Default: paddle.")
+    make.add_argument("--ocr-engine", choices=["rapidocr", "paddle", "easyocr", "off"], default="paddle", help="Local OCR engine for reference text extraction. Default: paddle.")
     make.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     make.add_argument("--presentations-qa", action="store_true", help="Run optional Presentations plugin import/render/layout QA after export. This never mutates the PPTX.")
     make.add_argument("--presentations-workspace", help="Optional workspace for Presentations QA scratch artifacts.")
@@ -178,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_image.add_argument("--review-mode", choices=["off", "heuristic", "vlm"], default="vlm", help="Candidate review mode. Production Image2 requires VLM review. Default: vlm.")
     paper_image.add_argument("--review-model", help="Optional VLM candidate-review model. Defaults to RFS_PAPER_TO_IMAGE_REVIEW_MODEL/RFS_CRITIC_MODEL/MODEL_VLM.")
     paper_image.add_argument("--repair-rounds", type=int, default=1, help="Localized Image2 edit repair rounds, clamped to 0-1. Default: 1.")
-    paper_image.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "vlm", "off"], default="auto", help="OCR source for exact-label validation. Auto tries local OCR and uses VLM review evidence. Default: auto.")
+    paper_image.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "vlm", "off"], default="auto", help="OCR source for exact-label validation. Auto tries local OCR and uses VLM review evidence. Default: auto.")
     paper_image.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     paper_image.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -209,7 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_editable.add_argument("--design-plan-mode", choices=["off", "heuristic", "vlm"], default="vlm")
     paper_editable.add_argument("--allow-engineering-preview", action="store_true", help="Allow offline/non-production image previews to exercise the editable pipeline. Never enabled by default.")
     paper_editable.add_argument("--no-export-preview", action="store_true")
-    paper_editable.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "vlm", "off"], default="auto")
+    paper_editable.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "vlm", "off"], default="auto")
     paper_editable.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
     paper_editable.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -234,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--strict-asset-regeneration", action="store_true", help="Use stricter asset thresholds and --asset-retries for high-cost regeneration.")
     rebuild.add_argument("--skip-analysis", action="store_true", help="Reuse existing JSON contracts in --out instead of re-running layout/control/semantic analysis.")
     rebuild.add_argument("--compile-only", action="store_true", help="Compile editable_composition.pptx from existing JSON contracts and assets without regenerating analysis or assets.")
-    rebuild.add_argument("--ocr-engine", choices=["paddle", "easyocr", "off"], default="paddle", help="OCR engine for --text-mode ocr. Default: paddle.")
+    rebuild.add_argument("--ocr-engine", choices=["rapidocr", "paddle", "easyocr", "off"], default="paddle", help="OCR engine for --text-mode ocr. Default: paddle.")
     rebuild.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     rebuild.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -265,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_pro.add_argument("--repair-rounds", type=int, default=2, help="Preview repair rounds to record/run. V1 records conservative no-mutation repair reports by default.")
     rebuild_pro.add_argument("--repair-mode", choices=["report", "vlm"], default="report", help="Professional repair mode. report records rounds without mutation; vlm applies controlled DSL patches.")
     rebuild_pro.add_argument("--benchmark-out", help="Optional specialized rebuild output directory to compare against in professional_gap_report.json.")
-    rebuild_pro.add_argument("--ocr-engine", choices=["paddle", "easyocr", "off"], default="paddle", help="OCR engine for --text-mode ocr. Default: paddle.")
+    rebuild_pro.add_argument("--ocr-engine", choices=["rapidocr", "paddle", "easyocr", "off"], default="paddle", help="OCR engine for --text-mode ocr. Default: paddle.")
     rebuild_pro.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     rebuild_pro.add_argument("--json", action="store_true", help="Emit JSON.")
 
@@ -286,17 +298,18 @@ def build_parser() -> argparse.ArgumentParser:
     coevolution_report.add_argument("--json", action="store_true", help="Emit JSON.")
 
     benchmark = sub.add_parser("benchmark", help="List, validate, run, or score ResearchFigureStudio benchmark cases.")
-    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "fast", "run", "score"])
+    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "fast", "fast-suite", "run", "score"])
     benchmark.add_argument("--suite", choices=["paper-to-image", "image-to-ppt"], help="Optional suite filter for list.")
     benchmark.add_argument("--root", default="benchmarks", help="Benchmark root for list. Default: benchmarks.")
     benchmark.add_argument("--case", help="Benchmark case directory for validate, fetch, run, or score.")
+    benchmark.add_argument("--case-id", action="append", default=[], help="Optional case id filter for fast-suite. Repeat to select multiple cases.")
     benchmark.add_argument("--run", dest="run_dir", help="Existing workflow output directory for score.")
     benchmark.add_argument("--out", help="Output directory for run, or optional score report destination.")
     benchmark.add_argument("--force", action="store_true", help="Re-fetch an existing local benchmark paper input.")
     benchmark.add_argument("--deadline", type=int, default=180, help="Soft deadline for benchmark fast. Default: 180.")
     benchmark.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm", help="Planner mode for benchmark fast.")
     benchmark.add_argument("--planner-model", help="Optional model for benchmark fast.")
-    benchmark.add_argument("--ocr-engine", choices=["auto", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for benchmark fast.")
+    benchmark.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for benchmark fast.")
     benchmark.add_argument("--json", action="store_true", help="Emit JSON.")
 
     validate = sub.add_parser("validate", help="Validate an existing ResearchFigureStudio output directory.")
@@ -554,6 +567,10 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.case or not args.out:
                     parser.error("benchmark fast requires --case and --out")
                 result = run_fast_benchmark_case(args.case, args.out, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
+            elif args.benchmark_action == "fast-suite":
+                if not args.out:
+                    parser.error("benchmark fast-suite requires --out")
+                result = run_fast_benchmark_suite(args.root, args.out, case_ids=args.case_id, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
             else:
                 if not args.case or not args.run_dir:
                     parser.error("benchmark score requires --case and --run")

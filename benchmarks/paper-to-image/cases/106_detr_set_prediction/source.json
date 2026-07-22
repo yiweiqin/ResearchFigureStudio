@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "End-to-End Object Detection with Transformers",
+  "venue": "ECCV",
+  "year": 2020,
+  "arxiv_id": "2005.12872",
+  "official_url": "https://www.ecva.net/papers/eccv_2020/papers_ECCV/html/832_ECCV_2020_paper.php",
+  "paper_urls": ["https://arxiv.org/pdf/2005.12872", "https://export.arxiv.org/pdf/2005.12872"],
+  "target_figure": "Figure 2",
+  "verified_caption": "DETR uses a conventional CNN backbone, a transformer encoder-decoder, a fixed set of learned object queries, and parallel class and box predictions; bipartite matching supplies the set prediction training objective.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

@@ -1,0 +1,28 @@
+{
+  "summary": "Human-authored semantic contract for NeRF's neural scene representation and differentiable rendering pipeline.",
+  "entities": [
+    {"id": "camera_ray", "label": "Camera Ray", "aliases": ["Camera Rays", "Ray"], "role": "input", "required": true},
+    {"id": "sampled_points", "label": "Sampled 3D Points", "aliases": ["5D Coordinates", "Spatial Locations"], "role": "module", "required": true},
+    {"id": "viewing_direction", "label": "Viewing Direction", "aliases": ["View Direction"], "role": "input", "required": true},
+    {"id": "positional_encoding", "label": "Positional Encoding", "aliases": ["Fourier Features"], "role": "module", "required": true},
+    {"id": "nerf_mlp", "label": "Neural Radiance Field", "aliases": ["NeRF", "MLP", "Neural Network"], "role": "module", "required": true},
+    {"id": "volume_density", "label": "Volume Density", "aliases": ["Density", "Sigma"], "role": "module", "required": true},
+    {"id": "color", "label": "Color", "aliases": ["RGB Color", "Radiance"], "role": "module", "required": true},
+    {"id": "volume_rendering", "label": "Volume Rendering", "aliases": ["Differentiable Volume Rendering"], "role": "module", "required": true},
+    {"id": "rendered_image", "label": "Rendered Image", "aliases": ["Synthesized Image", "Synthesized View", "Novel View"], "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "camera_ray", "target": "sampled_points", "type": "sampling", "required": true},
+    {"source": "sampled_points", "target": "positional_encoding", "type": "encoding", "required": true},
+    {"source": "positional_encoding", "target": "nerf_mlp", "type": "data_flow", "required": true},
+    {"source": "viewing_direction", "target": "nerf_mlp", "type": "conditioning", "required": true},
+    {"source": "nerf_mlp", "target": "volume_density", "type": "prediction", "required": true},
+    {"source": "nerf_mlp", "target": "color", "type": "prediction", "required": true},
+    {"source": "volume_density", "target": "volume_rendering", "type": "rendering_input", "required": true},
+    {"source": "color", "target": "volume_rendering", "type": "rendering_input", "required": true},
+    {"source": "volume_rendering", "target": "rendered_image", "type": "data_flow", "required": true}
+  ],
+  "forbidden_labels": ["Voxel Grid", "Mesh Reconstruction", "Convolutional Decoder", "GAN Discriminator", "Depth Sensor"],
+  "expected_reading_order": ["camera_ray", "sampled_points", "positional_encoding", "nerf_mlp", "volume_density", "color", "volume_rendering", "rendered_image"],
+  "topology_requirements": {"primary_flow": "left_to_right", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": false}
+}

@@ -42,7 +42,30 @@ def resolve_vlm_model(*env_names: str, explicit_model: str | None = None) -> str
     return os.getenv("MODEL_VLM", "").strip() or DEFAULT_VLM_MODEL
 
 
-def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None = None, timeout: int = 180, retries: int = 1) -> dict:
+def _error_category(exc: Exception) -> str:
+    name = type(exc).__name__.casefold()
+    message = str(exc).casefold()
+    if "timeout" in name or "timeout" in message:
+        return "timeout"
+    if "ssl" in name or "ssl" in message or "eof" in message:
+        return "tls"
+    if "json" in name or "json" in message:
+        return "invalid_json"
+    if "connection" in name or "connection" in message:
+        return "connection"
+    if "http" in name or "status" in message:
+        return "http"
+    return "provider"
+
+
+def call_vlm_json(
+    prompt: str,
+    image_paths: list[str | Path],
+    model: str | None = None,
+    timeout: int = 180,
+    retries: int = 1,
+    call_metadata: dict[str, Any] | None = None,
+) -> dict:
     api_base = os.getenv("API_BASE", "").rstrip("/")
     api_key = os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_base or not api_key:
@@ -61,8 +84,22 @@ def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None 
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
     }
+    started = time.monotonic()
     last_error: Exception | None = None
-    for attempt in range(max(1, int(retries) + 1)):
+    failures: list[dict[str, Any]] = []
+    attempts = max(1, int(retries) + 1)
+    if call_metadata is not None:
+        call_metadata.update({
+            "attempts": 0,
+            "retries_allowed": max(0, int(retries)),
+            "retries_used": 0,
+            "success": False,
+            "elapsed_seconds": 0.0,
+            "failure_categories": [],
+        })
+    for attempt in range(attempts):
+        if call_metadata is not None:
+            call_metadata["attempts"] = attempt + 1
         try:
             response = requests.post(
                 f"{api_base}/chat/completions",
@@ -72,9 +109,25 @@ def call_vlm_json(prompt: str, image_paths: list[str | Path], model: str | None 
             )
             response.raise_for_status()
             content_text = response.json()["choices"][0]["message"]["content"]
-            return extract_json(content_text)
+            result = extract_json(content_text)
+            if call_metadata is not None:
+                call_metadata.update({
+                    "success": True,
+                    "retries_used": attempt,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "failure_categories": list(dict.fromkeys(item["category"] for item in failures)),
+                })
+            return result
         except Exception as exc:
             last_error = exc
-            if attempt < max(1, int(retries) + 1) - 1:
-                time.sleep(1.5)
+            failures.append({"attempt": attempt + 1, "category": _error_category(exc)})
+            if attempt < attempts - 1:
+                time.sleep(min(2.0, 0.75 * (2 ** attempt)))
+    if call_metadata is not None:
+        call_metadata.update({
+            "success": False,
+            "retries_used": max(0, attempts - 1),
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "failure_categories": list(dict.fromkeys(item["category"] for item in failures)),
+        })
     raise last_error or RuntimeError("VLM call failed")

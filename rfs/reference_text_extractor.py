@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -8,6 +9,8 @@ from PIL import Image
 
 
 OCR_LOW_CONFIDENCE = 0.65
+_EASYOCR_READERS: dict[tuple[str, ...], Any] = {}
+_RAPIDOCR_ENGINE: Any | None = None
 
 
 def _round4(value: float) -> float:
@@ -160,12 +163,40 @@ def run_easyocr(image_path: str | Path, lang: str) -> list[dict[str, Any]]:
     import easyocr  # type: ignore
 
     lang_map = {"en_ch": ["ch_sim", "en"], "ch": ["ch_sim"], "en": ["en"]}
-    reader = easyocr.Reader(lang_map.get(str(lang), ["ch_sim", "en"]), gpu=False)
+    languages = tuple(lang_map.get(str(lang), ["ch_sim", "en"]))
+    reader = _EASYOCR_READERS.get(languages)
+    if reader is None:
+        allow_download = str(os.getenv("RFS_OCR_ALLOW_DOWNLOAD") or "").strip().casefold() in {"1", "true", "yes", "on"}
+        try:
+            reader = easyocr.Reader(list(languages), gpu=False, download_enabled=allow_download, verbose=False)
+        except Exception as exc:
+            hint = " Set RFS_OCR_ALLOW_DOWNLOAD=1 for an explicit one-time model download." if not allow_download else ""
+            raise RuntimeError(f"EasyOCR model is not ready for languages {list(languages)}.{hint} Original error: {exc}") from exc
+        _EASYOCR_READERS[languages] = reader
     records = []
     for quad, text, confidence in reader.readtext(str(image_path)):
         points = _normalize_quad(quad)
         if points and str(text).strip():
             records.append({"text": str(text).strip(), "confidence": float(confidence), "quad": points})
+    return records
+
+
+def run_rapidocr(image_path: str | Path, lang: str) -> list[dict[str, Any]]:
+    del lang
+    global _RAPIDOCR_ENGINE
+    if _RAPIDOCR_ENGINE is None:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+
+        _RAPIDOCR_ENGINE = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_side_len=512)
+    result, _timings = _RAPIDOCR_ENGINE(str(image_path))
+    records = []
+    for item in result or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 3:
+            continue
+        quad = _normalize_quad(item[0])
+        text = str(item[1] or "").strip()
+        if quad and text:
+            records.append({"text": text, "confidence": float(item[2] or 0.0), "quad": quad})
     return records
 
 
@@ -237,6 +268,8 @@ def extract_reference_text(
     try:
         if ocr_adapter:
             raw_records = ocr_adapter(reference_path, lang)
+        elif requested_engine == "rapidocr":
+            raw_records = run_rapidocr(reference_path, lang)
         elif requested_engine == "easyocr":
             raw_records = run_easyocr(reference_path, lang)
         else:

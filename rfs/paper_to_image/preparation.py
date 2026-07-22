@@ -11,7 +11,9 @@ from typing import Any, Callable
 
 from ..utils import ensure_dir, read_json, write_json, write_text
 from .analyzer import paper_markdown, parse_paper
-from .planner import build_review_grounded_plan, compile_image_prompt, merge_preferences, plan_paper_image, validate_plan_grounding
+from .contract_completion import augment_contract_from_evidence
+from .document_cache import read_document_cache, write_document_cache
+from .planner import build_review_grounded_plan, compile_image_prompt, merge_preferences, plan_fast_paper_contract, plan_paper_image, validate_plan_grounding
 from .review import build_paper_review, detect_domain_profile, validate_review_coverage
 
 
@@ -130,7 +132,9 @@ def _infer_topology(spec: dict[str, Any]) -> str:
     inputs = [item for item in spec.get("inputs", []) if isinstance(item, dict)]
     labels = " ".join(_item_label(item).casefold() for item in inputs)
     modalities = sum(term in labels for term in ("image", "text", "audio", "video", "depth", "thermal", "imu"))
-    if len(inputs) >= 3 or modalities >= 3:
+    modules = [item for item in spec.get("modules", []) if isinstance(item, dict)]
+    encoder_count = sum("encoder" in _item_label(item).casefold() for item in modules)
+    if modalities >= 3 or (modalities >= 2 and encoder_count >= 2):
         return "multimodal"
     outgoing: dict[str, int] = {}
     for relation in relations:
@@ -221,101 +225,6 @@ def _complete_from_overview_caption(spec: dict[str, Any], parsed: dict[str, Any]
                 relations.append({"source": pair[0], "target": pair[1], "type": "data_generation", "label": "", "evidence_ids": stage_evidence + evidence_ids})
         break
 
-    def find_evidence(*terms: str) -> list[str]:
-        found = next((item for item in evidence if all(term.casefold() in str(item.get("text") or "").casefold() for term in terms)), None)
-        return [found["id"]] if found else evidence_ids
-
-    def ensure_entity(field: str, label: str, role: str, item_evidence: list[str]) -> dict[str, Any]:
-        normalized = _normalized_label(label)
-        existing = next((item for item in spec.get(field, []) if isinstance(item, dict) and normalized and normalized == _normalized_label(_item_label(item))), None)
-        if existing:
-            return existing
-        item = {"id": _stable_id(field.rstrip("s"), label, len(spec.get(field, []))), "name": label, "role": role, "evidence_ids": item_evidence}
-        spec.setdefault(field, []).append(item)
-        return item
-
-    def ensure_relation(source: dict[str, Any], target: dict[str, Any], relation_type: str, relation_evidence: list[str]) -> None:
-        pair = (str(source.get("id")), str(target.get("id")))
-        if pair not in pairs:
-            relations.append({"source": pair[0], "target": pair[1], "type": relation_type, "label": "", "evidence_ids": relation_evidence})
-            pairs.add(pair)
-
-    low_caption = caption.casefold()
-    if "patch" in low_caption and "transformer encoder" in low_caption:
-        image = ensure_entity("inputs", "Input Image", "input", evidence_ids)
-        patches = ensure_entity("modules", "Image Patches", "module", evidence_ids)
-        projection = ensure_entity("modules", "Linear Projection of Flattened Patches", "module", evidence_ids)
-        position = ensure_entity("modules", "Position Embedding", "conditioning", evidence_ids)
-        token = ensure_entity("modules", "Class Token", "conditioning", evidence_ids)
-        encoder = ensure_entity("modules", "Transformer Encoder", "module", evidence_ids)
-        mlp_evidence = find_evidence("mlp", "head")
-        mlp = ensure_entity("modules", "MLP Head", "module", mlp_evidence)
-        prediction = ensure_entity("outputs", "Class Prediction", "output", mlp_evidence)
-        for source, target, relation_type in [
-            (image, patches, "data_flow"), (patches, projection, "data_flow"), (projection, encoder, "data_flow"),
-            (position, encoder, "conditioning"), (token, encoder, "conditioning"), (encoder, mlp, "data_flow"), (mlp, prediction, "data_flow"),
-        ]:
-            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
-
-    modality_names = [term for term in ("image", "text", "audio", "depth", "thermal", "imu") if re.search(rf"\b{term}(?:s)?\b", low_caption)]
-    if len(modality_names) >= 4 and ("common embedding" in low_caption or "joint embedding" in low_caption):
-        modality_inputs = [ensure_entity("inputs", term.upper() if term == "imu" else term.title(), "input modality", evidence_ids) for term in modality_names]
-        encoders = ensure_entity("modules", "Modality Encoders", "module group", find_evidence("encoder"))
-        joint = ensure_entity("modules", "Joint Embedding Space", "shared representation", evidence_ids)
-        emergent = ensure_entity("outputs", "Emergent Cross-modal Alignment", "output", evidence_ids)
-        for item in modality_inputs:
-            ensure_relation(item, encoders, "encoding", list(dict.fromkeys(item.get("evidence_ids", []) + encoders.get("evidence_ids", []))))
-        ensure_relation(encoders, joint, "alignment", list(dict.fromkeys(encoders.get("evidence_ids", []) + joint.get("evidence_ids", []))))
-        ensure_relation(joint, emergent, "enables", evidence_ids)
-
-    if "feedback" in low_caption and ("refine" in low_caption or "refines" in low_caption) and ("generating an output" in low_caption or "initial output" in low_caption):
-        task = ensure_entity("inputs", "Input", "input", evidence_ids)
-        generate = ensure_entity("modules", "Generate", "generator", evidence_ids)
-        initial = ensure_entity("modules", "Initial Output", "artifact", evidence_ids)
-        feedback = ensure_entity("modules", "Feedback", "feedback provider", evidence_ids)
-        feedback_text = ensure_entity("modules", "Self-Feedback", "feedback artifact", evidence_ids)
-        refine = ensure_entity("modules", "Refine", "refiner", evidence_ids)
-        refined = ensure_entity("outputs", "Refined Output", "output", evidence_ids)
-        for source, target, relation_type in [
-            (task, generate, "data_flow"), (generate, initial, "data_flow"), (initial, feedback, "evaluation"),
-            (feedback, feedback_text, "feedback"), (initial, refine, "revision_input"), (feedback_text, refine, "feedback"),
-            (refine, refined, "data_flow"), (refined, feedback, "feedback_loop"),
-        ]:
-            ensure_relation(source, target, relation_type, evidence_ids)
-
-    if re.search(r"mask\s*-?r-?cnn", low_caption, re.IGNORECASE) and "framework" in low_caption:
-        input_image = ensure_entity("inputs", "Input Image", "input", find_evidence("image"))
-        backbone = ensure_entity("modules", "Backbone", "feature extractor", find_evidence("backbone"))
-        proposals = ensure_entity("modules", "Region Proposals", "proposal artifact", find_evidence("region proposal"))
-        roi = ensure_entity("modules", "RoIAlign", "alignment", find_evidence("roialign"))
-        classification = ensure_entity("outputs", "Classification", "output head", find_evidence("class"))
-        box = ensure_entity("outputs", "Bounding-box Regression", "output head", find_evidence("bounding box"))
-        mask = ensure_entity("outputs", "Mask Branch", "output head", find_evidence("mask branch"))
-        for source, target, relation_type in [
-            (input_image, backbone, "data_flow"), (backbone, proposals, "data_flow"), (proposals, roi, "data_flow"),
-            (backbone, roi, "feature_flow"), (roi, classification, "branch"), (roi, box, "branch"), (roi, mask, "branch"),
-        ]:
-            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
-
-    sam_overview = next((item for item in figures if re.search(r"segment anything model.*overview", str(item.get("caption") or ""), re.IGNORECASE)), None)
-    if sam_overview:
-        sam_caption = str(sam_overview.get("caption") or "")
-        sam_evidence = next((item["id"] for item in evidence if item.get("kind") == "caption" and item.get("page") == sam_overview.get("page") and str(item.get("text") or "").startswith(sam_caption[:60])), None)
-        sam_ids = [sam_evidence] if sam_evidence else evidence_ids
-        image = ensure_entity("inputs", "Image", "input", sam_ids)
-        prompt = ensure_entity("inputs", "Prompt", "input", sam_ids)
-        valid_mask = ensure_entity("outputs", "Valid Segmentation Mask", "output", sam_ids)
-        image_encoder = ensure_entity("modules", "Image Encoder", "module", find_evidence("image encoder"))
-        prompt_encoder = ensure_entity("modules", "Prompt Encoder", "module", find_evidence("prompt encoder"))
-        mask_decoder = ensure_entity("modules", "Mask Decoder", "module", find_evidence("mask decoder"))
-        for source, target, relation_type in [
-            (image, image_encoder, "data_flow"), (prompt, prompt_encoder, "data_flow"),
-            (image_encoder, mask_decoder, "feature_flow"), (prompt_encoder, mask_decoder, "conditioning"),
-            (mask_decoder, valid_mask, "data_flow"),
-        ]:
-            ensure_relation(source, target, relation_type, list(dict.fromkeys(source.get("evidence_ids", []) + target.get("evidence_ids", []))))
-
-
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
     spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
@@ -334,6 +243,23 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
             item.setdefault("id", _item_id(item, field, index))
             normalized_items.append(item)
         spec[field] = normalized_items
+    completion_report = augment_contract_from_evidence(spec, parsed)
+    plan["contract_completion_report"] = completion_report
+    if len(completion_report.get("added_entities", [])) >= 3:
+        fallback_ids = {
+            str(item.get("id"))
+            for item in (spec.get("modules", []) if isinstance(spec.get("modules"), list) else [])
+            if isinstance(item, dict) and str(item.get("role") or "") == "paper-derived stage requiring VLM verification"
+        }
+        if fallback_ids:
+            spec["modules"] = [item for item in spec.get("modules", []) if not (isinstance(item, dict) and str(item.get("id")) in fallback_ids)]
+            spec["relations"] = [
+                item for item in spec.get("relations", []) if not (
+                    isinstance(item, dict)
+                    and (str(item.get("source")) in fallback_ids or str(item.get("target")) in fallback_ids)
+                )
+            ]
+            completion_report["removed_fallback_entities"] = sorted(fallback_ids)
     _complete_from_overview_caption(spec, parsed)
     modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
     encoder_modules = [item for item in modules if isinstance(item, dict) and "encoder" in _item_label(item).casefold() and "modality encoder" not in _item_label(item).casefold()]
@@ -627,7 +553,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 3, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 4, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -674,7 +600,13 @@ def prepare_paper_figure_contract(
 
     deadline = max(30, int(deadline_seconds))
     deadline_at = started + deadline
-    parsed = parse_paper(archived_paper, deadline_at=deadline_at, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter)
+    parsed = None if ocr_adapter else read_document_cache(archived_paper, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
+    document_cache_hit = parsed is not None
+    if parsed is None:
+        parsed = parse_paper(archived_paper, deadline_at=deadline_at, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter)
+        if not ocr_adapter:
+            write_document_cache(archived_paper, parsed, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
+    document_preparation_seconds = round(time.monotonic() - started, 3)
     write_json(root / "document_model.json", parsed)
     write_json(root / "extraction_report.json", parsed["extraction_report"])
     write_json(root / "document_index.json", parsed["document_index"])
@@ -706,15 +638,13 @@ def prepare_paper_figure_contract(
             plan = read_json(cache_path)
             planner_metadata = {"requested_mode": "vlm", "mode": "vlm", "model": planner_model, "warning": None, "prompt": "", "cached": True}
         else:
-            plan, planner_metadata = plan_paper_image(
+            plan, planner_metadata = plan_fast_paper_contract(
                 parsed,
                 preferences,
                 mode=effective_mode,
                 model=planner_model,
-                reference_images=archived_positive + archived_negative,
-                paper_review=None,
-                timeout_seconds=min(45, remaining),
-                retries=1,
+                timeout_seconds=min(35, remaining),
+                retries=2,
                 evidence_max_chars=36000,
             )
         if planner_metadata.get("mode") == "vlm":
@@ -764,6 +694,8 @@ def prepare_paper_figure_contract(
     write_json(root / "planning_metadata.json", {"summary": "Planner execution metadata.", **planner_metadata})
     expand_plan_evidence(plan, paper_review, parsed)
     normalize_figure_contract(plan, parsed)
+    completion_report = plan.get("contract_completion_report") if isinstance(plan.get("contract_completion_report"), dict) else {}
+    write_json(root / "contract_completion_report.json", completion_report)
     for name in ("paper_summary", "figure_specification", "design_plan", "layout_intent", "visual_metaphors", "style_plan"):
         write_json(root / f"{name}.json", plan[name])
     planning_validation = validate_plan_grounding(plan, parsed)
@@ -787,7 +719,22 @@ def prepare_paper_figure_contract(
     has_warning = bool(planner_metadata.get("warning") or review_metadata.get("warning") or parsed["extraction_report"].get("status") == "warning")
     status = "complete" if production_ready and not has_warning else "completed_with_warnings"
     contract_source = "cache" if planner_metadata.get("cached") else "vlm" if planner_metadata.get("mode") == "vlm" else "vlm_review_deterministic_compile" if planner_metadata.get("mode") == "review_grounded_vlm" else "deterministic_evidence_rules"
-    extraction_seconds = float(parsed["extraction_report"].get("elapsed_seconds") or 0.0)
+    source_extraction_seconds = float(parsed["extraction_report"].get("elapsed_seconds") or 0.0)
+    extraction_seconds = 0.0 if document_cache_hit else source_extraction_seconds
+    planner_provider = planner_metadata.get("provider") if isinstance(planner_metadata.get("provider"), dict) else {}
+    review_provider = review_metadata.get("provider") if isinstance(review_metadata.get("provider"), dict) else {}
+    provider_calls = [item for item in (planner_provider, review_provider) if item.get("attempts")]
+    provider_summary = {
+        "planner": planner_provider,
+        "review": review_provider,
+        "attempts": sum(int(item.get("attempts") or 0) for item in provider_calls),
+        "retries_used": sum(int(item.get("retries_used") or 0) for item in provider_calls),
+        "success": any(bool(item.get("success")) for item in provider_calls) if provider_calls else None,
+        "successful_call_count": sum(bool(item.get("success")) for item in provider_calls),
+        "call_count": len(provider_calls),
+        "elapsed_seconds": round(sum(float(item.get("elapsed_seconds") or 0.0) for item in provider_calls), 3),
+        "failure_categories": list(dict.fromkeys(category for item in provider_calls for category in (item.get("failure_categories") or []))),
+    }
     result = {
         "summary": "Fast paper-to-framework contract preparation completed.",
         "ok": bool(planning_validation.get("ok")),
@@ -804,14 +751,27 @@ def prepare_paper_figure_contract(
         "paper_review_mode": review_metadata.get("mode"),
         "contract_source": contract_source,
         "cache_hit": bool(planner_metadata.get("cached")),
+        "document_cache_hit": document_cache_hit,
+        "provider": provider_summary,
+        "contract_completion": {
+            "overview_term_coverage": completion_report.get("overview_term_coverage"),
+            "added_entity_count": len(completion_report.get("added_entities", [])),
+            "added_relation_count": len(completion_report.get("added_relations", [])),
+        },
         "planner_warning": planner_metadata.get("warning"),
         "review_warning": review_metadata.get("warning"),
         "topology": plan["figure_specification"].get("topology"),
         "module_count": len(plan["figure_specification"].get("modules", [])),
         "relation_count": len(plan["figure_specification"].get("relations", [])),
-        "stage_timings": {"document_extraction_seconds": extraction_seconds, "semantic_compilation_seconds": round(max(0.0, elapsed - extraction_seconds), 3), "total_seconds": elapsed},
+        "stage_timings": {
+            "document_preparation_seconds": document_preparation_seconds,
+            "document_extraction_seconds": extraction_seconds,
+            "cached_source_extraction_seconds": source_extraction_seconds if document_cache_hit else None,
+            "semantic_compilation_seconds": round(max(0.0, elapsed - document_preparation_seconds), 3),
+            "total_seconds": elapsed,
+        },
         "uncertainties": plan["figure_specification"].get("uncertainties", []),
-        "artifacts": ["paper.md", "document_model.json", "extraction_report.json", "section_index.json", "section_summary.md", "key_evidence.json", "paper_review.json", "figure_specification.json", "planning_validation_report.json", "image_prompt.md", "overlay_spec.json", "run_report.json"],
+        "artifacts": ["paper.md", "document_model.json", "extraction_report.json", "section_index.json", "section_summary.md", "key_evidence.json", "paper_review.json", "figure_specification.json", "contract_completion_report.json", "planning_validation_report.json", "image_prompt.md", "overlay_spec.json", "run_report.json"],
     }
     write_json(root / "run_report.json", result)
     return {

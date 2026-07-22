@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "Learning Transferable Visual Models From Natural Language Supervision",
+  "venue": "ICML",
+  "year": 2021,
+  "arxiv_id": "2103.00020",
+  "official_url": "https://proceedings.mlr.press/v139/radford21a.html",
+  "paper_urls": ["https://arxiv.org/pdf/2103.00020", "https://export.arxiv.org/pdf/2103.00020"],
+  "target_figure": "Figure 1",
+  "verified_caption": "CLIP jointly trains an image encoder and a text encoder to predict correct image-text pairings, then uses text embeddings of class descriptions as a zero-shot classifier at inference time.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

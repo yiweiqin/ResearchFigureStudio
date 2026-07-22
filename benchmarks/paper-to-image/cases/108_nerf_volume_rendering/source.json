@@ -1,0 +1,12 @@
+{
+  "summary": "Publication metadata and local-fetch sources; the PDF is not redistributed by this repository.",
+  "paper_title": "NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis",
+  "venue": "ECCV",
+  "year": 2020,
+  "arxiv_id": "2003.08934",
+  "official_url": "https://www.ecva.net/papers/eccv_2020/papers_ECCV/html/1473_ECCV_2020_paper.php",
+  "paper_urls": ["https://arxiv.org/pdf/2003.08934", "https://export.arxiv.org/pdf/2003.08934"],
+  "target_figure": "Figure 2",
+  "verified_caption": "NeRF samples 5D coordinates along camera rays, maps position and viewing direction through a neural radiance field to color and volume density, and applies differentiable volume rendering to synthesize an image.",
+  "license_note": "Verify the source license before redistributing the PDF or figure image. Local benchmark fetching is for research use."
+}

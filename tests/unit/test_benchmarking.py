@@ -11,6 +11,7 @@ from rfs.evaluation.benchmarking import (
     _score_planning_contract,
     list_benchmark_cases,
     run_fast_benchmark_case,
+    run_fast_benchmark_suite,
     score_benchmark_case,
     validate_benchmark_case,
 )
@@ -71,6 +72,22 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue((Path(tmp) / "fast_benchmark_result.json").exists())
             self.assertFalse((Path(tmp) / "selected_image.png").exists())
+
+    def test_fast_suite_aggregates_reliability_and_timing_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_fast_benchmark_suite(
+                ROOT / "benchmarks",
+                tmp,
+                case_ids=["001_linear_pipeline"],
+                planner_mode="heuristic",
+                ocr_engine="off",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["aggregate"]["case_count"], 1)
+            self.assertIn("mean_total_seconds", result["aggregate"])
+            self.assertIn("provider_success_rate", result["aggregate"])
+            self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
     def test_paper_to_image_score_uses_hard_scientific_gates(self):
         case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"

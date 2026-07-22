@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 
 
@@ -88,6 +89,42 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertTrue(parsed["pages"][0]["used_ocr"])
         self.assertIn("Image Encoder", parsed["pages"][0]["text"])
 
+    def test_empty_ocr_result_returns_failed_document_model_instead_of_raising(self):
+        path = self._pdf(lambda _page: None)
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=lambda _image, _lang: [])
+
+        self.assertEqual(parsed["extraction_report"]["status"], "fail")
+        self.assertEqual(parsed["evidence"], [])
+        self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
+
+    def test_ocr_lines_are_grouped_into_complete_figure_caption(self):
+        path = self._pdf(lambda _page: None)
+        records = [
+            {"text": "Figure 1: Overview of the proposed framework.", "confidence": 0.95, "quad": [[40, 100], [560, 100], [560, 125], [40, 125]]},
+            {"text": "The image encoder feeds a transformer decoder.", "confidence": 0.94, "quad": [[40, 130], [560, 130], [560, 155], [40, 155]]},
+            {"text": "1 Introduction", "confidence": 0.98, "quad": [[40, 210], [250, 210], [250, 240], [40, 240]]},
+            {"text": "A sufficiently long scientific paragraph provides reliable evidence for the method.", "confidence": 0.96, "quad": [[40, 250], [560, 250], [560, 275], [40, 275]]},
+        ]
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=lambda _image, _lang: records)
+
+        self.assertEqual(parsed["document_index"]["figures"][0]["caption"], "Figure 1: Overview of the proposed framework. The image encoder feeds a transformer decoder.")
+        self.assertGreater(parsed["extraction_report"]["mean_ocr_confidence"], 0.9)
+
+    def test_rapidocr_caption_group_survives_sentence_boundaries(self):
+        lines = [
+            {"bbox": [40, 100, 560, 120], "text": "Fig. 1: Overview of the model.", "confidence": 0.98},
+            {"bbox": [40, 124, 560, 144], "text": "The encoder produces features.", "confidence": 0.98},
+            {"bbox": [40, 148, 560, 168], "text": "A decoder predicts the output.", "confidence": 0.98},
+            {"bbox": [40, 210, 560, 230], "text": "We next describe the training objective.", "confidence": 0.98},
+        ]
+
+        grouped = _assign_ocr_parent_blocks(lines, 600)
+
+        self.assertEqual({item["parent_block"] for item in grouped[:3]}, {1})
+        self.assertNotEqual(grouped[2]["parent_block"], grouped[3]["parent_block"])
+
     def test_inspection_reuses_matching_document_cache(self):
         path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "Abstract Method A sufficiently long scientific paragraph for deterministic PDF inspection.", fontsize=10))
         with tempfile.TemporaryDirectory() as temp:
@@ -96,6 +133,15 @@ class PaperAnalyzerTests(unittest.TestCase):
 
             self.assertTrue(first["document_model"])
             self.assertEqual(second["status"], "cached")
+
+    def test_global_document_cache_reuses_parse_across_output_directories(self):
+        path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 220), "Abstract Method A sufficiently long scientific paragraph for global cache validation. The document contains repeated evidence, page-aware terminology, a complete method description, and enough characters to satisfy the readable-page quality gate.", fontsize=10))
+        with tempfile.TemporaryDirectory() as cache, tempfile.TemporaryDirectory() as first_out, tempfile.TemporaryDirectory() as second_out, patch.dict("os.environ", {"RFS_CACHE_DIR": cache}, clear=False):
+            first = inspect_paper(path, first_out, ocr_engine="off")
+            second = inspect_paper(path, second_out, ocr_engine="off")
+
+            self.assertFalse(first["document_cache_hit"])
+            self.assertTrue(second["document_cache_hit"])
 
     def test_evidence_ids_are_stable_across_repeated_parses(self):
         path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "1 Method\nA stable block of scientific evidence for repeated parsing.", fontsize=10))

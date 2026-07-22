@@ -139,9 +139,164 @@ Paper evidence:
 """.strip()
 
 
+def _overview_figure_candidates(parsed: dict, limit: int = 4) -> list[dict[str, Any]]:
+    positive = re.compile(r"\b(overview|framework|architecture|pipeline|procedure|approach|method|model|system|workflow)\b", re.IGNORECASE)
+    negative = re.compile(r"\b(comparison|performance|result|ablation|visualization|qualitative|attention map|distribution)\b", re.IGNORECASE)
+    ranked = []
+    for index, item in enumerate(parsed.get("document_index", {}).get("figures", [])):
+        caption = str(item.get("caption") or "").strip()
+        if not caption:
+            continue
+        score = 0
+        if positive.search(caption):
+            score += 8
+        if re.match(r"^(figure|fig\.)\s*[12]\b", caption, re.IGNORECASE):
+            score += 5
+        if 180 <= len(caption) <= 1400:
+            score += 4
+        score += min(5, len(re.findall(r"\b(?:uses?|takes?|feeds?|passes?|predicts?|produces?|outputs?|trains?|samples?|renders?|synthesizes?|optimizes?)\b", caption, re.IGNORECASE)))
+        if negative.search(caption):
+            score -= 7
+        ranked.append((score, -index, item))
+    return [item for _, _, item in sorted(ranked, reverse=True)[: max(1, int(limit))]]
+
+
+def _fast_planner_prompt(parsed: dict, preferences: dict, evidence_max_chars: int = 36000) -> str:
+    candidates = _overview_figure_candidates(parsed)
+    return f"""
+# Summary
+
+You are compiling a scientific paper into a directed semantic graph for ONE framework figure. Return JSON only. Focus exclusively on scientific meaning; layout, illustration style, and image-generation wording will be compiled later by code.
+
+Primary task:
+1. Select the most information-rich method/architecture/framework figure caption from the candidates below. Figure 1 is not automatically best; prefer a caption that explicitly names components and directed operations.
+2. Extract every separately named input, component, intermediate representation, conditioning signal, training-only objective, inference-only step, and output needed to reproduce that overview.
+3. Use exact short paper terms as visible names. Do not replace "image encoder" with a prose description such as "network that extracts image features".
+4. Split compound outputs and branches into separate entities. If a component predicts class and box, create separate class and box outputs. If two encoders produce two embeddings, create both embeddings.
+5. Preserve direction. Every relation endpoint must be a declared entity id. Include input boundary edges and final output edges.
+6. Separate training and inference. Matching, losses, supervision, optimization, and feedback belong in training_flow or training-only entities; test-time classification, decoding, retrieval, rendering, or deployment belong in inference_flow.
+7. Every factual item must cite evidence_ids copied exactly from the evidence. Unsupported details must be omitted and recorded under uncertainties.
+8. Ignore baseline/comparison methods mentioned only to contrast with the proposed method. Never import terms from references, acknowledgements, bibliography, or result-only figures.
+
+Return exactly this compact schema:
+{{
+  "summary": "Fast evidence-grounded semantic plan.",
+  "paper_summary": {{
+    "summary": "Structured paper summary.",
+    "title": "...",
+    "paper_type": "method|system|dataset|benchmark|analysis|survey|application|unknown",
+    "research_problem": {{"text": "...", "evidence_ids": []}},
+    "central_claim": {{"text": "...", "evidence_ids": []}},
+    "inputs": [],
+    "outputs": [],
+    "core_modules": [],
+    "innovations": [],
+    "training_flow": [],
+    "inference_flow": [],
+    "terminology": {{}},
+    "unknowns": []
+  }},
+  "figure_specification": {{
+    "summary": "Scientific contract for the figure.",
+    "figure_goal": "...",
+    "research_problem": {{"text": "...", "evidence_ids": []}},
+    "central_claim": {{"text": "...", "evidence_ids": []}},
+    "storyline": [],
+    "must_show": [],
+    "inputs": [{{"id": "...", "name": "exact short term", "role": "input", "evidence_ids": []}}],
+    "modules": [{{"id": "...", "name": "exact short term", "role": "module|intermediate|training_objective|conditioning", "evidence_ids": []}}],
+    "outputs": [{{"id": "...", "name": "exact short term", "role": "output", "evidence_ids": []}}],
+    "relations": [{{"source": "...", "target": "...", "type": "data_flow|encoding|conditioning|branch|alignment|prediction|training_objective|rendering_input|feedback", "label": "", "evidence_ids": []}}],
+    "innovations": [],
+    "feedback_loops": [],
+    "training_flow": [],
+    "inference_flow": [],
+    "topology": "linear|branch|feedback|multimodal|dense_multiframe|unknown",
+    "required_labels": [],
+    "terminology": {{}},
+    "forbidden_inventions": [],
+    "uncertainties": []
+  }}
+}}
+
+Candidate overview captions:
+{json.dumps(candidates, ensure_ascii=False, indent=2)}
+
+User preferences relevant to wording only:
+{json.dumps({key: preferences.get(key) for key in ('language', 'must_show', 'must_not_show')}, ensure_ascii=False, indent=2)}
+
+Prioritized paper evidence:
+{evidence_excerpt(parsed, max_chars=evidence_max_chars)}
+""".strip()
+
+
+def _compile_fast_plan(raw: dict, preferences: dict) -> dict:
+    result = normalize_plan(raw, preferences)
+    spec = result["figure_specification"]
+    entities = [
+        item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+    entity_ids = [str(item.get("id") or "") for item in entities if str(item.get("id") or "")]
+    labels = [str(item.get("name") or item.get("text") or item.get("statement") or "").strip() for item in entities]
+    labels = [value for value in labels if value]
+    topology = str(spec.get("topology") or "unknown")
+    pattern = {"feedback": "loop", "multimodal": "hub_and_spoke", "dense_multiframe": "stacked", "branch": "two_stage"}.get(topology, "left_to_right")
+    result["design_plan"] = {
+        "summary": "Deterministic information narrative compiled from the fast semantic graph.",
+        "reading_order": entity_ids,
+        "groups": [],
+        "innovation_emphasis": [str(item.get("name") or item.get("text") or item.get("statement") or "") for item in spec.get("innovations", []) if isinstance(item, dict)],
+        "preserve": labels,
+        "remove": list(spec.get("forbidden_inventions", []) if isinstance(spec.get("forbidden_inventions"), list) else []),
+    }
+    result["layout_intent"] = {
+        "summary": "Deterministic layout intent compiled from semantic topology.",
+        "pattern": pattern,
+        "canvas_ratio": preferences.get("aspect_ratio", "16:9"),
+        "regions": [],
+        "flow_description": "Render all declared directed relations without reversing arrows.",
+        "whitespace": "moderate",
+    }
+    result["visual_metaphors"] = {
+        "summary": "Minimal paper-grounded visual objects; exact labels and arrows are added as an editable overlay.",
+        "items": [{"module_id": str(item.get("id") or ""), "metaphor": str(item.get("name") or "scientific module"), "must_show": [], "avoid_showing": []} for item in entities],
+    }
+    result["style_plan"] = {
+        "summary": "Fast-path style contract.",
+        "medium": preferences.get("style_description"),
+        "palette": preferences.get("preferred_palette", []),
+        "viewpoint": "front-facing academic diagram",
+        "line_and_shadow": "crisp thin lines with restrained shadows",
+        "visual_density": preferences.get("visual_density", "high"),
+        "background": "clean light background",
+        "text_policy": "background regions only; exact labels and arrows are supplied by overlay_spec.json",
+        "positive_reference_rules": [],
+        "negative_reference_rules": preferences.get("avoid", []),
+    }
+    return result
+
+
 def _first_sentence(text: str) -> str:
     sentences = [item.strip() for item in re.split(r"(?<=[.!?。！？])\s+", text) if len(item.strip()) > 20]
     return sentences[0][:500] if sentences else text[:500].strip()
+
+
+def _plausible_component_heading(value: str) -> bool:
+    text = re.sub(r"^\d+(?:\.\d+)*\s*", "", str(value or "")).strip()
+    low = text.casefold()
+    if not 3 <= len(text) <= 72 or len(text.split()) > 9:
+        return False
+    if any(term in low for term in ("http", "www.", "acknowledg", "reference", "appendix", "picture credit", "et al.", "university", "institute")):
+        return False
+    if re.search(r"[π∑=·]|\([^)]*\d{4}[^)]*\)|\b(?:fig(?:ure)?|table)\s*\d", text, re.IGNORECASE):
+        return False
+    if text.count(",") >= 2 or text.count(":") >= 1:
+        return False
+    component_terms = ("architecture", "pipeline", "framework", "module", "encoder", "decoder", "backbone", "parser", "reasoner", "renderer", "retrieval", "generation", "refinement", "training", "inference", "data engine", "model")
+    return any(term in low for term in component_terms)
 
 
 def _heuristic_plan(parsed: dict, preferences: dict, paper_review: dict | None = None) -> dict:
@@ -194,7 +349,7 @@ def _heuristic_plan(parsed: dict, preferences: dict, paper_review: dict | None =
     first = evidence[0]
     title = next((line.strip() for line in first["text"].splitlines() if 10 <= len(line.strip()) <= 180), parsed["source_name"])
     generic = {"abstract", "introduction", "related work", "method", "methods", "experiments", "results", "conclusion", "references"}
-    names = [item for item in headings if item.lower() not in generic][:6]
+    names = [item for item in headings if item.lower() not in generic and _plausible_component_heading(item)][:6]
     if len(names) < 3:
         names = ["Research Input", "Core Method", "Research Output"]
     modules = []
@@ -296,13 +451,44 @@ def normalize_plan(raw: dict, preferences: dict) -> dict:
     return result
 
 
+def plan_fast_paper_contract(
+    parsed: dict,
+    preferences: dict,
+    mode: str = "vlm",
+    model: str | None = None,
+    timeout_seconds: int = 45,
+    retries: int = 2,
+    evidence_max_chars: int = 36000,
+) -> tuple[dict, dict]:
+    prompt = _fast_planner_prompt(parsed, preferences, evidence_max_chars=evidence_max_chars)
+    metadata: dict[str, Any] = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt, "provider": {}}
+    if mode == "vlm" and vlm_credentials_available():
+        resolved = resolve_vlm_model("RFS_FAST_FRAMEWORK_MODEL", "RFS_PAPER_TO_IMAGE_MODEL", "RFS_PAPER_PLANNER_MODEL", explicit_model=model)
+        try:
+            raw = call_vlm_json(
+                prompt,
+                [],
+                model=resolved,
+                timeout=max(10, int(timeout_seconds)),
+                retries=max(0, int(retries)),
+                call_metadata=metadata["provider"],
+            )
+            metadata["model"] = resolved
+            return _compile_fast_plan(raw, preferences), metadata
+        except Exception as exc:
+            metadata.update({"mode": "heuristic_after_vlm_failure", "warning": str(exc), "model": resolved})
+    elif mode == "vlm":
+        metadata.update({"mode": "heuristic_without_credentials", "warning": "API_BASE and API_KEY/GEMINI_API_KEY are required for VLM planning"})
+    return normalize_plan(_heuristic_plan(parsed, preferences), preferences), metadata
+
+
 def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1, evidence_max_chars: int = 58000) -> tuple[dict, dict]:
     prompt = _planner_prompt(parsed, preferences, paper_review=paper_review, evidence_max_chars=evidence_max_chars)
-    metadata = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt}
+    metadata = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt, "provider": {}}
     if mode == "vlm" and vlm_credentials_available():
         resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_MODEL", "RFS_PAPER_PLANNER_MODEL", explicit_model=model)
         try:
-            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=max(10, int(timeout_seconds)), retries=max(0, int(retries)))
+            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=max(10, int(timeout_seconds)), retries=max(0, int(retries)), call_metadata=metadata["provider"])
             metadata["model"] = resolved
             return normalize_plan(raw, preferences), metadata
         except Exception as exc:

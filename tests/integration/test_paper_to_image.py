@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from rfs.cli import build_parser
+from rfs.cli import _doctor, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import review_candidate
 from rfs.paper_to_image.generator import generate_and_select
@@ -127,6 +127,13 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.deadline, 180)
         self.assertEqual(args.ocr_engine, "auto")
 
+    def test_doctor_reports_easyocr_model_readiness(self):
+        report = _doctor()
+        models = report["pdf_tools"]["easyocr"]["models"]
+        self.assertIn("en_ready", models)
+        self.assertIn("en_ch_ready", models)
+        self.assertIn("allow_download", models)
+
     def test_fast_framework_prompt_writes_contract_without_generation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -165,6 +172,12 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.benchmark_action, "fast")
         self.assertEqual(args.deadline, 180)
         self.assertEqual(args.planner_mode, "vlm")
+
+    def test_benchmark_fast_suite_cli_accepts_repeatable_case_ids(self):
+        parser = build_parser()
+        args = parser.parse_args(["benchmark", "fast-suite", "--root", "benchmarks", "--out", "output/suite", "--case-id", "101_vit_linear", "--case-id", "106_detr_set_prediction"])
+        self.assertEqual(args.benchmark_action, "fast-suite")
+        self.assertEqual(args.case_id, ["101_vit_linear", "106_detr_set_prediction"])
 
     def test_domain_profiles_detect_method_and_survey(self):
         method = {"evidence": [{"text": "A neural model is optimized with a training loss and used during inference."}]}

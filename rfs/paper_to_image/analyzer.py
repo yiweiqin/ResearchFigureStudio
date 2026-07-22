@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-MOJIBAKE_MARKERS = ("�", "Ã", "Â", "鈭", "鈥", "尾", "卤", "绗", "鍥", "琛")
+MOJIBAKE_MARKERS = ("\ufffd", "Ã", "Â", "â€", "锟", "鈥", "銆", "鏅")
 SECTION_ALIASES = {
     "abstract": ("abstract",),
     "introduction": ("introduction", "background"),
@@ -43,11 +43,13 @@ def _normalized_compare_text(text: str) -> str:
 
 
 def _replacement_rate(text: str) -> float:
-    return round(text.count("�") / max(1, len(text)), 6)
+    value = str(text or "")
+    return round(value.count("\ufffd") / max(1, len(value)), 6)
 
 
 def _mojibake_rate(text: str) -> float:
-    return round(sum(text.count(marker) for marker in MOJIBAKE_MARKERS) / max(1, len(text)), 6)
+    value = str(text or "")
+    return round(sum(value.count(marker) for marker in MOJIBAKE_MARKERS) / max(1, len(value)), 6)
 
 
 def _block_kind(text: str, width_ratio: float = 0.0) -> str:
@@ -183,15 +185,21 @@ def _pdf_metadata(path: Path) -> dict[str, Any]:
 def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None) -> tuple[list[dict[str, Any]], str]:
     if adapter:
         return list(adapter(image_path, lang) or []), "adapter"
-    from ..reference_text_extractor import run_easyocr, run_paddle_ocr
+    from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
 
     requested = engine
     if requested == "auto":
-        requested = "easyocr"
+        requested = "rapidocr"
         try:
-            import easyocr  # noqa: F401
+            import rapidocr_onnxruntime  # noqa: F401
         except Exception:
-            requested = "paddle"
+            requested = "easyocr"
+            try:
+                import easyocr  # noqa: F401
+            except Exception:
+                requested = "paddle"
+    if requested == "rapidocr":
+        return run_rapidocr(image_path, lang), "rapidocr"
     if requested == "easyocr":
         return run_easyocr(image_path, lang), "easyocr"
     if requested == "paddle":
@@ -199,27 +207,139 @@ def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | N
     return [], "off"
 
 
+def _group_ocr_words(records: list[dict[str, Any]], image_width: float) -> list[dict[str, Any]]:
+    words = []
+    for record in records:
+        quad = record.get("quad") or []
+        if len(quad) < 4 or not _clean(record.get("text", "")):
+            continue
+        xs = [float(point[0]) for point in quad]
+        ys = [float(point[1]) for point in quad]
+        words.append({
+            "bbox": [min(xs), min(ys), max(xs), max(ys)],
+            "text": _clean(record.get("text", "")),
+            "confidence": float(record.get("confidence") or 0.0),
+        })
+    words.sort(key=lambda item: ((item["bbox"][1] + item["bbox"][3]) / 2.0, item["bbox"][0]))
+    lines: list[dict[str, Any]] = []
+    for word in words:
+        bbox = word["bbox"]
+        center_y = (bbox[1] + bbox[3]) / 2.0
+        height = max(1.0, bbox[3] - bbox[1])
+        line = next((
+            item for item in reversed(lines[-12:])
+            if abs(center_y - item["center_y"]) <= max(height, item["mean_height"]) * 0.62
+            and bbox[0] >= item["bbox"][0] - image_width * 0.08
+        ), None)
+        if line is None:
+            lines.append({"words": [word], "bbox": list(bbox), "center_y": center_y, "mean_height": height})
+            continue
+        line["words"].append(word)
+        line["bbox"] = [min(line["bbox"][0], bbox[0]), min(line["bbox"][1], bbox[1]), max(line["bbox"][2], bbox[2]), max(line["bbox"][3], bbox[3])]
+        line["center_y"] = sum((item["bbox"][1] + item["bbox"][3]) / 2.0 for item in line["words"]) / len(line["words"])
+        line["mean_height"] = sum(max(1.0, item["bbox"][3] - item["bbox"][1]) for item in line["words"]) / len(line["words"])
+
+    grouped = []
+    for line in lines:
+        line["words"].sort(key=lambda item: item["bbox"][0])
+        grouped.append({
+            "bbox": line["bbox"],
+            "text": _clean(" ".join(item["text"] for item in line["words"])),
+            "confidence": round(sum(item["confidence"] for item in line["words"]) / max(1, len(line["words"])), 4),
+        })
+    grouped.sort(key=lambda item: (item["bbox"][1], item["bbox"][0]))
+    heights = sorted(max(1.0, item["bbox"][3] - item["bbox"][1]) for item in grouped)
+    median_height = heights[len(heights) // 2] if heights else 12.0
+    parent = 0
+    previous_by_column: dict[int, dict[str, Any]] = {}
+    for item in grouped:
+        center_x = (item["bbox"][0] + item["bbox"][2]) / 2.0
+        width = item["bbox"][2] - item["bbox"][0]
+        column = 2 if width >= image_width * 0.62 else 0 if center_x <= image_width / 2.0 else 1
+        previous = previous_by_column.get(column)
+        gap = item["bbox"][1] - previous["bbox"][3] if previous else float("inf")
+        starts_new = bool(re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+|figure|fig\.|table)\b", item["text"], re.IGNORECASE))
+        if previous is None or gap > median_height * 1.8 or starts_new:
+            parent += 1
+        item["parent_block"] = parent
+        previous_by_column[column] = item
+    return grouped
+
+
+def _assign_ocr_parent_blocks(lines: list[dict[str, Any]], image_width: float) -> list[dict[str, Any]]:
+    ordered = sorted(lines, key=lambda item: (float(item["bbox"][1]), float(item["bbox"][0])))
+    heights = sorted(max(1.0, float(item["bbox"][3]) - float(item["bbox"][1])) for item in ordered)
+    median_height = heights[len(heights) // 2] if heights else 12.0
+    parent = 0
+    previous_by_column: dict[int, dict[str, Any]] = {}
+    last_item: dict[str, Any] | None = None
+    for item in ordered:
+        center_x = (float(item["bbox"][0]) + float(item["bbox"][2])) / 2.0
+        width = float(item["bbox"][2]) - float(item["bbox"][0])
+        column = 2 if width >= image_width * 0.62 else 0 if center_x <= image_width / 2.0 else 1
+        previous = previous_by_column.get(column)
+        if last_item and last_item.get("_caption_group"):
+            last_gap = float(item["bbox"][1]) - float(last_item["bbox"][3])
+            last_height = max(
+                median_height,
+                float(item["bbox"][3]) - float(item["bbox"][1]),
+                float(last_item["bbox"][3]) - float(last_item["bbox"][1]),
+            )
+            if last_gap <= last_height * 1.15:
+                previous = last_item
+        gap = float(item["bbox"][1]) - float(previous["bbox"][3]) if previous else float("inf")
+        local_height = max(
+            median_height,
+            float(item["bbox"][3]) - float(item["bbox"][1]),
+            (float(previous["bbox"][3]) - float(previous["bbox"][1])) if previous else 0.0,
+        )
+        text = str(item.get("text") or "")
+        starts_new = bool(re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+|figure|fig\.|table)\b", text, re.IGNORECASE))
+        starts_caption = bool(re.match(r"^(?:figure|fig\.|table)\b", text, re.IGNORECASE))
+        continuing_caption = bool(previous and previous.get("_caption_group") and gap <= local_height * 1.15 and not starts_new)
+        paragraph_break = bool(previous and not continuing_caption and str(previous.get("text") or "").rstrip().endswith((".", ":")) and gap > local_height * 0.45)
+        if previous is None or gap > local_height * 1.15 or starts_new or paragraph_break:
+            parent += 1
+        item["parent_block"] = parent
+        item["_caption_group"] = starts_caption or continuing_caption
+        previous_by_column[column] = item
+        last_item = item
+    return ordered
+
+
 def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Callable | None) -> tuple[list[dict[str, Any]], str, str | None]:
     try:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / f"page_{page_number:03d}.png"
-            pixmap = page.get_pixmap(dpi=200, alpha=False)
+            dpi = 72 if adapter is None and engine in {"auto", "easyocr", "rapidocr"} else 160
+            pixmap = page.get_pixmap(dpi=dpi, alpha=False)
             pixmap.save(str(target))
             records, used_engine = _ocr_records(target, engine, lang, adapter)
+            if used_engine != "rapidocr":
+                records = _group_ocr_words(records, float(pixmap.width))
+            else:
+                normalized_records = []
+                for record in records:
+                    quad = record.get("quad") or []
+                    if len(quad) < 4:
+                        continue
+                    xs = [float(point[0]) for point in quad]
+                    ys = [float(point[1]) for point in quad]
+                    normalized_records.append({"bbox": [min(xs), min(ys), max(xs), max(ys)], "text": _clean(record.get("text", "")), "confidence": float(record.get("confidence") or 0.0)})
+                records = _assign_ocr_parent_blocks(normalized_records, float(pixmap.width))
             blocks = []
             scale_x = float(page.rect.width) / max(1, pixmap.width)
             scale_y = float(page.rect.height) / max(1, pixmap.height)
             for record in records:
-                quad = record.get("quad") or []
-                if not quad:
+                raw_bbox = record.get("bbox")
+                if not raw_bbox:
                     continue
-                xs = [float(point[0]) for point in quad]
-                ys = [float(point[1]) for point in quad]
                 blocks.append({
-                    "bbox": [min(xs) * scale_x, min(ys) * scale_y, max(xs) * scale_x, max(ys) * scale_y],
+                    "bbox": [float(raw_bbox[0]) * scale_x, float(raw_bbox[1]) * scale_y, float(raw_bbox[2]) * scale_x, float(raw_bbox[3]) * scale_y],
                     "text": _clean(record.get("text", "")),
                     "source": used_engine,
                     "confidence": round(float(record.get("confidence") or 0.0), 4),
+                    "parent_block": record.get("parent_block"),
                 })
             return blocks, used_engine, None
     except Exception as exc:
@@ -288,14 +408,22 @@ def _read_pdf_pages(
         pass
 
     ocr_pages: list[int] = []
+    ocr_page_durations: list[dict[str, Any]] = []
     if ocr_engine != "off":
         prioritized = ocr_candidates[:max_ocr_pages]
         for page_number in prioritized:
-            if deadline_at is not None and time.monotonic() >= deadline_at - 20:
-                warnings.append("OCR stopped to preserve deadline validation budget")
-                break
+            if deadline_at is not None:
+                remaining = deadline_at - time.monotonic()
+                completed_times = [float(item["elapsed_seconds"]) for item in ocr_page_durations if isinstance(item.get("elapsed_seconds"), (int, float))]
+                estimated = (sum(completed_times) / len(completed_times) * 1.25) if completed_times else 45.0
+                if remaining < estimated + 20:
+                    warnings.append("OCR stopped to preserve deadline validation budget")
+                    break
             page = document[page_number - 1]
+            ocr_started = time.monotonic()
             blocks, used_engine, error = _ocr_page(page, page_number, ocr_engine, ocr_lang, ocr_adapter)
+            ocr_elapsed = round(time.monotonic() - ocr_started, 3)
+            ocr_page_durations.append({"page": page_number, "engine": used_engine, "elapsed_seconds": ocr_elapsed, "success": not bool(error)})
             if error:
                 warnings.append(f"page {page_number} OCR unavailable: {error}")
                 continue
@@ -323,6 +451,7 @@ def _read_pdf_pages(
         "metadata": metadata,
         "ocr_candidate_pages": ocr_candidates,
         "ocr_pages": ocr_pages,
+        "ocr_page_durations": ocr_page_durations,
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
         "elapsed_seconds": elapsed,
@@ -475,15 +604,25 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     readable = [page for page in pages if len(_normalized_compare_text(page.get("text", ""))) >= 80]
     readable_ratio = round(len(readable) / max(1, len(pages)), 4)
     ocr_count = sum(1 for page in pages if page.get("used_ocr"))
-    pdf_type = "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count else "born_digital"
+    candidate_count = len(details.get("ocr_candidate_pages", []))
+    pdf_type = "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count or (pages and candidate_count == len(pages)) else "born_digital"
     coverage = _section_coverage(pages, index.get("sections", []))
     warnings = list(details.get("warnings", []))
+    ocr_blocks = [block for page in pages if page.get("used_ocr") for block in page.get("blocks", []) if isinstance(block, dict)]
+    ocr_confidences = [float(block.get("confidence") or 0.0) for block in ocr_blocks]
+    mean_ocr_confidence = round(sum(ocr_confidences) / max(1, len(ocr_confidences)), 4) if ocr_blocks else None
+    short_ocr_blocks = [block for block in ocr_blocks if len(_normalized_compare_text(str(block.get("text") or ""))) < 3]
+    short_ocr_block_ratio = round(len(short_ocr_blocks) / max(1, len(ocr_blocks)), 4) if ocr_blocks else None
     if readable_ratio < 0.6:
         warnings.append("fewer than 60% of pages contain reliable text")
+    if mean_ocr_confidence is not None and mean_ocr_confidence < 0.5:
+        warnings.append("mean OCR confidence is below 0.50")
+    if short_ocr_block_ratio is not None and short_ocr_block_ratio > 0.3:
+        warnings.append("OCR output is highly fragmented")
     if not coverage.get("abstract") or not coverage.get("method"):
         warnings.append("abstract or method-like section was not confidently located")
     agreements = [page["poppler_agreement"] for page in pages if isinstance(page.get("poppler_agreement"), (int, float))]
-    report_status = "fail" if readable_ratio < 0.6 else "warning" if warnings else "pass"
+    report_status = "fail" if readable_ratio < 0.6 or (mean_ocr_confidence is not None and mean_ocr_confidence < 0.35) else "warning" if warnings else "pass"
     return {
         "summary": "PDF extraction quality and fallback report.",
         "status": report_status,
@@ -495,6 +634,9 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "empty_or_low_text_pages": [page["page"] for page in pages if page not in readable],
         "ocr_candidate_pages": details.get("ocr_candidate_pages", []),
         "ocr_pages": details.get("ocr_pages", []),
+        "ocr_page_durations": details.get("ocr_page_durations", []),
+        "mean_ocr_confidence": mean_ocr_confidence,
+        "short_ocr_block_ratio": short_ocr_block_ratio,
         "replacement_character_rate": round(sum(page.get("replacement_character_rate", 0.0) for page in pages) / max(1, len(pages)), 6),
         "mojibake_rate": round(sum(page.get("mojibake_rate", 0.0) for page in pages) / max(1, len(pages)), 6),
         "cross_extractor_agreement": round(sum(agreements) / len(agreements), 4) if agreements else None,
@@ -531,8 +673,6 @@ def parse_paper(
     document_index = _document_index(pages, sections)
     evidence = _build_evidence(pages, sections, document_index, max_chars)
     all_text = "\n\n".join(page.get("text", "") for page in pages)
-    if not evidence:
-        raise ValueError("No readable paper text was extracted")
     extraction_report = _extraction_report(source, pages, document_index, details)
     return {
         "summary": "Paper parsed into a structured, page-aware evidence model.",

@@ -168,6 +168,78 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(any(item.get("name") == "SA-1B" for item in spec["outputs"]))
         self.assertTrue(any("stage_assisted_manual" in source and "stage_semi_automatic" in target for source, target in pairs))
 
+    def test_generic_completion_recovers_detr_without_bibliography_noise(self):
+        captions = [
+            "Fig. 1: DETR directly predicts the final set of detections by combining a common CNN with a transformer architecture. During training, bipartite matching uniquely assigns predictions with ground truth boxes and class predictions.",
+            "Fig. 2: DETR uses a conventional CNN backbone for an input image, supplements features with a positional encoding, passes them into a transformer encoder, and uses object queries in a transformer decoder. A feed forward network predicts a class and bounding box.",
+        ]
+        parsed = {
+            "page_count": 12,
+            "document_index": {"figures": [{"page": index + 1, "caption": text} for index, text in enumerate(captions)]},
+            "evidence": [
+                {"id": f"E000{index + 1}", "page": index + 1, "kind": "caption", "text": text, "confidence": 1.0}
+                for index, text in enumerate(captions)
+            ] + [{"id": "E0099", "page": 11, "kind": "heading", "text": "Learning non-maximum suppression. In: ECCV", "section_hint": "References", "confidence": 1.0}],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        labels = {_item.get("name") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+
+        self.assertIn("Object Queries", labels)
+        self.assertIn("Bipartite Matching", labels)
+        self.assertIn("Bounding Box Predictions", labels)
+        self.assertNotIn("Non-Maximum Suppression", labels)
+        self.assertIn((ids["Object Queries"], ids["Transformer Decoder"]), pairs)
+        self.assertIn((ids["Feed Forward Network"], ids["Bounding Box Predictions"]), pairs)
+
+    def test_generic_completion_keeps_clip_modalities_and_encoders_distinct(self):
+        caption = "Figure 1. Summary of our approach. CLIP jointly trains an image encoder and a text encoder to predict the correct pairings of a batch of (image, text) training examples. At test time the text encoder synthesizes a zero-shot linear classifier by embedding the names or descriptions of the target classes."
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 3, "kind": "paragraph", "text": "The image encoder and text encoder maximize similarity of image and text embeddings using a contrastive objective.", "section_hint": "Method", "confidence": 1.0},
+            ],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [{"id": "fallback_contrastive", "name": "Contrastive Pre-training", "role": "paper-derived stage requiring VLM verification", "evidence_ids": ["E0002"]}], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertNotEqual(ids["Text"], ids["Text Encoder"])
+        self.assertIn((ids["Text"], ids["Text Encoder"]), pairs)
+        self.assertIn((ids["Class Descriptions"], ids["Text Encoder"]), pairs)
+        self.assertIn((ids["Text Encoder"], ids["Text Embeddings"]), pairs)
+        self.assertTrue(any(item.get("id") == "fallback_contrastive" for item in spec["modules"]))
+        self.assertEqual(spec["topology"], "multimodal")
+
+    def test_generic_completion_recovers_nerf_branch_without_false_multimodal_topology(self):
+        caption = "Fig. 2: An overview of our neural radiance field and differentiable rendering procedure. We synthesize images by sampling 5D coordinates along camera rays, feeding locations and viewing direction into an MLP to produce a color and volume density, and using volume rendering to composite these values into an image."
+        positional = "Fig. 4: Our full model passes input coordinates through a high-frequency positional encoding."
+        parsed = {
+            "page_count": 10,
+            "document_index": {"figures": [{"page": 2, "caption": caption}, {"page": 4, "caption": positional}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Method", "confidence": 1.0},
+                {"id": "E0002", "page": 4, "kind": "caption", "text": positional, "section_hint": "Method", "confidence": 1.0},
+            ],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertIn((ids["Viewing Direction"], ids["MLP"]), pairs)
+        self.assertIn((ids["MLP"], ids["Color"]), pairs)
+        self.assertIn((ids["Volume Rendering"], ids["Rendered Image"]), pairs)
+        self.assertEqual(spec["topology"], "branch")
+
 
 if __name__ == "__main__":
     unittest.main()

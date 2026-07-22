@@ -1,0 +1,28 @@
+{
+  "summary": "Human-authored semantic contract for CLIP contrastive pre-training and zero-shot inference.",
+  "entities": [
+    {"id": "training_images", "label": "Images", "aliases": ["Image Batch", "Training Images"], "role": "input", "required": true},
+    {"id": "training_text", "label": "Text", "aliases": ["Captions", "Text Batch", "Training Text"], "role": "input", "required": true},
+    {"id": "image_encoder", "label": "Image Encoder", "role": "module", "required": true},
+    {"id": "text_encoder", "label": "Text Encoder", "role": "module", "required": true},
+    {"id": "image_embeddings", "label": "Image Embeddings", "aliases": ["Image Features"], "role": "module", "required": true},
+    {"id": "text_embeddings", "label": "Text Embeddings", "aliases": ["Text Features"], "role": "module", "required": true},
+    {"id": "contrastive_objective", "label": "Contrastive Learning", "aliases": ["Contrastive Pre-training", "Contrastive Objective", "Image-Text Contrastive Loss", "Correct Pairings"], "role": "training", "required": true},
+    {"id": "class_descriptions", "label": "Class Descriptions", "aliases": ["Class Names", "Text Prompts"], "role": "input", "required": true},
+    {"id": "zero_shot_classifier", "label": "Zero-Shot Classifier", "aliases": ["Zero-shot Prediction", "Zero-shot Linear Classifier"], "role": "output", "required": true}
+  ],
+  "relations": [
+    {"source": "training_images", "target": "image_encoder", "type": "encoding", "required": true},
+    {"source": "training_text", "target": "text_encoder", "type": "encoding", "required": true},
+    {"source": "image_encoder", "target": "image_embeddings", "type": "data_flow", "required": true},
+    {"source": "text_encoder", "target": "text_embeddings", "type": "data_flow", "required": true},
+    {"source": "image_embeddings", "target": "contrastive_objective", "type": "alignment", "required": true},
+    {"source": "text_embeddings", "target": "contrastive_objective", "type": "alignment", "required": true},
+    {"source": "class_descriptions", "target": "text_encoder", "type": "encoding", "required": true},
+    {"source": "text_embeddings", "target": "zero_shot_classifier", "type": "classification", "required": true},
+    {"source": "image_embeddings", "target": "zero_shot_classifier", "type": "classification", "required": true}
+  ],
+  "forbidden_labels": ["Bounding Box Regression", "Mask Decoder", "Autoregressive Decoder", "Image Generator", "Region Proposals"],
+  "expected_reading_order": ["training_images", "image_encoder", "image_embeddings", "contrastive_objective", "training_text", "text_encoder", "text_embeddings", "zero_shot_classifier"],
+  "topology_requirements": {"primary_flow": "multimodal_alignment", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": true}
+}

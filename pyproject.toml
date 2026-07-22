@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ocr = [
+  "rapidocr-onnxruntime",
   "paddleocr",
   "easyocr"
 ]

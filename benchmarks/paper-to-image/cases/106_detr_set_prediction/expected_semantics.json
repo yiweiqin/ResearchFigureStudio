@@ -1,0 +1,28 @@
+{
+  "summary": "Human-authored semantic contract for DETR's end-to-end set prediction architecture.",
+  "entities": [
+    {"id": "input_image", "label": "Input Image", "aliases": ["Image"], "role": "input", "required": true},
+    {"id": "cnn_backbone", "label": "CNN Backbone", "aliases": ["Convolutional Backbone", "Backbone"], "role": "module", "required": true},
+    {"id": "transformer_encoder", "label": "Transformer Encoder", "aliases": ["Encoder"], "role": "module", "required": true},
+    {"id": "object_queries", "label": "Object Queries", "aliases": ["Learned Object Queries"], "role": "input", "required": true},
+    {"id": "transformer_decoder", "label": "Transformer Decoder", "aliases": ["Decoder"], "role": "module", "required": true},
+    {"id": "prediction_ffn", "label": "Prediction Feed-Forward Network", "aliases": ["Prediction FFN", "Feed Forward Network", "FFN"], "role": "module", "required": true},
+    {"id": "class_predictions", "label": "Class Predictions", "aliases": ["Class Labels", "Classes"], "role": "output", "required": true},
+    {"id": "box_predictions", "label": "Bounding Box Predictions", "aliases": ["Bounding Boxes", "Box Predictions"], "role": "output", "required": true},
+    {"id": "bipartite_matching", "label": "Bipartite Matching", "aliases": ["Hungarian Matching", "Set Prediction Loss"], "role": "training", "required": true}
+  ],
+  "relations": [
+    {"source": "input_image", "target": "cnn_backbone", "type": "data_flow", "required": true},
+    {"source": "cnn_backbone", "target": "transformer_encoder", "type": "data_flow", "required": true},
+    {"source": "transformer_encoder", "target": "transformer_decoder", "type": "data_flow", "required": true},
+    {"source": "object_queries", "target": "transformer_decoder", "type": "conditioning", "required": true},
+    {"source": "transformer_decoder", "target": "prediction_ffn", "type": "data_flow", "required": true},
+    {"source": "prediction_ffn", "target": "class_predictions", "type": "branch", "required": true},
+    {"source": "prediction_ffn", "target": "box_predictions", "type": "branch", "required": true},
+    {"source": "class_predictions", "target": "bipartite_matching", "type": "training_objective", "required": true},
+    {"source": "box_predictions", "target": "bipartite_matching", "type": "training_objective", "required": true}
+  ],
+  "forbidden_labels": ["Region Proposal Network", "RoIAlign", "Non-Maximum Suppression", "Anchor Boxes", "Mask Branch"],
+  "expected_reading_order": ["input_image", "cnn_backbone", "transformer_encoder", "object_queries", "transformer_decoder", "prediction_ffn", "class_predictions", "box_predictions"],
+  "topology_requirements": {"primary_flow": "left_to_right", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": false}
+}

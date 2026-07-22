@@ -697,3 +697,123 @@ def run_fast_benchmark_case(
     }
     write_json(Path(out) / "fast_benchmark_result.json", result)
     return result
+
+
+def run_fast_benchmark_suite(
+    benchmarks_root: str | Path,
+    out: str | Path,
+    case_ids: list[str] | None = None,
+    deadline_seconds: int = 180,
+    planner_mode: str = "vlm",
+    planner_model: str | None = None,
+    ocr_engine: str = "off",
+) -> dict[str, Any]:
+    root = Path(benchmarks_root).resolve()
+    target = ensure_dir(out).resolve()
+    selected = set(case_ids or [])
+    listing = list_benchmark_cases(root, suite="paper-to-image")
+    cases = [item for item in listing.get("cases", []) if item.get("valid") and (not selected or str(item.get("case_id")) in selected)]
+    results = []
+    for item in cases:
+        case_id = str(item.get("case_id"))
+        case_out = target / case_id
+        try:
+            result = run_fast_benchmark_case(
+                item["case_dir"],
+                case_out,
+                deadline_seconds=deadline_seconds,
+                planner_mode=planner_mode,
+                planner_model=planner_model,
+                ocr_engine=ocr_engine,
+            )
+        except Exception as exc:
+            result = {"summary": "Fast benchmark case raised an exception.", "ok": False, "case_id": case_id, "error": str(exc)}
+        run = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
+        benchmark = result.get("benchmark", {}) if isinstance(result.get("benchmark"), dict) else {}
+        metrics = benchmark.get("metrics", {}) if isinstance(benchmark.get("metrics"), dict) else {}
+        provider = run.get("provider", {}) if isinstance(run.get("provider"), dict) else {}
+        results.append({
+            "case_id": case_id,
+            "ok": bool(result.get("ok")),
+            "production_ready": bool(run.get("production_ready")),
+            "passed_planning_thresholds": bool(result.get("passed_planning_thresholds")),
+            "contract_source": run.get("contract_source"),
+            "cache_hit": bool(run.get("cache_hit")),
+            "document_cache_hit": bool(run.get("document_cache_hit")),
+            "elapsed_seconds": run.get("elapsed_seconds"),
+            "stage_timings": run.get("stage_timings", {}),
+            "provider": provider,
+            "plan_entity_recall": metrics.get("plan_entity_recall"),
+            "plan_relation_recall": metrics.get("plan_relation_recall"),
+            "plan_forbidden_content_count": metrics.get("plan_forbidden_content_count"),
+            "threshold_failures": benchmark.get("threshold_failures", []),
+            "error": result.get("error"),
+        })
+
+    def numbers(field: str) -> list[float]:
+        values = []
+        for item in results:
+            value = item.get(field)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        return values
+
+    def timing(name: str) -> list[float]:
+        return [float(item.get("stage_timings", {}).get(name)) for item in results if isinstance(item.get("stage_timings", {}).get(name), (int, float))]
+
+    def percentile(values: list[float], fraction: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * fraction) - 1))
+        return round(ordered[index], 4)
+
+    provider_attempts = sum(int(item.get("provider", {}).get("attempts") or 0) for item in results)
+    provider_retries = sum(int(item.get("provider", {}).get("retries_used") or 0) for item in results)
+    provider_calls = [item for item in results if item.get("provider", {}).get("attempts")]
+    failure_categories: dict[str, int] = {}
+    for item in provider_calls:
+        for category in item.get("provider", {}).get("failure_categories", []) or []:
+            failure_categories[str(category)] = failure_categories.get(str(category), 0) + 1
+    total_times = numbers("elapsed_seconds")
+    entity_scores = numbers("plan_entity_recall")
+    relation_scores = numbers("plan_relation_recall")
+    aggregate = {
+        "case_count": len(results),
+        "successful_run_count": sum(bool(item.get("ok")) for item in results),
+        "production_ready_count": sum(bool(item.get("production_ready")) for item in results),
+        "planning_threshold_pass_count": sum(bool(item.get("passed_planning_thresholds")) for item in results),
+        "cache_hit_count": sum(bool(item.get("cache_hit")) for item in results),
+        "cache_hit_rate": round(sum(bool(item.get("cache_hit")) for item in results) / max(1, len(results)), 4),
+        "document_cache_hit_count": sum(bool(item.get("document_cache_hit")) for item in results),
+        "document_cache_hit_rate": round(sum(bool(item.get("document_cache_hit")) for item in results) / max(1, len(results)), 4),
+        "mean_plan_entity_recall": _mean(entity_scores),
+        "mean_plan_relation_recall": _mean(relation_scores),
+        "forbidden_content_total": sum(int(item.get("plan_forbidden_content_count") or 0) for item in results),
+        "mean_total_seconds": _mean(total_times),
+        "p95_total_seconds": percentile(total_times, 0.95),
+        "mean_document_preparation_seconds": _mean(timing("document_preparation_seconds")),
+        "mean_document_extraction_seconds": _mean(timing("document_extraction_seconds")),
+        "mean_semantic_compilation_seconds": _mean(timing("semantic_compilation_seconds")),
+        "provider_call_count": len(provider_calls),
+        "provider_success_count": sum(bool(item.get("provider", {}).get("success")) for item in provider_calls),
+        "provider_success_rate": round(sum(bool(item.get("provider", {}).get("success")) for item in provider_calls) / len(provider_calls), 4) if provider_calls else None,
+        "provider_attempts": provider_attempts,
+        "provider_retries_used": provider_retries,
+        "provider_failure_categories": failure_categories,
+    }
+    report = {
+        "summary": "Fast paper framework benchmark suite completed.",
+        "ok": bool(results) and all(item.get("ok") for item in results),
+        "benchmarks_root": str(root),
+        "out_dir": str(target),
+        "planner_mode": planner_mode,
+        "planner_model": planner_model,
+        "deadline_seconds": deadline_seconds,
+        "ocr_engine": ocr_engine,
+        "selected_case_ids": [item.get("case_id") for item in cases],
+        "aggregate": aggregate,
+        "cases": results,
+    }
+    write_json(target / "fast_suite_report.json", report)
+    return report
