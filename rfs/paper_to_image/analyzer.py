@@ -18,11 +18,11 @@ from typing import Any, Callable
 
 MOJIBAKE_MARKERS = ("\ufffd", "Ã", "Â", "â€", "锟", "鈥", "銆", "鏅")
 SECTION_ALIASES = {
-    "abstract": ("abstract",),
-    "introduction": ("introduction", "background"),
-    "method": ("method", "methods", "methodology", "approach", "architecture", "system overview", "framework"),
-    "experiments": ("experiment", "experiments", "evaluation", "results"),
-    "conclusion": ("conclusion", "conclusions", "discussion"),
+    "abstract": ("abstract", "摘要", "概要", "초록"),
+    "introduction": ("introduction", "background", "引言", "介绍", "背景", "はじめに", "序論", "서론", "배경"),
+    "method": ("method", "methods", "methodology", "approach", "architecture", "system overview", "framework", "方法", "方法论", "架构", "系统概述", "框架", "手法", "方法論", "アーキテクチャ", "방법", "방법론", "아키텍처"),
+    "experiments": ("experiment", "experiments", "evaluation", "results", "实验", "评估", "结果", "実験", "評価", "結果", "실험", "평가", "결과"),
+    "conclusion": ("conclusion", "conclusions", "discussion", "结论", "讨论", "总结", "結論", "考察", "まとめ", "결론", "논의", "요약"),
 }
 
 
@@ -42,13 +42,23 @@ def _clean(text: str) -> str:
 
 
 def _normalized_compare_text(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _clean(text).casefold())
+    return "".join(char for char in _clean(text).casefold() if char.isalnum())
+
+
+def _lexical_units(text: str) -> list[str]:
+    clean = _clean(text).casefold()
+    units = [f"latin:{value}" for value in re.findall(r"[a-z]{3,}", clean)]
+    cjk = "".join(re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", clean))
+    if len(cjk) == 1:
+        units.append(f"cjk:{cjk}")
+    else:
+        units.extend(f"cjk:{cjk[index:index + 2]}" for index in range(len(cjk) - 1))
+    return units
 
 
 def _token_overlap_agreement(left: str, right: str) -> float | None:
-    token_pattern = re.compile(r"[a-z]{3,}|[\u3400-\u9fff]{2,}", re.IGNORECASE)
-    left_tokens = token_pattern.findall(_clean(left).casefold())
-    right_tokens = token_pattern.findall(_clean(right).casefold())
+    left_tokens = _lexical_units(left)
+    right_tokens = _lexical_units(right)
     if not left_tokens or not right_tokens:
         return None
     overlap = sum((Counter(left_tokens) & Counter(right_tokens)).values())
@@ -67,8 +77,11 @@ def _mojibake_rate(text: str) -> float:
 
 def _block_kind(text: str, width_ratio: float = 0.0) -> str:
     value = _clean(text)
-    if re.match(r"^(figure|fig\.|table)\s*[a-z0-9]+", value, re.IGNORECASE):
-        return "caption" if value.casefold().startswith(("figure", "fig.")) else "table"
+    if re.match(r"^(figure|fig\.|table|图|圖|表)\s*[a-z0-9一二三四五六七八九十]+", value, re.IGNORECASE):
+        return "caption" if value.casefold().startswith(("figure", "fig.", "图", "圖")) else "table"
+    section_aliases = tuple(alias.casefold() for aliases in SECTION_ALIASES.values() for alias in aliases)
+    if len(value) <= 100 and any(value.casefold() == alias or value.casefold().startswith((f"{alias} ", f"{alias}:", f"{alias}：")) for alias in section_aliases):
+        return "heading"
     if re.match(r"^(abstract|\d+(?:\.\d+)*\s+|[ivx]+[.)]\s+)(.{2,100})$", value, re.IGNORECASE) and len(value) <= 140:
         return "heading"
     if len(value) <= 180 and width_ratio >= 0.55 and not value.endswith((".", ",", ";")):
@@ -766,12 +779,18 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     continue
                 explicit = re.match(r"^(abstract|references|acknowledg(?:e)?ments?|appendix)$", line, re.IGNORECASE)
                 numbered = re.match(r"^\s*((?:\d+(?:\.\d+)*)|(?:[ivx]+))[.)]?\s+(.{2,120})$", line, re.IGNORECASE)
-                compact_line = re.sub(r"[^a-z]", "", line.casefold())
-                known = len(line) <= 60 and not line.endswith((".", ",", ";")) and any(compact_line.startswith(re.sub(r"[^a-z]", "", alias.casefold())) for aliases in SECTION_ALIASES.values() for alias in aliases)
+                compact_line = _normalized_compare_text(line)
+                known = len(line) <= 60 and not line.endswith((".", ",", ";")) and any(
+                    compact_alias and compact_line.startswith(compact_alias)
+                    for aliases in SECTION_ALIASES.values()
+                    for alias in aliases
+                    for compact_alias in [_normalized_compare_text(alias)]
+                )
                 if numbered:
                     title_candidate = numbered.group(2).strip()
                     first_alpha = next((char for char in title_candidate if char.isalpha()), "")
-                    if not first_alpha or not first_alpha.isupper() or re.search(r"[=±∑∫]", title_candidate) or title_candidate.endswith(".") or len(title_candidate) > 80 or len(title_candidate.split()) > 10:
+                    has_case = bool(first_alpha and first_alpha.lower() != first_alpha.upper())
+                    if not first_alpha or (has_case and not first_alpha.isupper()) or re.search(r"[=±∑∫]", title_candidate) or title_candidate.endswith(".") or len(title_candidate) > 80 or len(title_candidate.split()) > 10:
                         numbered = None
                 if not (explicit or numbered or known):
                     continue
@@ -795,7 +814,7 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
                 parent = block.get("parent_block")
                 continuation = []
                 for following in page_blocks[block_index + 1:]:
-                    if parent is None or following.get("parent_block") != parent or re.match(r"^(figure|fig\.|table)\s*\d", str(following.get("text") or ""), re.IGNORECASE):
+                    if parent is None or following.get("parent_block") != parent or re.match(r"^(figure|fig\.|table|图|圖|表)\s*[\d一二三四五六七八九十]", str(following.get("text") or ""), re.IGNORECASE):
                         break
                     continuation.append(str(following.get("text") or ""))
                 if continuation:
@@ -810,9 +829,9 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
 
 def _section_coverage(pages: list[dict[str, Any]], sections: list[dict[str, Any]]) -> dict[str, bool]:
     candidates = ("\n".join(item["title"] for item in sections) + "\n" + "\n".join(page.get("text", "") for page in pages)).casefold()
-    compact = re.sub(r"[^a-z]", "", candidates)
+    compact = _normalized_compare_text(candidates)
     return {
-        name: any(re.search(rf"\b{re.escape(alias)}\b", candidates) or re.sub(r"[^a-z]", "", alias.casefold()) in compact for alias in aliases)
+        name: any(re.search(rf"\b{re.escape(alias)}\b", candidates) or (_normalized_compare_text(alias) and _normalized_compare_text(alias) in compact) for alias in aliases)
         for name, aliases in SECTION_ALIASES.items()
     }
 

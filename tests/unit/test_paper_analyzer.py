@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _column_groups, _filter_ocr_margin_noise, _prioritize_ocr_candidates, _rapidocr_worker_count, _token_overlap_agreement, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 from rfs.reference_text_extractor import _positive_ocr_setting
 
@@ -96,6 +96,22 @@ class PaperAnalyzerTests(unittest.TestCase):
         poppler = native + " hidden latex accessibility expansion with many additional formula tokens"
 
         self.assertEqual(_token_overlap_agreement(native, poppler), 1.0)
+
+    def test_unicode_quality_gates_and_cjk_parser_agreement(self):
+        native = "摘要 本文提出一个多模态框架，用于图像编码与文本生成。"
+        poppler = "摘 要 本 文 提 出 一 个 多 模 态 框 架，用 于 图 像 编 码 与 文 本 生 成。"
+
+        self.assertGreater(len(_normalized_compare_text(native)), 20)
+        self.assertEqual(_token_overlap_agreement(native, poppler), 1.0)
+
+    def test_cjk_section_coverage_and_caption_kinds(self):
+        pages = [{"page": 1, "text": "摘要\n1 引言\n2 方法\n3 实验\n4 结论"}]
+        coverage = _section_coverage(pages, [])
+
+        self.assertTrue(all(coverage.values()))
+        self.assertEqual(_block_kind("图 1 系统框架概览"), "caption")
+        self.assertEqual(_block_kind("表 2 实验结果"), "table")
+        self.assertEqual(_block_kind("2 方法"), "heading")
 
     def test_three_column_blocks_are_sorted_column_major(self):
         def draw(page):

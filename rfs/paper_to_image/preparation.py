@@ -358,20 +358,24 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     def choose_input_target(label: str) -> dict[str, Any] | None:
         preferences = []
         low = label.casefold()
-        if "prompt" in low:
-            preferences = ["prompt encoder", "encoder", "decoder"]
-        elif "image" in low or "video" in low:
-            preferences = ["patch", "image encoder", "backbone", "encoder"]
-        elif any(term in low for term in ("text", "audio", "depth", "thermal", "imu")):
-            preferences = [f"{next((term for term in ('text', 'audio', 'depth', 'thermal', 'imu') if term in low), '')} encoder", "modality encoders", "encoder"]
+        if any(term in low for term in ("prompt", "提示", "プロンプト", "프롬프트")):
+            preferences = ["prompt encoder", "提示编码器", "提示編碼器", "プロンプトエンコーダ", "프롬프트 인코더", "encoder", "decoder"]
+        elif any(term in low for term in ("image", "video", "图像", "圖像", "影像", "视频", "影片", "画像", "動画", "이미지", "영상")):
+            preferences = ["patch", "image encoder", "图像编码器", "圖像編碼器", "画像エンコーダ", "이미지 인코더", "backbone", "encoder"]
+        elif any(term in low for term in ("text", "文本", "文字", "テキスト", "텍스트")):
+            preferences = ["text encoder", "文本编码器", "文本編碼器", "テキストエンコーダ", "텍스트 인코더", "modality encoders", "encoder"]
+        elif any(term in low for term in ("audio", "音频", "音訊", "音声", "오디오")):
+            preferences = ["audio encoder", "音频编码器", "音訊編碼器", "音声エンコーダ", "오디오 인코더", "modality encoders", "encoder"]
+        elif any(term in low for term in ("depth", "thermal", "imu", "深度", "热成像", "熱成像")):
+            preferences = ["modality encoders", "encoder", "编码器", "編碼器", "エンコーダ", "인코더"]
         for preference in preferences:
             match = next((module for module in modules if preference and preference in _item_label(module).casefold()), None)
             if match:
                 return match
-        return modules[0] if modules else None
+        return None
     for item in spec.get("inputs", []) if isinstance(spec.get("inputs"), list) else []:
         source = str(item.get("id"))
-        if not source:
+        if not source or source in outgoing:
             continue
         target = choose_input_target(_item_label(item))
         if target:
@@ -385,7 +389,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     sink_modules = [item for item in modules if str(item.get("id")) not in module_sources]
     for item in spec.get("outputs", []) if isinstance(spec.get("outputs"), list) else []:
         target_id = str(item.get("id"))
-        if not target_id:
+        if not target_id or target_id in incoming:
             continue
         output_label = _item_label(item).casefold()
         source = next((module for module in reversed(modules) if any(term in _item_label(module).casefold() for term in ("head", "decoder", "refine", "classifier", "predict"))), None)
@@ -568,7 +572,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 13, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 15, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"

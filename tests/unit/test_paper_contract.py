@@ -100,6 +100,59 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(spec["modules"][0]["evidence_ids"], ["E0001"])
         self.assertIn("encoder", plan["contract_completion_report"]["grounded_entities"])
 
+    def test_contract_does_not_add_cross_modal_edges_to_connected_inputs(self):
+        parsed = {"evidence": [{"id": "E0001", "page": 1, "text": "图像进入图像编码器，论文文本进入文本编码器。", "confidence": 1.0}]}
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [
+                    {"id": "image", "name": "图像", "evidence_ids": ["E0001"]},
+                    {"id": "text", "name": "论文文本", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "image_encoder", "name": "图像编码器", "evidence_ids": ["E0001"]},
+                    {"id": "text_encoder", "name": "文本编码器", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source": "image", "target": "image_encoder", "evidence_ids": ["E0001"]},
+                    {"source": "text", "target": "text_encoder", "evidence_ids": ["E0001"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertEqual(pairs, {("image", "image_encoder"), ("text", "text_encoder")})
+
+    def test_contract_leaves_unknown_input_unconnected_instead_of_guessing(self):
+        parsed = {"evidence": [{"id": "E0001", "page": 1, "text": "A scientific system contains two modules.", "confidence": 1.0}]}
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "signal", "name": "Scientific Signal", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "first", "name": "First Module", "evidence_ids": ["E0001"]},
+                    {"id": "second", "name": "Second Module", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertFalse(any(item["source"] == "signal" for item in spec["relations"]))
+
     def test_grounding_rejects_relation_without_evidence(self):
         plan = {
             "figure_specification": {
