@@ -462,6 +462,7 @@ def plan_fast_paper_contract(
     timeout_seconds: int = 45,
     retries: int = 2,
     evidence_max_chars: int = 36000,
+    deadline_at: float | None = None,
 ) -> tuple[dict, dict]:
     prompt = _fast_planner_prompt(parsed, preferences, evidence_max_chars=evidence_max_chars)
     metadata: dict[str, Any] = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt, "provider": {}}
@@ -475,6 +476,7 @@ def plan_fast_paper_contract(
                 timeout=max(10, int(timeout_seconds)),
                 retries=max(0, int(retries)),
                 call_metadata=metadata["provider"],
+                deadline_at=deadline_at,
             )
             metadata["model"] = resolved
             return _compile_fast_plan(raw, preferences), metadata
@@ -485,13 +487,13 @@ def plan_fast_paper_contract(
     return normalize_plan(_heuristic_plan(parsed, preferences), preferences), metadata
 
 
-def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1, evidence_max_chars: int = 58000) -> tuple[dict, dict]:
+def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: str | None = None, reference_images: list[str] | None = None, paper_review: dict | None = None, timeout_seconds: int = 240, retries: int = 1, evidence_max_chars: int = 58000, deadline_at: float | None = None) -> tuple[dict, dict]:
     prompt = _planner_prompt(parsed, preferences, paper_review=paper_review, evidence_max_chars=evidence_max_chars)
     metadata = {"requested_mode": mode, "mode": mode, "model": None, "warning": None, "prompt": prompt, "provider": {}}
     if mode == "vlm" and vlm_credentials_available():
         resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_MODEL", "RFS_PAPER_PLANNER_MODEL", explicit_model=model)
         try:
-            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=max(10, int(timeout_seconds)), retries=max(0, int(retries)), call_metadata=metadata["provider"])
+            raw = call_vlm_json(prompt, reference_images or [], model=resolved, timeout=max(10, int(timeout_seconds)), retries=max(0, int(retries)), call_metadata=metadata["provider"], deadline_at=deadline_at)
             metadata["model"] = resolved
             return normalize_plan(raw, preferences), metadata
         except Exception as exc:

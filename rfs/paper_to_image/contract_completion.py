@@ -595,6 +595,32 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
         found[rule.key] = item
         added_entities.append(item["id"])
 
+    if conservative_expansion:
+        for _pass in range(3):
+            progress = False
+            connected_keys = set(found)
+            for rule in CONCEPT_RULES:
+                if rule.key in found or _find_existing(spec, rule):
+                    continue
+                connected_to_found = any(
+                    (source_key == rule.key and target_key in connected_keys)
+                    or (target_key == rule.key and source_key in connected_keys)
+                    for source_key, target_key, _ in RELATION_RULES
+                )
+                if not connected_to_found:
+                    continue
+                matches = _find_matches(rule, selected, []) or _find_matches(rule, [], relevant_non_background)
+                if not matches:
+                    continue
+                evidence_ids = list(dict.fromkeys(str(item.get("id")) for item in matches if item.get("id")))
+                item = {"id": _stable_id(rule.field.rstrip("s"), rule.label), "name": rule.label, "role": rule.role, "evidence_ids": evidence_ids}
+                spec.setdefault(rule.field, []).append(item)
+                found[rule.key] = item
+                added_entities.append(item["id"])
+                progress = True
+            if not progress:
+                break
+
     for rule in CONCEPT_RULES:
         if rule.key not in found:
             existing = _find_existing(spec, rule)

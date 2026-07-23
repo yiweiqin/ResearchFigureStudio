@@ -801,6 +801,7 @@ def _read_pdf_pages(
     ocr_lang: str,
     ocr_adapter: Callable | None,
     max_ocr_pages: int,
+    ocr_rescue_min_remaining: float,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     try:
         import fitz
@@ -898,7 +899,7 @@ def _read_pdf_pages(
             if deadline_at is not None:
                 remaining = deadline_at - time.monotonic()
                 if rescue_page:
-                    if remaining < 45.0:
+                    if remaining < max(25.0, float(ocr_rescue_min_remaining)):
                         warnings.append("OCR stopped to preserve deadline validation budget")
                         return False
                     return True
@@ -970,6 +971,7 @@ def _read_pdf_pages(
         "ocr_schedule_complete": schedule_complete,
         "ocr_run_complete": run_complete,
         "ocr_worker_count": ocr_worker_count,
+        "ocr_rescue_min_remaining_seconds": float(ocr_rescue_min_remaining),
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
         "elapsed_seconds": elapsed,
@@ -1347,6 +1349,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_schedule_complete": bool(details.get("ocr_schedule_complete", True)),
         "ocr_run_complete": bool(details.get("ocr_run_complete", True)),
         "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
+        "ocr_rescue_min_remaining_seconds": float(details.get("ocr_rescue_min_remaining_seconds") or 45.0),
         "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
         "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,
@@ -1378,13 +1381,14 @@ def parse_paper(
     ocr_lang: str = "en_ch",
     ocr_adapter: Callable | None = None,
     max_ocr_pages: int = 6,
+    ocr_rescue_min_remaining: float = 45.0,
 ) -> dict[str, Any]:
     source = Path(path).resolve()
     if not source.exists():
         raise FileNotFoundError(f"Paper does not exist: {source}")
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     if source.suffix.lower() == ".pdf":
-        pages, details = _read_pdf_pages(source, max_chars, deadline_at, ocr_engine, ocr_lang, ocr_adapter, max_ocr_pages)
+        pages, details = _read_pdf_pages(source, max_chars, deadline_at, ocr_engine, ocr_lang, ocr_adapter, max_ocr_pages, ocr_rescue_min_remaining)
         loader = "structured-pdf"
     else:
         pages, loader = _read_non_pdf_pages(source, max_chars)

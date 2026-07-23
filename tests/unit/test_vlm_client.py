@@ -29,6 +29,19 @@ class VlmClientTests(unittest.TestCase):
         self.assertEqual(metadata["failure_categories"], ["tls"])
         self.assertNotIn("secret-token", str(metadata))
 
+    @patch("rfs.vlm_client.requests.post")
+    def test_expired_deadline_skips_provider_call(self, post):
+        metadata = {}
+        with patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-token"}, clear=False):
+            with self.assertRaisesRegex(TimeoutError, "deadline budget exhausted"):
+                call_vlm_json("Return JSON", [], model="test-model", timeout=30, retries=2, call_metadata=metadata, deadline_at=0.0)
+
+        post.assert_not_called()
+        self.assertEqual(metadata["attempts"], 0)
+        self.assertEqual(metadata["retries_used"], 0)
+        self.assertEqual(metadata["failure_categories"], ["timeout"])
+        self.assertTrue(metadata["deadline_reached"])
+
 
 if __name__ == "__main__":
     unittest.main()

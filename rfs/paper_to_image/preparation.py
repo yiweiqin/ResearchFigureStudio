@@ -755,10 +755,12 @@ def prepare_paper_figure_contract(
 
     deadline = max(30, int(deadline_seconds))
     deadline_at = started + deadline
+    provider_deadline_at = deadline_at - 15.0
+    ocr_rescue_min_remaining = 90.0 if fast_mode and planner_mode == "vlm" and deadline <= 240 else 45.0
     parsed = None if ocr_adapter else read_document_cache(archived_paper, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
     document_cache_hit = parsed is not None
     if parsed is None:
-        parsed = parse_paper(archived_paper, deadline_at=deadline_at, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter)
+        parsed = parse_paper(archived_paper, deadline_at=deadline_at, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, ocr_rescue_min_remaining=ocr_rescue_min_remaining)
         if not ocr_adapter:
             write_document_cache(archived_paper, parsed, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
     document_preparation_seconds = round(time.monotonic() - started, 3)
@@ -786,7 +788,7 @@ def prepare_paper_figure_contract(
     selected_domain = detect_domain_profile(parsed, explicit=domain_profile)
     write_json(root / "domain_profile.json", selected_domain)
     if fast_mode:
-        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        remaining = max(0, int(provider_deadline_at - time.monotonic()))
         effective_mode = planner_mode if remaining >= 25 else "heuristic"
         cache_path = _fast_cache_path(parsed, str(planner_model or ""), preferences)
         if cache_path.exists() and effective_mode == "vlm" and _semantic_cache_safe(parsed):
@@ -801,29 +803,32 @@ def prepare_paper_figure_contract(
                 timeout_seconds=min(35, remaining),
                 retries=2,
                 evidence_max_chars=36000,
+                deadline_at=provider_deadline_at,
             )
         if planner_metadata.get("mode") == "vlm":
             paper_review = _paper_review_from_plan(plan, selected_domain)
             review_metadata = {"summary": "Paper review derived from the successful fast VLM plan.", "requested_mode": planner_mode, "mode": "derived_from_vlm_plan", "model": planner_metadata.get("model"), "warning": None, "prompt": ""}
         else:
-            remaining = max(10, int(deadline_at - time.monotonic() - 15))
+            remaining = max(0, int(provider_deadline_at - time.monotonic()))
+            review_mode = planner_mode if remaining >= 25 else "heuristic"
             paper_review, review_metadata = build_paper_review(
                 parsed,
                 selected_domain,
-                mode=effective_mode,
+                mode=review_mode,
                 model=planner_model,
-                timeout_seconds=min(35, remaining),
+                timeout_seconds=max(1, min(35, remaining)),
                 retries=1,
                 evidence_max_chars=36000,
+                deadline_at=provider_deadline_at,
             )
             if review_metadata.get("mode") == "vlm":
                 plan = build_review_grounded_plan(parsed, preferences, paper_review)
                 planner_metadata = {**planner_metadata, "mode": "review_grounded_vlm", "model": review_metadata.get("model"), "warning": planner_metadata.get("warning")}
     else:
-        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        remaining = max(0, int(provider_deadline_at - time.monotonic()))
         effective_mode = planner_mode if remaining >= 30 else "heuristic"
-        paper_review, review_metadata = build_paper_review(parsed, selected_domain, mode=effective_mode, model=planner_model, timeout_seconds=min(35, remaining), retries=1)
-        remaining = max(10, int(deadline_at - time.monotonic() - 15))
+        paper_review, review_metadata = build_paper_review(parsed, selected_domain, mode=effective_mode, model=planner_model, timeout_seconds=max(1, min(35, remaining)), retries=1, deadline_at=provider_deadline_at)
+        remaining = max(0, int(provider_deadline_at - time.monotonic()))
         planning_mode = effective_mode if remaining >= 25 else "heuristic"
         plan, planner_metadata = plan_paper_image(
             parsed,
@@ -832,8 +837,9 @@ def prepare_paper_figure_contract(
             model=planner_model,
             reference_images=archived_positive + archived_negative,
             paper_review=paper_review,
-            timeout_seconds=min(35, remaining),
+            timeout_seconds=max(1, min(35, remaining)),
             retries=1,
+            deadline_at=provider_deadline_at,
         )
         fallback_plan = build_review_grounded_plan(parsed, preferences, paper_review)
         if review_metadata.get("mode") == "vlm":
@@ -934,6 +940,7 @@ def prepare_paper_figure_contract(
             "ocr_schedule_complete": parsed["extraction_report"].get("ocr_schedule_complete", True),
             "ocr_run_complete": parsed["extraction_report"].get("ocr_run_complete", True),
             "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
+            "ocr_rescue_min_remaining_seconds": parsed["extraction_report"].get("ocr_rescue_min_remaining_seconds", 45.0),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
             "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),
         },

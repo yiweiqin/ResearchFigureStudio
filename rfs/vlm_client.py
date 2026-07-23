@@ -65,6 +65,7 @@ def call_vlm_json(
     timeout: int = 180,
     retries: int = 1,
     call_metadata: dict[str, Any] | None = None,
+    deadline_at: float | None = None,
 ) -> dict:
     api_base = os.getenv("API_BASE", "").rstrip("/")
     api_key = os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -97,15 +98,25 @@ def call_vlm_json(
             "elapsed_seconds": 0.0,
             "failure_categories": [],
         })
+    attempts_made = 0
     for attempt in range(attempts):
+        request_timeout = max(0.1, float(timeout))
+        if deadline_at is not None:
+            remaining = float(deadline_at) - time.monotonic()
+            if remaining <= 0.1:
+                last_error = TimeoutError("VLM deadline budget exhausted")
+                failures.append({"attempt": attempts_made, "category": "timeout"})
+                break
+            request_timeout = min(request_timeout, remaining)
+        attempts_made += 1
         if call_metadata is not None:
-            call_metadata["attempts"] = attempt + 1
+            call_metadata["attempts"] = attempts_made
         try:
             response = requests.post(
                 f"{api_base}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 data=json.dumps(payload),
-                timeout=timeout,
+                timeout=request_timeout,
             )
             response.raise_for_status()
             content_text = response.json()["choices"][0]["message"]["content"]
@@ -120,14 +131,18 @@ def call_vlm_json(
             return result
         except Exception as exc:
             last_error = exc
-            failures.append({"attempt": attempt + 1, "category": _error_category(exc)})
+            failures.append({"attempt": attempts_made, "category": _error_category(exc)})
             if attempt < attempts - 1:
-                time.sleep(min(2.0, 0.75 * (2 ** attempt)))
+                delay = min(2.0, 0.75 * (2 ** attempt))
+                if deadline_at is not None and float(deadline_at) - time.monotonic() <= delay + 0.1:
+                    break
+                time.sleep(delay)
     if call_metadata is not None:
         call_metadata.update({
             "success": False,
-            "retries_used": max(0, attempts - 1),
+            "retries_used": max(0, attempts_made - 1),
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "failure_categories": list(dict.fromkeys(item["category"] for item in failures)),
+            "deadline_reached": bool(deadline_at is not None and time.monotonic() >= float(deadline_at)),
         })
     raise last_error or RuntimeError("VLM call failed")

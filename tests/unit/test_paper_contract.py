@@ -820,6 +820,43 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(all(item.get("evidence_ids") for item in spec["relations"] if item.get("source") in {"embedding_layer", "transformer_encoder"} and item.get("target") in {"transformer_encoder", "mlm_head"}))
         self.assertEqual(spec["research_problem"]["evidence_ids"], ["E0006", "E0007"])
 
+    def test_rich_contract_expands_newly_grounded_intermediate_to_evidence_neighbors(self):
+        caption = "Figure 1: Overall pre-training and fine-tuning procedures."
+        parsed = {
+            "page_count": 16,
+            "document_index": {"figures": [{"page": 3, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 3, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 0.99},
+                {"id": "E0002", "page": 4, "kind": "paragraph", "text": "For a given token, its input representation is", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0003", "page": 4, "kind": "paragraph", "text": "constructed by summing the corresponding token,", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0004", "page": 4, "kind": "paragraph", "text": "segment, and position embeddings.", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0005", "page": 4, "kind": "paragraph", "text": "The architecture is a multi-layer bidirectional Transformer encoder.", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0006", "page": 4, "kind": "paragraph", "text": "We train with Masked LM and Next Sentence Prediction before fine-tuning on downstream tasks.", "section_hint": "Method", "confidence": 0.98},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [{"id": "sentence_pair", "name": "Sentence Pair", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "bert", "name": "Bidirectional Transformer Encoder", "evidence_ids": ["E0005"]},
+                    {"id": "mlm", "name": "Masked LM", "evidence_ids": ["E0006"]},
+                    {"id": "nsp", "name": "Next Sentence Prediction", "evidence_ids": ["E0006"]},
+                ],
+                "outputs": [{"id": "tasks", "name": "Downstream Tasks", "evidence_ids": ["E0006"]}],
+                "relations": [{"source": "bert", "target": "mlm", "type": "training_objective", "evidence_ids": ["E0006"]}],
+                "innovations": [], "must_show": [], "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Input Sequence", "Token Embeddings", "Segment Embeddings", "Position Embeddings", "Input Representation"):
+            self.assertIn(label, ids)
+        self.assertIn((ids["Input Representation"], ids["Bidirectional Transformer Encoder"]), pairs)
+
 
 if __name__ == "__main__":
     unittest.main()

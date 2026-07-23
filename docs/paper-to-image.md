@@ -39,6 +39,10 @@ When a deadline is active, every local OCR page runs in an isolated worker proce
 
 For a fully scanned long paper with no native section signals, the six-page fallback schedule covers pages 1-4 first, then a page near 85% of the document and finally a middle page. Under a deadline, the first wave uses adaptive page concurrency; the two coverage-rescue pages run one at a time with two OCR threads whenever at least 45 seconds remain. This biases scarce OCR time toward the abstract, overview figure, early method details, and likely appendix/conclusion architecture evidence without weakening the hard cutoff.
 
+In the 180-second fast path with `planner_mode=vlm`, rescue pages require at least 90 seconds remaining so the workflow can preserve a model-call and validation budget. Heuristic planning and PDF inspection retain the 45-second rescue threshold. The effective value is recorded as `ocr_rescue_min_remaining_seconds`.
+
+Planner and review retries share one absolute provider deadline rather than receiving a fresh timeout per attempt. If the service is slow or unavailable, each request is clamped to the remaining budget, further retries stop at the cutoff, and any later semantic stage switches to the deterministic evidence-grounded fallback.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
