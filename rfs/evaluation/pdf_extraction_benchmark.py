@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import math
 import time
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any, Callable
 
 from ..paper_to_image.analyzer import parse_paper
 from ..utils import ensure_dir, write_json
+from .scanned_pdf import rasterize_pdf_as_scan
 
 
 def _save_document(document: Any, target: Path) -> Path:
@@ -149,6 +151,25 @@ def _rotated_repeated_margin_fixture(target: Path) -> Path:
         page.insert_text((45, 75), f"{page_number} Method Stage", fontname="hebo", fontsize=12)
         page.insert_textbox((45, 105, 555, 220), f"Stage {page_number} preserves rotated scientific evidence and semantic reading order.", fontsize=10)
         page.set_rotation(90)
+    return _save_document(document, target)
+
+
+def _skewed_scan_fixture(source: Path, target: Path, angle: float = 2.0) -> Path:
+    import fitz
+    from PIL import Image
+
+    source_document = fitz.open(str(source))
+    try:
+        pixmap = source_document[0].get_pixmap(dpi=144, alpha=False)
+        image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+    finally:
+        source_document.close()
+    rotated = image.rotate(float(angle), resample=Image.Resampling.BICUBIC, expand=False, fillcolor="white")
+    payload = io.BytesIO()
+    rotated.save(payload, format="PNG")
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_image(page.rect, stream=payload.getvalue())
     return _save_document(document, target)
 
 
@@ -344,6 +365,8 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     ]
 
     if ocr_engine != "off":
+        scanned_two_column = rasterize_pdf_as_scan(native, fixtures / "scanned_two_column.pdf", dpi=144)
+        skewed_two_column = _skewed_scan_fixture(native, fixtures / "skewed_two_column.pdf")
         results.append(_run_case(
             "mixed_scan_runtime_ocr",
             mixed,
@@ -357,6 +380,30 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             ],
             ocr_engine=ocr_engine,
             preview_page=1,
+        ))
+        results.append(_run_case(
+            "scanned_two_column_runtime_ocr",
+            scanned_two_column,
+            root,
+            lambda parsed: [
+                _check("two_columns", parsed["extraction_report"].get("max_column_count") == 2, parsed["extraction_report"].get("max_column_count"), 2),
+                _check("reading_order", all(parsed["pages"][0]["text"].index(left) < parsed["pages"][0]["text"].index(right) for left, right in (("LEFT_TOP", "LEFT_BOTTOM"), ("LEFT_BOTTOM", "RIGHT_TOP"), ("RIGHT_TOP", "RIGHT_BOTTOM"))), parsed["pages"][0]["text"], "LEFT_TOP < LEFT_BOTTOM < RIGHT_TOP < RIGHT_BOTTOM"),
+                _check("headings", all(value in parsed.get("headings", []) for value in ("Abstract", "Method", "Conclusion")), parsed.get("headings", []), "Abstract/Method/Conclusion"),
+                _check("caption", parsed["extraction_report"].get("figure_caption_count") == 1, parsed["extraction_report"].get("figure_caption_count"), 1),
+            ],
+            ocr_engine=ocr_engine,
+        ))
+        results.append(_run_case(
+            "skewed_two_column_runtime_ocr",
+            skewed_two_column,
+            root,
+            lambda parsed: [
+                _check("two_columns", parsed["extraction_report"].get("max_column_count") == 2, parsed["extraction_report"].get("max_column_count"), 2),
+                _check("reading_order", all(parsed["pages"][0]["text"].index(left) < parsed["pages"][0]["text"].index(right) for left, right in (("LEFT_TOP", "LEFT_BOTTOM"), ("LEFT_BOTTOM", "RIGHT_TOP"), ("RIGHT_TOP", "RIGHT_BOTTOM"))), parsed["pages"][0]["text"], "LEFT_TOP < LEFT_BOTTOM < RIGHT_TOP < RIGHT_BOTTOM"),
+                _check("mean_confidence", float(parsed["extraction_report"].get("mean_ocr_confidence") or 0.0) >= 0.9, parsed["extraction_report"].get("mean_ocr_confidence"), ">=0.9"),
+                _check("caption", parsed["extraction_report"].get("figure_caption_count") == 1, parsed["extraction_report"].get("figure_caption_count"), 1),
+            ],
+            ocr_engine=ocr_engine,
         ))
 
     elapsed = [float(item.get("elapsed_seconds") or 0.0) for item in results]

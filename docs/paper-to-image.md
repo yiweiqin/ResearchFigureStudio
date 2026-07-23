@@ -61,6 +61,8 @@ Section headings are deduplicated only within their concrete page/block occurren
 
 PDF inputs receive a lightweight container preflight before pypdf, Poppler, or PyMuPDF extraction. Missing `%PDF-` headers and missing tail `%%EOF` markers return stable `ValueError` messages immediately; encrypted documents retain the explicit password-required error. This keeps `--json` failures concise and prevents damaged files from entering either cache.
 
+When `benchmark pdf-suite` runs with a real OCR engine, it now includes fully rasterized two-column and 2-degree skewed two-column pages in addition to the mixed native/scan fixture. These cases enforce column reconstruction, left-column-first reading order, section recovery, caption recovery, and OCR confidence using the actual runtime engine.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
