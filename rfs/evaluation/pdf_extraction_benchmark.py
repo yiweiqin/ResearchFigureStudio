@@ -128,6 +128,23 @@ def _native_chinese_fixture(target: Path) -> Path:
     return _save_document(document, target)
 
 
+def _native_spanish_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_text((45, 50), "Resumen", fontname="hebo", fontsize=13)
+    page.insert_textbox((45, 75, 555, 145), "Proponemos un codificador de documentos que transforma el artículo en evidencia estructurada y genera una figura editable.", fontsize=10)
+    page.insert_text((45, 185), "2 Método", fontname="hebo", fontsize=13)
+    page.insert_textbox((45, 210, 555, 295), "El documento de entrada pasa al codificador de documentos. El decodificador de relaciones conecta las entidades y produce una salida editable.", fontsize=10)
+    page.insert_textbox((45, 335, 555, 395), "Figura 1: Codificador de documentos, decodificador de relaciones y salida editable.", fontsize=10)
+    page.insert_text((45, 455), "3 Experimentos", fontname="hebo", fontsize=13)
+    page.insert_textbox((45, 480, 555, 545), "Evaluamos la recuperación de entidades, las relaciones correctas y el tiempo de procesamiento.", fontsize=10)
+    page.insert_text((45, 600), "4 Conclusión", fontname="hebo", fontsize=13)
+    page.insert_textbox((45, 625, 555, 690), "El método conserva la terminología científica y las referencias de evidencia.", fontsize=10)
+    return _save_document(document, target)
+
+
 def _hyphenated_native_fixture(target: Path) -> Path:
     import fitz
 
@@ -311,6 +328,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     mixed = _mixed_scan_fixture(fixtures / "mixed_scan.pdf")
     repeated_margin = _repeated_margin_fixture(fixtures / "repeated_margin_noise.pdf")
     chinese = _native_chinese_fixture(fixtures / "native_chinese.pdf")
+    spanish = _native_spanish_fixture(fixtures / "native_spanish.pdf")
     hyphenated = _hyphenated_native_fixture(fixtures / "hyphenated_native.pdf")
     formula_table = _formula_table_fixture(fixtures / "formula_table_dense.pdf")
     rotated_margin = _rotated_repeated_margin_fixture(fixtures / "rotated_repeated_margin.pdf")
@@ -386,6 +404,17 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             ],
         ),
         _run_case(
+            "native_spanish",
+            spanish,
+            root,
+            lambda parsed: [
+                _check("unicode_preserved", "artículo" in parsed["pages"][0]["text"] and "Conclusión" in parsed["pages"][0]["text"], parsed["pages"][0]["text"], "Spanish accents preserved"),
+                _check("priority_sections", all(parsed["extraction_report"].get("section_coverage", {}).get(name) for name in ("abstract", "method", "experiments", "conclusion")), parsed["extraction_report"].get("section_coverage"), "Spanish abstract/method/experiments/conclusion"),
+                _check("figure_caption", any("codificador de documentos" in str(item.get("caption") or "").casefold() for item in parsed.get("document_index", {}).get("figures", [])), parsed.get("document_index", {}).get("figures", []), "Spanish Figura 1 caption"),
+                _check("source_language_preserved", "document encoder" not in parsed["pages"][0]["text"].casefold() and "codificador de documentos" in parsed["pages"][0]["text"].casefold(), parsed["pages"][0]["text"], "Spanish terminology without English translation"),
+            ],
+        ),
+        _run_case(
             "hyphenated_native",
             hyphenated,
             root,
@@ -427,6 +456,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
         skewed_two_column = _skewed_scan_fixture(native, fixtures / "skewed_two_column.pdf")
         degraded_two_column = _degraded_scan_fixture(native, fixtures / "degraded_two_column.pdf")
         scanned_formula_table = rasterize_pdf_as_scan(formula_table, fixtures / "scanned_formula_table.pdf", dpi=144)
+        scanned_spanish = rasterize_pdf_as_scan(spanish, fixtures / "scanned_spanish.pdf", dpi=144)
         results.append(_run_case(
             "mixed_scan_runtime_ocr",
             mixed,
@@ -486,6 +516,19 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
                 _check("table_columns", parsed["document_index"]["tables"][0].get("columns") == ["Model", "Depth", "Accuracy"], parsed["document_index"]["tables"][0].get("columns"), ["Model", "Depth", "Accuracy"]),
                 _check("large_row", any(row.get("values") == ["Large", "12", "84.7"] for row in parsed["document_index"]["tables"][0].get("rows", [])), parsed["document_index"]["tables"][0].get("rows"), ["Large", "12", "84.7"]),
                 _check("structured_evidence", any(item.get("kind") == "table" and "Row: Large | 12 | 84.7" in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", []) if item.get("kind") == "table"], "structured Large row"),
+            ],
+            ocr_engine=ocr_engine,
+        ))
+        results.append(_run_case(
+            "scanned_spanish_runtime_ocr",
+            scanned_spanish,
+            root,
+            lambda parsed: [
+                _check("ocr_completed", parsed["extraction_report"].get("ocr_pages") == [1], parsed["extraction_report"].get("ocr_pages"), [1]),
+                _check("priority_sections", all(parsed["extraction_report"].get("section_coverage", {}).get(name) for name in ("abstract", "method", "experiments", "conclusion")), parsed["extraction_report"].get("section_coverage"), "Spanish abstract/method/experiments/conclusion"),
+                _check("figure_caption", parsed["extraction_report"].get("figure_caption_count") == 1, parsed["extraction_report"].get("figure_caption_count"), 1),
+                _check("source_language_preserved", "document encoder" not in parsed["pages"][0]["text"].casefold() and "codificador de documentos" in parsed["pages"][0]["text"].casefold(), parsed["pages"][0]["text"], "Spanish terminology without English translation"),
+                _check("quality_gate_passed", parsed["extraction_report"].get("status") != "fail", parsed["extraction_report"].get("status"), "pass or warning"),
             ],
             ocr_engine=ocr_engine,
         ))

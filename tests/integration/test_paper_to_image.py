@@ -11,7 +11,7 @@ from unittest.mock import patch
 import fitz
 from PIL import Image
 
-from rfs.cli import _doctor, build_parser
+from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import review_candidate
 from rfs.paper_to_image.generator import generate_and_select
@@ -140,6 +140,18 @@ class PaperToImageTests(unittest.TestCase):
         self.assertIn("en_ch_ready", models)
         self.assertIn("allow_download", models)
         self.assertIn("effective_detector_limit", report["pdf_tools"]["rapidocr"])
+
+    def test_executable_probe_rejects_broken_path_wrapper(self):
+        with patch("rfs.cli.shutil.which", return_value=r"C:\broken\pdftoppm.cmd"), patch("rfs.cli.subprocess.run") as run:
+            run.return_value.returncode = 1
+            run.return_value.stdout = ""
+            run.return_value.stderr = "The system cannot find the path specified."
+
+            result = _probe_executable("pdftoppm")
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["returncode"], 1)
+        self.assertIn("cannot find", result["error"])
 
     def test_fast_framework_prompt_writes_contract_without_generation(self):
         with tempfile.TemporaryDirectory() as temp:

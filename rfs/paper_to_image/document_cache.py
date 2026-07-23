@@ -9,7 +9,7 @@ from typing import Any
 from ..utils import read_json, write_json
 
 
-DOCUMENT_CACHE_VERSION = 29
+DOCUMENT_CACHE_VERSION = 31
 
 
 def document_model_cacheable(parsed: dict[str, Any]) -> bool:
@@ -55,7 +55,11 @@ def read_document_cache(
     if not path.exists():
         return None
     cached = read_json(path)
-    if not isinstance(cached, dict) or not document_model_cacheable(cached):
+    if (
+        not isinstance(cached, dict)
+        or cached.get("document_cache_version") != DOCUMENT_CACHE_VERSION
+        or not document_model_cacheable(cached)
+    ):
         return None
     active = Path(source).resolve()
     cached["source_path"] = str(active)
@@ -77,5 +81,7 @@ def write_document_cache(
     if not document_model_cacheable(parsed):
         return None
     path = document_cache_path(source, ocr_engine=ocr_engine, ocr_lang=ocr_lang, max_chars=max_chars, max_ocr_pages=max_ocr_pages)
-    write_json(path, parsed)
+    payload = dict(parsed)
+    payload["document_cache_version"] = DOCUMENT_CACHE_VERSION
+    write_json(path, payload)
     return path

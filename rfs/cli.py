@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,6 +28,21 @@ from .workflow import make_framework
 
 def _json_print(data: dict) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _probe_executable(name: str, version_arg: str = "-v") -> dict:
+    path = shutil.which(name)
+    if not path:
+        return {"available": False, "path": None, "error": "not found on PATH"}
+    try:
+        completed = subprocess.run([path, version_arg], capture_output=True, text=True, timeout=5, check=False)
+    except Exception as exc:
+        return {"available": False, "path": path, "error": str(exc)}
+    output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
+    result = {"available": completed.returncode == 0, "path": path, "returncode": completed.returncode}
+    if completed.returncode != 0:
+        result["error"] = output.splitlines()[0] if output else "version probe failed"
+    return result
 
 
 def _doctor() -> dict:
@@ -76,8 +92,8 @@ def _doctor() -> dict:
         "files": easyocr_files,
     }
     optional_pdf = {
-        "pdftotext": {"available": bool(shutil.which("pdftotext")), "path": shutil.which("pdftotext")},
-        "pdftoppm": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm")},
+        "pdftotext": _probe_executable("pdftotext"),
+        "pdftoppm": _probe_executable("pdftoppm"),
         "easyocr": {"available": importlib.util.find_spec("easyocr") is not None, "models": easyocr_models},
         "rapidocr": {
             "available": importlib.util.find_spec("rapidocr_onnxruntime") is not None,

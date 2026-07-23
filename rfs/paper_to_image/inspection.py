@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..utils import ensure_dir, read_json, write_json, write_text
 from .analyzer import paper_markdown, parse_paper
-from .document_cache import read_document_cache, write_document_cache
+from .document_cache import DOCUMENT_CACHE_VERSION, read_document_cache, write_document_cache
 
 
 def _source_hash(path: Path) -> str:
@@ -39,7 +39,11 @@ def inspect_paper(
     model_path = root / "document_model.json"
     if model_path.exists():
         cached = read_json(model_path)
-        if isinstance(cached, dict) and cached.get("source_sha256") == digest:
+        if (
+            isinstance(cached, dict)
+            and cached.get("source_sha256") == digest
+            and cached.get("document_cache_version") == DOCUMENT_CACHE_VERSION
+        ):
             report = dict(cached.get("extraction_report") or {})
             elapsed = round(time.monotonic() - started, 3)
             return {
@@ -65,6 +69,7 @@ def inspect_paper(
         )
         if not ocr_adapter:
             write_document_cache(active_source, parsed, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
+    parsed["document_cache_version"] = DOCUMENT_CACHE_VERSION
     write_json(model_path, parsed)
     write_json(root / "extraction_report.json", parsed["extraction_report"])
     write_json(root / "section_index.json", parsed["document_index"])

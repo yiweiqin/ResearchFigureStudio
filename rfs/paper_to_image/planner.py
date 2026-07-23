@@ -575,6 +575,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
     evidence_items = [item for item in parsed.get("evidence", []) if isinstance(item, dict) and item.get("id")]
     valid_evidence = {item["id"] for item in evidence_items}
     evidence_text = {str(item["id"]): str(item.get("text") or "") for item in evidence_items}
+    all_evidence_text = " ".join(evidence_text.values())
     errors: list[str] = []
     warnings: list[str] = []
     spec = plan.get("figure_specification", {})
@@ -592,6 +593,37 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         latin = sum(("a" <= char.casefold() <= "z") for char in value)
         return cjk, latin
 
+    def latin_language(value: str) -> str | None:
+        folded = "".join(char for char in unicodedata.normalize("NFKD", value.casefold()) if not unicodedata.combining(char))
+        words = re.findall(r"[a-z]{2,}", folded)
+        profiles = {
+            "english": {"the", "and", "that", "with", "from", "this", "we", "our", "for", "into", "method", "results"},
+            "spanish": {"el", "la", "los", "las", "un", "una", "que", "con", "para", "por", "del", "este", "esta", "metodo", "resultados", "relaciones"},
+            "french": {"le", "la", "les", "un", "une", "des", "que", "avec", "pour", "dans", "cette", "methode", "resultats", "relations"},
+            "german": {"der", "die", "das", "den", "dem", "ein", "eine", "und", "mit", "fur", "von", "diese", "methode", "ergebnisse"},
+            "portuguese": {"o", "os", "as", "um", "uma", "que", "com", "para", "por", "este", "esta", "metodo", "resultados", "relacoes"},
+        }
+        scores = {name: sum(word in markers for word in words) for name, markers in profiles.items()}
+        language, score = max(scores.items(), key=lambda item: item[1])
+        if language == "english" or score < 5 or score < scores["english"] + 2:
+            return None
+        return language
+
+    detected_latin_language = latin_language(all_evidence_text)
+
+    def english_label_ratio(value: str) -> float | None:
+        tokens = re.findall(r"[A-Za-z]{3,}", value)
+        if not tokens:
+            return None
+        try:
+            import wordninja
+
+            known_words = wordninja.DEFAULT_LANGUAGE_MODEL._wordcost
+        except Exception:
+            return None
+        known = sum(token.casefold() in known_words or token.casefold() in {"encoder", "decoder", "embedding", "transformer"} for token in tokens)
+        return known / len(tokens)
+
     def validate_visible_label(location: str, label: str, evidence_ids: list[str], *, fallback_text: str = "") -> None:
         value = str(label or "").strip()
         if not value:
@@ -605,6 +637,11 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         changed_from_latin = source_latin >= 4 and source_cjk == 0 and label_cjk >= 2 and label_latin == 0
         if changed_from_cjk or changed_from_latin:
             errors.append(f"{location} visible label changes the source writing system and is not verbatim evidence: {value}")
+            return
+        if detected_latin_language and normalized_term(value) not in normalized_term(all_evidence_text):
+            ratio = english_label_ratio(value)
+            if ratio is not None and ratio >= 0.8:
+                errors.append(f"{location} visible label appears translated from {detected_latin_language} and is not verbatim evidence: {value}")
 
     modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
     if not modules:
@@ -663,7 +700,6 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         validate_visible_label(f"relation {source} -> {target}", str(relation.get("label") or ""), evidence_ids)
 
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
-    all_evidence_text = " ".join(evidence_text.values())
     for source_term, visible_label in terminology.items():
         validate_visible_label(f"terminology[{source_term}]", str(visible_label or ""), [], fallback_text=all_evidence_text)
 
@@ -699,4 +735,5 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         "evidence_count": len(valid_evidence),
         "errors": errors,
         "warnings": warnings,
+        "detected_source_language": detected_latin_language or "unknown_or_english",
     }

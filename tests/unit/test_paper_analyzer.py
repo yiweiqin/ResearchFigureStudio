@@ -9,7 +9,7 @@ import fitz
 
 from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _deadline_ocr_wave, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
-from rfs.paper_to_image.document_cache import write_document_cache
+from rfs.paper_to_image.document_cache import DOCUMENT_CACHE_VERSION, write_document_cache
 from rfs.paper_to_image.preparation import _semantic_cache_safe
 from rfs.reference_text_extractor import _positive_ocr_setting, _rapidocr_detector_limit, run_rapidocr_detailed
 
@@ -137,6 +137,12 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(_block_kind("表 2 实验结果"), "table")
         self.assertEqual(_block_kind("2 方法"), "heading")
 
+    def test_localized_caption_prefix_requires_a_real_identifier(self):
+        self.assertEqual(_block_kind("Figura 1: Arquitectura del sistema"), "caption")
+        self.assertEqual(_block_kind("Tabelle A2: Ablation results"), "table")
+        self.assertEqual(_block_kind("figura editable"), "paragraph")
+        self.assertEqual(_block_kind("tableau comparatif"), "paragraph")
+
     def test_three_column_blocks_are_sorted_column_major(self):
         def draw(page):
             page.insert_textbox((400, 100, 560, 170), "COLUMN THREE TOP complete scientific paragraph.", fontsize=9)
@@ -224,6 +230,24 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(repaired, "2 \u65b9\u6cd5")
         self.assertEqual(count, 1)
+
+    def test_ocr_spacing_repair_restores_numbered_spanish_section_headings(self):
+        repaired, count = _repair_ocr_spacing("2Metodo 3Experimentos 4Conclusion Figura1", splitter=lambda token: [token])
+
+        self.assertEqual(repaired, "2 Metodo 3 Experimentos 4 Conclusion Figura 1")
+        self.assertEqual(count, 4)
+
+    def test_ocr_spacing_repair_does_not_split_spanish_word_on_single_english_anchor(self):
+        repaired, count = _repair_ocr_spacing("procesamiento", splitter=lambda token: ["proc", "esa", "mien", "to"])
+
+        self.assertEqual(repaired, "procesamiento")
+        self.assertEqual(count, 0)
+
+    def test_ocr_spacing_repair_restores_sentence_boundary_before_accented_latin_text(self):
+        repaired, count = _repair_ocr_spacing("documentos.El módulo continúa.Éste termina.", splitter=lambda token: [token])
+
+        self.assertEqual(repaired, "documentos. El módulo continúa. Éste termina.")
+        self.assertEqual(count, 2)
 
     def test_scanned_chinese_numbered_sections_form_real_section_boundaries(self):
         path = self._multipage_pdf([[]])
@@ -422,6 +446,21 @@ class PaperAnalyzerTests(unittest.TestCase):
 
             self.assertTrue(first["document_model"])
             self.assertEqual(second["status"], "cached")
+
+    def test_inspection_invalidates_stale_local_document_model(self):
+        path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 180), "Abstract Method A sufficiently long scientific paragraph for deterministic PDF inspection.", fontsize=10))
+        with tempfile.TemporaryDirectory() as temp:
+            first = inspect_paper(path, temp, ocr_engine="off")
+            model_path = Path(first["document_model"])
+            model = json.loads(model_path.read_text(encoding="utf-8"))
+            model["document_cache_version"] = DOCUMENT_CACHE_VERSION - 1
+            model_path.write_text(json.dumps(model), encoding="utf-8")
+
+            second = inspect_paper(path, temp, ocr_engine="off")
+
+            self.assertNotEqual(second["status"], "cached")
+            refreshed = json.loads(model_path.read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["document_cache_version"], DOCUMENT_CACHE_VERSION)
 
     def test_global_document_cache_reuses_parse_across_output_directories(self):
         path = self._pdf(lambda page: page.insert_textbox((40, 80, 560, 220), "Abstract Method A sufficiently long scientific paragraph for global cache validation. The document contains repeated evidence, page-aware terminology, a complete method description, and enough characters to satisfy the readable-page quality gate.", fontsize=10))

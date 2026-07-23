@@ -194,8 +194,8 @@ class BenchmarkingTests(unittest.TestCase):
             result = run_pdf_extraction_stress_suite(tmp, ocr_engine="off")
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["aggregate"]["case_count"], 9)
-            self.assertEqual(result["aggregate"]["passed_case_count"], 9)
+            self.assertEqual(result["aggregate"]["case_count"], 10)
+            self.assertEqual(result["aggregate"]["passed_case_count"], 10)
             self.assertTrue((Path(tmp) / "fixtures" / "native_two_column.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "repeated_margin_noise.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "native_chinese.pdf").exists())

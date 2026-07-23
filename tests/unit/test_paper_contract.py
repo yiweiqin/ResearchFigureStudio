@@ -231,6 +231,124 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(spec["outputs"][1]["evidence_ids"], ["E0002"])
         self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
 
+    def test_validation_rejects_english_translation_in_spanish_paper(self):
+        evidence_text = "Proponemos un codificador de documentos que transforma el articulo en evidencia estructurada. El documento de entrada pasa al codificador y el decodificador de relaciones produce una salida editable para los resultados."
+        parsed = {"evidence": [{"id": "E0001", "text": evidence_text, "confidence": 1.0}]}
+        plan = {
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "Input Document", "evidence_ids": ["E0001"]}],
+                "modules": [{"id": "encoder", "name": "Document Encoder", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "Editable Output", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            }
+        }
+
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertFalse(validation["ok"])
+        self.assertEqual(validation["detected_source_language"], "spanish")
+        self.assertTrue(any("translated from spanish" in item for item in validation["errors"]))
+
+    def test_validation_accepts_verbatim_spanish_labels(self):
+        evidence_text = "Proponemos un codificador de documentos que transforma el articulo en evidencia estructurada. El documento de entrada pasa al codificador y el decodificador de relaciones produce una salida editable para los resultados."
+        parsed = {"evidence": [{"id": "E0001", "text": evidence_text, "confidence": 1.0}]}
+        plan = {
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "documento de entrada", "evidence_ids": ["E0001"]}],
+                "modules": [{"id": "encoder", "name": "codificador de documentos", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "salida editable", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            }
+        }
+
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertTrue(validation["ok"])
+        self.assertEqual(validation["detected_source_language"], "spanish")
+
+    def test_contract_clears_translated_relation_label_when_direction_is_grounded(self):
+        evidence_text = "El codificador de documentos produce evidencia estructurada para el decodificador de relaciones."
+        parsed = {"evidence": [{"id": "E0001", "text": evidence_text, "confidence": 1.0}]}
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [
+                    {"id": "encoder", "name": "codificador de documentos", "evidence_ids": ["E0001"]},
+                    {"id": "decoder", "name": "decodificador de relaciones", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [{"source": "encoder", "target": "decoder", "type": "data_flow", "label": "structured evidence", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["relations"][0]["label"], "")
+        self.assertEqual(plan["contract_completion_report"]["removed_unverbatim_relation_labels"], ["encoder->decoder:structured evidence"])
+        self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
+
+    def test_contract_preserves_verbatim_relation_label(self):
+        evidence_text = "El codificador produce evidencia estructurada para el decodificador."
+        parsed = {"evidence": [{"id": "E0001", "text": evidence_text, "confidence": 1.0}]}
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [
+                    {"id": "encoder", "name": "codificador", "evidence_ids": ["E0001"]},
+                    {"id": "decoder", "name": "decodificador", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [{"source": "encoder", "target": "decoder", "type": "data_flow", "label": "evidencia estructurada", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["relations"][0]["label"], "evidencia estructurada")
+        self.assertEqual(plan["contract_completion_report"]["removed_unverbatim_relation_labels"], [])
+
+    def test_overlay_deduplicates_innovation_label_that_repeats_a_module(self):
+        parsed = {"evidence": [{"id": "E0001", "text": "Proponemos un codificador de documentos para procesar la entrada.", "confidence": 1.0}]}
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [{"id": "encoder", "name": "codificador de documentos", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "salida", "evidence_ids": ["E0001"]}],
+                "innovations": [{"id": "innovation_encoder", "name": "Codificador de documentos", "evidence_ids": ["E0001"]}],
+                "relations": [{"source": "innovation_encoder", "target": "output", "type": "data_flow", "label": "", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        overlay = build_overlay_spec(plan)
+
+        self.assertEqual(len(spec["innovations"]), 1)
+        self.assertEqual([item["text"].casefold() for item in overlay["labels"]].count("codificador de documentos"), 1)
+        self.assertEqual(overlay["connectors"][0]["source"], "encoder")
+        self.assertEqual(overlay["connectors"][0]["target"], "output")
+
     def test_contract_grounds_declared_multword_entity_by_exact_paper_term(self):
         parsed = {
             "page_count": 6,

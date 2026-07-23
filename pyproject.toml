@@ -15,6 +15,7 @@ dependencies = [
   "pdfplumber",
   "requests",
   "opencv-python-headless",
+  "wordninja",
   "pywin32; platform_system == 'Windows'"
 ]
 
@@ -22,8 +23,7 @@ dependencies = [
 ocr = [
   "rapidocr-onnxruntime",
   "paddleocr",
-  "easyocr",
-  "wordninja"
+  "easyocr"
 ]
 
 [project.scripts]

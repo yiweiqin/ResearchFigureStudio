@@ -321,6 +321,37 @@ def _normalize_contract_entities(raw_items: Any, field: str) -> list[dict[str, A
     return normalized
 
 
+def _deduplicate_contract_entities(spec: dict[str, Any]) -> dict[str, list[str]]:
+    replacements: dict[str, str] = {}
+    removed: list[str] = []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        deduplicated: list[dict[str, Any]] = []
+        local_by_label: dict[str, dict[str, Any]] = {}
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            if not isinstance(item, dict):
+                continue
+            label = _normalized_label(_item_label(item))
+            existing = local_by_label.get(label) if label else None
+            if existing:
+                existing["evidence_ids"] = list(dict.fromkeys(list(existing.get("evidence_ids", [])) + list(item.get("evidence_ids", []))))
+                replacements[str(item.get("id") or "")] = str(existing.get("id") or "")
+                removed.append(f"{field}:{item.get('id')}->{existing.get('id')}")
+                continue
+            deduplicated.append(item)
+            if label:
+                local_by_label[label] = item
+        spec[field] = deduplicated
+
+    for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if not isinstance(relation, dict):
+            continue
+        for key in ("source", "source_id", "target", "target_id"):
+            value = str(relation.get(key) or "")
+            if value in replacements:
+                relation[key] = replacements[value]
+    return {"removed": removed, "replacements": [f"{source}->{target}" for source, target in replacements.items() if source and target]}
+
+
 def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
     aliases: dict[str, set[str]] = {}
     endpoint_ids: set[str] = set()
@@ -400,12 +431,16 @@ def _repair_contract_relation_endpoints(spec: dict[str, Any]) -> dict[str, list[
     by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     removed_duplicates: list[str] = []
     removed_unresolved: list[str] = []
+    removed_self_relations: list[str] = []
     for relation in relations:
         source = str(relation.get("source") or "")
         target = str(relation.get("target") or "")
         relation_type = str(relation.get("type") or "data_flow")
         if source not in endpoints or target not in endpoints:
             removed_unresolved.append(f"{source}->{target}")
+            continue
+        if source == target:
+            removed_self_relations.append(f"{source}->{target}:{relation_type}")
             continue
         key = (source, target, relation_type)
         existing = by_key.get(key)
@@ -422,7 +457,29 @@ def _repair_contract_relation_endpoints(spec: dict[str, Any]) -> dict[str, list[
         "repaired": list(dict.fromkeys(repaired)),
         "removed_duplicates": list(dict.fromkeys(removed_duplicates)),
         "removed_unresolved": list(dict.fromkeys(removed_unresolved)),
+        "removed_self_relations": list(dict.fromkeys(removed_self_relations)),
     }
+
+
+def _clear_unverbatim_relation_labels(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    evidence_by_id = {
+        str(item.get("id")): str(item.get("text") or "")
+        for item in parsed.get("evidence", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    removed: list[str] = []
+    for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if not isinstance(relation, dict):
+            continue
+        label = str(relation.get("label") or "").strip()
+        if not label:
+            continue
+        cited_text = " ".join(evidence_by_id.get(str(value), "") for value in relation.get("evidence_ids", []))
+        if _normalized_label(label) and _normalized_label(label) in _normalized_label(cited_text):
+            continue
+        removed.append(f"{relation.get('source')}->{relation.get('target')}:{label}")
+        relation["label"] = ""
+    return removed
 
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
@@ -438,8 +495,11 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
         spec["modules"] = summary_modules if isinstance(summary_modules, list) else []
     for field in ("inputs", "modules", "outputs", "innovations"):
         spec[field] = _normalize_contract_entities(spec.get(field), field)
+    entity_deduplication = _deduplicate_contract_entities(spec)
     spec["relations"] = _normalize_contract_relations(spec)
     completion_report = augment_contract_from_evidence(spec, parsed)
+    completion_report["removed_duplicate_entities"] = entity_deduplication["removed"]
+    completion_report["duplicate_entity_replacements"] = entity_deduplication["replacements"]
     plan["contract_completion_report"] = completion_report
     if len(completion_report.get("added_entities", [])) >= 3:
         fallback_ids = {
@@ -461,6 +521,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     completion_report["relation_endpoint_repairs"] = endpoint_report["repaired"]
     completion_report["removed_duplicate_relations"] = endpoint_report["removed_duplicates"]
     completion_report["removed_unresolved_relations"] = endpoint_report["removed_unresolved"]
+    completion_report["removed_self_relations"] = endpoint_report["removed_self_relations"]
     if endpoint_report["repaired"]:
         secondary_completion = augment_contract_from_evidence(spec, parsed)
         for key in ("added_entities", "upgraded_entities", "adopted_entities", "added_relations", "repaired_relations", "grounded_entities"):
@@ -604,6 +665,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
         spec["topology"] = _infer_topology(spec)
     completion_report["exact_visible_entity_groundings"] = _ground_exact_visible_entities(spec, parsed)
     _repair_cross_script_terminology(spec, parsed)
+    completion_report["removed_unverbatim_relation_labels"] = _clear_unverbatim_relation_labels(spec, parsed)
     labels = []
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
     labels.extend(str(value).strip() for value in terminology.values() if str(value).strip())
@@ -641,22 +703,33 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
 def build_overlay_spec(plan: dict[str, Any]) -> dict[str, Any]:
     spec = plan.get("figure_specification", {})
     labels = []
+    visible_targets: dict[str, str] = {}
+    target_aliases: dict[str, str] = {}
     for field in ("inputs", "modules", "outputs", "innovations"):
         for index, item in enumerate(spec.get(field, []) if isinstance(spec.get(field), list) else []):
             if not isinstance(item, dict):
                 continue
             text = _item_label(item)
-            if text:
-                labels.append({"target_id": _item_id(item, field, index), "text": text, "role": field.rstrip("s")})
+            normalized = _normalized_label(text)
+            target_id = _item_id(item, field, index)
+            if text and normalized not in visible_targets:
+                labels.append({"target_id": target_id, "text": text, "role": field.rstrip("s")})
+                visible_targets[normalized] = target_id
+            elif text and normalized:
+                target_aliases[target_id] = visible_targets[normalized]
     connectors = []
+    connector_keys: set[tuple[str, str, str, str]] = set()
     for item in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
         if isinstance(item, dict):
-            connectors.append({
-                "source": str(item.get("source") or item.get("source_id") or ""),
-                "target": str(item.get("target") or item.get("target_id") or ""),
-                "type": str(item.get("type") or item.get("relation_type") or "data_flow"),
-                "label": str(item.get("label") or ""),
-            })
+            source = target_aliases.get(str(item.get("source") or item.get("source_id") or ""), str(item.get("source") or item.get("source_id") or ""))
+            target = target_aliases.get(str(item.get("target") or item.get("target_id") or ""), str(item.get("target") or item.get("target_id") or ""))
+            relation_type = str(item.get("type") or item.get("relation_type") or "data_flow")
+            label = str(item.get("label") or "")
+            key = (source, target, relation_type, label)
+            if not source or not target or source == target or key in connector_keys:
+                continue
+            connectors.append({"source": source, "target": target, "type": relation_type, "label": label})
+            connector_keys.add(key)
     return {
         "summary": "Exact editable labels and directed connectors derived from the paper contract.",
         "labels": labels,
@@ -829,6 +902,7 @@ def prepare_paper_figure_contract(
         parsed = parse_paper(archived_paper, deadline_at=deadline_at, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, ocr_rescue_min_remaining=ocr_rescue_min_remaining)
         if not ocr_adapter:
             write_document_cache(archived_paper, parsed, ocr_engine=ocr_engine, ocr_lang=ocr_lang)
+    parsed["document_cache_version"] = DOCUMENT_CACHE_VERSION
     document_preparation_seconds = round(time.monotonic() - started, 3)
     write_json(root / "document_model.json", parsed)
     write_json(root / "extraction_report.json", parsed["extraction_report"])

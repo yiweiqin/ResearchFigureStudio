@@ -19,11 +19,11 @@ from typing import Any, Callable
 
 MOJIBAKE_MARKERS = ("\ufffd", "Ã", "Â", "â€", "锟", "鈥", "銆", "鏅")
 SECTION_ALIASES = {
-    "abstract": ("abstract", "摘要", "概要", "초록"),
-    "introduction": ("introduction", "background", "引言", "介绍", "背景", "はじめに", "序論", "서론", "배경"),
-    "method": ("method", "methods", "methodology", "approach", "architecture", "system overview", "framework", "方法", "方法论", "架构", "系统概述", "框架", "手法", "方法論", "アーキテクチャ", "방법", "방법론", "아키텍처"),
-    "experiments": ("experiment", "experiments", "evaluation", "results", "实验", "评估", "结果", "実験", "評価", "結果", "실험", "평가", "결과"),
-    "conclusion": ("conclusion", "conclusions", "discussion", "结论", "讨论", "总结", "結論", "考察", "まとめ", "결론", "논의", "요약"),
+    "abstract": ("abstract", "resumen", "résumé", "zusammenfassung", "resumo", "摘要", "概要", "초록"),
+    "introduction": ("introduction", "background", "introducción", "introduccion", "introdução", "introducao", "einleitung", "contexte", "contexto", "antecedentes", "引言", "介绍", "背景", "はじめに", "序論", "서론", "배경"),
+    "method": ("method", "methods", "methodology", "approach", "architecture", "system overview", "framework", "método", "metodo", "métodos", "metodos", "metodología", "metodologia", "méthode", "methode", "méthodes", "methodes", "méthodologie", "methodologie", "methoden", "methodik", "enfoque", "approche", "ansatz", "abordagem", "方法", "方法论", "架构", "系统概述", "框架", "手法", "方法論", "アーキテクチャ", "방법", "방법론", "아키텍처"),
+    "experiments": ("experiment", "experiments", "evaluation", "results", "experimento", "experimentos", "evaluación", "evaluacion", "resultados", "expérience", "experience", "expériences", "experiences", "évaluation", "experimente", "auswertung", "ergebnisse", "avaliação", "avaliacao", "实验", "评估", "结果", "実験", "評価", "結果", "실험", "평가", "결과"),
+    "conclusion": ("conclusion", "conclusions", "discussion", "conclusión", "conclusiones", "discusión", "discusion", "conclusão", "conclusao", "conclusões", "conclusoes", "discussão", "discussao", "schlussfolgerung", "schlussfolgerungen", "fazit", "diskussion", "结论", "讨论", "总结", "結論", "考察", "まとめ", "결론", "논의", "요약"),
 }
 
 OCR_PROTECTED_WORDS = {
@@ -38,6 +38,23 @@ OCR_SPLIT_ANCHORS = OCR_PROTECTED_WORDS | {
     "and", "decoder", "encoder", "evidence", "for", "from", "generation", "into", "method", "model", "of",
     "output", "retriever", "the", "to", "with",
 }
+OCR_RENDER_DPI = 84
+LATIN_CAPTION_PREFIX = re.compile(
+    r"^(?P<prefix>figure|fig\.|table|figura|abbildung|tabla|tableau|tabelle)\s*"
+    r"(?P<identifier>[a-z]?\d+(?:[.\-]\d+)*|[ivxlcdm]+|[a-z])\b",
+    re.IGNORECASE,
+)
+
+
+def _caption_prefix_kind(text: str) -> str | None:
+    value = _clean(text)
+    match = LATIN_CAPTION_PREFIX.match(value)
+    if match:
+        prefix = match.group("prefix").casefold()
+        return "table" if prefix in {"table", "tabla", "tableau", "tabelle"} else "caption"
+    if re.match(r"^(图|圖|表)\s*[a-z0-9一二三四五六七八九十]+", value, re.IGNORECASE):
+        return "caption" if value.startswith(("图", "圖")) else "table"
+    return None
 
 
 def _clean(text: str) -> str:
@@ -58,15 +75,22 @@ def _clean(text: str) -> str:
 def _repair_ocr_spacing(text: str, splitter: Callable[[str], list[str]] | None = None) -> tuple[str, int]:
     value = _clean(text)
     repairs = 0
-    value, count = re.subn(r"\b(figure|fig\.|table)(?=\d)", r"\1 ", value, flags=re.IGNORECASE)
+    value, count = re.subn(r"\b(figure|fig\.|table|figura|abbildung|tabla|tableau|tabelle)(?=\d)", r"\1 ", value, flags=re.IGNORECASE)
     repairs += count
-    section_terms = "abstract|introduction|background|method|methods|approach|experiments|results|conclusion|discussion|references|appendix"
+    section_terms = (
+        "abstract|introduction|background|method|methods|approach|experiments|results|conclusion|discussion|references|appendix|"
+        "resumen|introducción|introduccion|método|metodo|métodos|metodos|metodología|metodologia|enfoque|"
+        "experimento|experimentos|evaluación|evaluacion|resultados|conclusión|conclusiones|discusión|discusion|"
+        "résumé|méthode|méthodes|expérience|expériences|évaluation|résultats|"
+        "zusammenfassung|einleitung|methoden|methodik|experimente|ergebnisse|schlussfolgerung|fazit|"
+        "resumo|introdução|introducao|avaliação|avaliacao|conclusão|conclusao"
+    )
     value, count = re.subn(rf"(?<!\w)(\d+(?:\.\d+)*)(?=(?:{section_terms})\b)", r"\1 ", value, flags=re.IGNORECASE)
     repairs += count
     cjk_section_terms = "\u7cfb\u7edf\u6982\u8ff0|\u65b9\u6cd5\u8bba|\u53c2\u8003\u6587\u732e|\u5b9e\u9a8c|\u7ed3\u8bba|\u8ba8\u8bba|\u5f15\u8a00|\u80cc\u666f|\u65b9\u6cd5|\u67b6\u6784|\u6846\u67b6|\u8bc4\u4f30|\u7ed3\u679c|\u9644\u5f55"
     value, count = re.subn(rf"^(\d+(?:\.\d+)*)(?=(?:{cjk_section_terms})(?:\s|$))", r"\1 ", value)
     repairs += count
-    value, count = re.subn(r"(?<=[,:;])(?=[A-Z])", " ", value)
+    value, count = re.subn(r"(?<=[.,:;])(?=[A-ZÁÉÍÓÚÜÑÀÂÇÈÊËÎÏÔÙÛÜ])", " ", value)
     repairs += count
     if splitter is None:
         try:
@@ -86,7 +110,8 @@ def _repair_ocr_spacing(text: str, splitter: Callable[[str], list[str]] | None =
             return token
         pieces = [str(piece) for piece in splitter(token) if str(piece)]
         lowered = [piece.casefold() for piece in pieces]
-        if len(pieces) < 2 or any(len(piece) < 2 for piece in pieces) or not any(piece in OCR_SPLIT_ANCHORS for piece in lowered):
+        anchor_count = sum(piece in OCR_SPLIT_ANCHORS for piece in lowered)
+        if len(pieces) < 2 or any(len(piece) < 2 for piece in pieces) or anchor_count < 2:
             return token
         repairs += len(pieces) - 1
         return " ".join(pieces)
@@ -160,8 +185,9 @@ def _looks_like_typographic_heading(text: str) -> bool:
 
 def _block_kind(text: str, width_ratio: float = 0.0) -> str:
     value = _clean(text)
-    if re.match(r"^(figure|fig\.|table|图|圖|表)\s*[a-z0-9一二三四五六七八九十]+", value, re.IGNORECASE):
-        return "caption" if value.casefold().startswith(("figure", "fig.", "图", "圖")) else "table"
+    caption_kind = _caption_prefix_kind(value)
+    if caption_kind:
+        return caption_kind
     section_aliases = tuple(alias.casefold() for aliases in SECTION_ALIASES.values() for alias in aliases)
     if len(value) <= 100 and any(value.casefold() == alias or value.casefold().startswith((f"{alias} ", f"{alias}:", f"{alias}：")) for alias in section_aliases):
         return "heading"
@@ -528,7 +554,10 @@ def _group_ocr_words(records: list[dict[str, Any]], image_width: float) -> list[
         column = 2 if width >= image_width * 0.62 else 0 if center_x <= image_width / 2.0 else 1
         previous = previous_by_column.get(column)
         gap = item["bbox"][1] - previous["bbox"][3] if previous else float("inf")
-        starts_new = bool(re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+|figure|fig\.|table)\b", item["text"], re.IGNORECASE))
+        starts_new = bool(
+            re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+)\b", item["text"], re.IGNORECASE)
+            or _caption_prefix_kind(item["text"])
+        )
         if previous is None or gap > median_height * 1.8 or starts_new:
             parent += 1
         item["parent_block"] = parent
@@ -564,8 +593,8 @@ def _assign_ocr_parent_blocks(lines: list[dict[str, Any]], image_width: float) -
             (float(previous["bbox"][3]) - float(previous["bbox"][1])) if previous else 0.0,
         )
         text = str(item.get("text") or "")
-        starts_new = bool(re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+|figure|fig\.|table)\b", text, re.IGNORECASE))
-        starts_caption = bool(re.match(r"^(?:figure|fig\.|table)\b", text, re.IGNORECASE))
+        starts_new = bool(re.match(r"^(?:abstract|\d+(?:\.\d+)*\s+)\b", text, re.IGNORECASE) or _caption_prefix_kind(text))
+        starts_caption = bool(_caption_prefix_kind(text))
         continuing_caption = bool(previous and previous.get("_caption_group") and gap <= local_height * 1.15 and not starts_new)
         paragraph_break = bool(previous and not continuing_caption and str(previous.get("text") or "").rstrip().endswith((".", ":")) and gap > local_height * 0.45)
         if previous is None or gap > local_height * 1.15 or starts_new or paragraph_break:
@@ -706,7 +735,7 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
     try:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / f"page_{page_number:03d}.png"
-            dpi = 72 if adapter is None and engine in {"auto", "easyocr", "rapidocr"} else 160
+            dpi = OCR_RENDER_DPI if adapter is None and engine in {"auto", "easyocr", "rapidocr"} else 160
             render_started = time.monotonic()
             pixmap = page.get_pixmap(dpi=dpi, alpha=False)
             pixmap.save(str(target))
@@ -749,6 +778,7 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
                 "margin_noise_removed": margin_noise_removed,
                 "spacing_repairs": spacing_repairs,
                 "render_seconds": round(render_seconds, 4),
+                "render_dpi": dpi,
                 "postprocess_seconds": round(time.monotonic() - postprocess_started, 4),
                 **engine_diagnostics,
             }
@@ -1282,7 +1312,7 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
                 parent = block.get("parent_block")
                 continuation = []
                 for following in page_blocks[block_index + 1:]:
-                    if parent is None or following.get("parent_block") != parent or re.match(r"^(figure|fig\.|table|图|圖|表)\s*[\d一二三四五六七八九十]", str(following.get("text") or ""), re.IGNORECASE):
+                    if parent is None or following.get("parent_block") != parent or _caption_prefix_kind(str(following.get("text") or "")):
                         break
                     continuation.append(str(following.get("text") or ""))
                 if continuation:
