@@ -9,7 +9,7 @@ from typing import Any
 from ..utils import read_json, write_json
 
 
-DOCUMENT_CACHE_VERSION = 23
+DOCUMENT_CACHE_VERSION = 24
 
 
 def document_model_cacheable(parsed: dict[str, Any]) -> bool:

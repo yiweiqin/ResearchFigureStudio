@@ -88,6 +88,25 @@ def _mixed_scan_fixture(target: Path) -> Path:
     return _save_document(document, target)
 
 
+def _repeated_margin_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    sections = [
+        ("Abstract", "A document encoder grounds paper evidence before framework generation."),
+        ("2 Method", "The document encoder sends grounded entities to a relation decoder and final output."),
+        ("3 Experiments", "Experiments measure entity recall, relation recall, and extraction latency."),
+        ("4 Conclusion", "The system preserves evidence citations and editable scientific labels."),
+    ]
+    for page_number, (heading, body) in enumerate(sections, 1):
+        page = document.new_page(width=600, height=800)
+        page.insert_text((45, 25), "Proceedings of the Example Conference 2026", fontsize=8)
+        page.insert_text((45, 785), f"Anonymous Paper 1234 | Page {page_number}", fontsize=8)
+        page.insert_text((45, 70), heading, fontname="hebo", fontsize=12)
+        page.insert_textbox((45, 95, 555, 220), body, fontsize=10)
+    return _save_document(document, target)
+
+
 def _fixture_ocr_adapter(image_path: Path, _lang: str) -> list[dict[str, Any]]:
     if "page_002" not in image_path.name:
         return []
@@ -180,6 +199,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     bold = _bold_heading_fixture(fixtures / "unnumbered_bold_sections.pdf")
     rotated = _rotated_fixture(fixtures / "rotated_native_page.pdf")
     mixed = _mixed_scan_fixture(fixtures / "mixed_scan.pdf")
+    repeated_margin = _repeated_margin_fixture(fixtures / "repeated_margin_noise.pdf")
 
     results = [
         _run_case(
@@ -211,6 +231,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             lambda parsed: [
                 _check("rotation", parsed["extraction_report"].get("rotated_pages") == [1], parsed["extraction_report"].get("rotated_pages"), [1]),
                 _check("display_coordinates", all(0 <= block["bbox"][0] <= block["bbox"][2] <= parsed["pages"][0]["width"] and 0 <= block["bbox"][1] <= block["bbox"][3] <= parsed["pages"][0]["height"] for block in parsed["pages"][0]["blocks"]), parsed["pages"][0]["blocks"], "all blocks inside displayed page"),
+                _check("semantic_reading_order", parsed["pages"][0]["text"].index("Abstract") < parsed["pages"][0]["text"].index("2 Method") < parsed["pages"][0]["text"].index("Figure 1:"), parsed["pages"][0]["text"], "Abstract < Method < Figure 1"),
                 _check("caption", parsed["extraction_report"].get("figure_caption_count", 0) >= 1, parsed["extraction_report"].get("figure_caption_count"), ">=1"),
             ],
         ),
@@ -227,6 +248,17 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             ocr_engine="easyocr",
             ocr_adapter=_fixture_ocr_adapter,
             preview_page=1,
+        ),
+        _run_case(
+            "repeated_margin_noise",
+            repeated_margin,
+            root,
+            lambda parsed: [
+                _check("noise_removed", parsed["extraction_report"].get("repeated_margin_noise_removed_count") == 8, parsed["extraction_report"].get("repeated_margin_noise_removed_count"), 8),
+                _check("header_absent", all("Proceedings of the Example Conference" not in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no repeated header evidence"),
+                _check("footer_absent", all("Anonymous Paper 1234" not in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no repeated footer evidence"),
+                _check("scientific_content_preserved", any("relation decoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "relation decoder evidence"),
+            ],
         ),
     ]
 

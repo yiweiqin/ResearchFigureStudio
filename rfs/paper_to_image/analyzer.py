@@ -543,6 +543,73 @@ def _filter_ocr_margin_noise(records: list[dict[str, Any]], image_width: float) 
     return kept, removed
 
 
+def _repeated_margin_signature(text: str) -> str:
+    value = _clean(text).casefold()
+    value = re.sub(r"\d+", "#", value)
+    value = re.sub(r"\s+", " ", value).strip(" |.-_")
+    return value
+
+
+def _remove_repeated_margin_noise(pages: list[dict[str, Any]]) -> int:
+    if len(pages) < 3:
+        return 0
+    occurrences: dict[tuple[str, str], set[int]] = {}
+    candidates: dict[tuple[int, str], tuple[str, str]] = {}
+    for page in pages:
+        page_number = int(page.get("page") or 0)
+        height = float(page.get("height") or 0.0)
+        if height <= 0:
+            continue
+        for block in page.get("blocks", []):
+            bbox = block.get("bbox")
+            text = str(block.get("text") or "").strip()
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or not text or len(text) > 140 or len(_lexical_units(text)) > 12:
+                continue
+            top_region = float(bbox[3]) <= height * 0.12
+            bottom_region = float(bbox[1]) >= height * 0.88
+            if not top_region and not bottom_region:
+                continue
+            signature = _repeated_margin_signature(text)
+            if not signature:
+                continue
+            key = ("top" if top_region else "bottom", signature)
+            occurrences.setdefault(key, set()).add(page_number)
+            candidates[(page_number, str(block.get("id") or ""))] = key
+
+    threshold = max(3, (len(pages) + 3) // 4)
+    repeated = {key for key, page_numbers in occurrences.items() if len(page_numbers) >= threshold}
+    if not repeated:
+        return 0
+
+    removed = 0
+    for page in pages:
+        page_number = int(page.get("page") or 0)
+        kept = []
+        page_removed = 0
+        for block in page.get("blocks", []):
+            key = candidates.get((page_number, str(block.get("id") or "")))
+            if key in repeated:
+                page_removed += 1
+                continue
+            kept.append(block)
+        if not page_removed:
+            continue
+        for order, block in enumerate(kept, 1):
+            block["reading_order"] = order
+        page_text = "\n\n".join(str(item.get("text") or "") for item in kept)
+        page.update({
+            "blocks": kept,
+            "text": page_text,
+            "char_count": len(page_text),
+            "replacement_character_rate": _replacement_rate(page_text),
+            "mojibake_rate": _mojibake_rate(page_text),
+            "column_count": max((int(item.get("column", 0)) for item in kept), default=0) + 1,
+            "repeated_margin_noise_removed": page_removed,
+        })
+        removed += page_removed
+    return removed
+
+
 def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str, str | None, dict[str, Any]]:
     try:
         with tempfile.TemporaryDirectory() as temp:
@@ -818,13 +885,15 @@ def _read_pdf_pages(
     ocr_candidates: list[int] = []
     try:
         for index, page in enumerate(document, 1):
-            raw_blocks = _rotate_blocks_to_page(_pymupdf_line_blocks(page), page)
-            ordered, order_confidence = _reading_order(raw_blocks, float(page.rect.width))
+            native_width = float(page.mediabox.width) if int(page.rotation or 0) else float(page.rect.width)
+            raw_blocks = _pymupdf_line_blocks(page)
+            ordered, order_confidence = _reading_order(raw_blocks, native_width)
             if len(_normalized_compare_text(" ".join(item["text"] for item in ordered))) < 80:
-                fallback_blocks = _rotate_blocks_to_page(_pdfplumber_blocks(path, index), page)
-                fallback_ordered, fallback_confidence = _reading_order(fallback_blocks, float(page.rect.width))
+                fallback_blocks = _pdfplumber_blocks(path, index)
+                fallback_ordered, fallback_confidence = _reading_order(fallback_blocks, native_width)
                 if len(_normalized_compare_text(" ".join(item["text"] for item in fallback_ordered))) > len(_normalized_compare_text(" ".join(item["text"] for item in ordered))):
                     ordered, order_confidence = fallback_ordered, min(fallback_confidence, 0.9)
+            ordered = _rotate_blocks_to_page(ordered, page)
             for block_index, block in enumerate(ordered, 1):
                 block["id"] = f"P{index:03d}_B{block_index:03d}"
                 block["kind"] = _block_kind(block["text"], (block["bbox"][2] - block["bbox"][0]) / max(1.0, float(page.rect.width)))
@@ -951,6 +1020,7 @@ def _read_pdf_pages(
                 ocr_started = time.monotonic()
                 result = _ocr_page(document[page_number - 1], page_number, ocr_engine, ocr_lang, ocr_adapter, rapidocr_threads=rapidocr_threads)
                 consume_ocr_result(page_number, result, time.monotonic() - ocr_started)
+    repeated_margin_noise_removed = _remove_repeated_margin_noise(pages)
     document.close()
     elapsed = round(time.monotonic() - started, 3)
     attempted_pages = [int(item["page"]) for item in ocr_page_durations if item.get("page")]
@@ -972,6 +1042,7 @@ def _read_pdf_pages(
         "ocr_run_complete": run_complete,
         "ocr_worker_count": ocr_worker_count,
         "ocr_rescue_min_remaining_seconds": float(ocr_rescue_min_remaining),
+        "repeated_margin_noise_removed_count": repeated_margin_noise_removed,
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
         "elapsed_seconds": elapsed,
@@ -1350,6 +1421,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_run_complete": bool(details.get("ocr_run_complete", True)),
         "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
         "ocr_rescue_min_remaining_seconds": float(details.get("ocr_rescue_min_remaining_seconds") or 45.0),
+        "repeated_margin_noise_removed_count": int(details.get("repeated_margin_noise_removed_count") or 0),
         "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
         "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,

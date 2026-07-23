@@ -941,6 +941,7 @@ def prepare_paper_figure_contract(
             "ocr_run_complete": parsed["extraction_report"].get("ocr_run_complete", True),
             "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
             "ocr_rescue_min_remaining_seconds": parsed["extraction_report"].get("ocr_rescue_min_remaining_seconds", 45.0),
+            "repeated_margin_noise_removed_count": parsed["extraction_report"].get("repeated_margin_noise_removed_count", 0),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
             "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),
         },

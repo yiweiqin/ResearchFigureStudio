@@ -876,6 +876,7 @@ def run_fast_benchmark_suite(
         "ocr_completed_page_total": sum(int(value) for value in extraction_metric("ocr_completed_count")),
         "ocr_incomplete_run_count": sum(not bool(item.get("extraction_quality", {}).get("ocr_run_complete", True)) for item in results),
         "max_ocr_worker_count": max((int(value) for value in extraction_metric("ocr_worker_count")), default=1),
+        "repeated_margin_noise_removed_total": sum(int(value) for value in extraction_metric("repeated_margin_noise_removed_count")),
         "ocr_margin_noise_removed_total": sum(int(value) for value in extraction_metric("ocr_margin_noise_removed_count")),
         "ocr_spacing_repair_total": sum(int(value) for value in extraction_metric("ocr_spacing_repair_count")),
         "provider_call_count": len(provider_calls),

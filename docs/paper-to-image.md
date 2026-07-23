@@ -43,6 +43,10 @@ In the 180-second fast path with `planner_mode=vlm`, rescue pages require at lea
 
 Planner and review retries share one absolute provider deadline rather than receiving a fresh timeout per attempt. If the service is slow or unavailable, each request is clamped to the remaining budget, further retries stop at the cutoff, and any later semantic stage switches to the deterministic evidence-grounded fallback.
 
+Born-digital and OCR-recovered pages also pass through a conservative repeated-margin filter. Short header or footer lines are removed only when the same digit-normalized pattern appears in the same margin on at least three pages and at least one quarter of the document. The report records `repeated_margin_noise_removed_count` so benchmark runs can detect publisher-header and page-number contamination without hiding the cleanup.
+
+For pages carrying a PDF rotation flag, native blocks are ordered in the unrotated media-box coordinate system and only then transformed into displayed page coordinates. This preserves Abstract-to-Method-to-Figure reading order on 90/180/270-degree pages while keeping overlay coordinates aligned with rendered output.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
