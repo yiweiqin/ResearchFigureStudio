@@ -138,6 +138,20 @@ def _hyphenated_native_fixture(target: Path) -> Path:
     return _save_document(document, target)
 
 
+def _rotated_repeated_margin_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    for page_number in range(1, 5):
+        page = document.new_page(width=600, height=800)
+        page.insert_text((45, 25), "Rotated Conference Header 2026", fontsize=8)
+        page.insert_text((45, 785), f"Rotated Paper 42 | Page {page_number}", fontsize=8)
+        page.insert_text((45, 75), f"{page_number} Method Stage", fontname="hebo", fontsize=12)
+        page.insert_textbox((45, 105, 555, 220), f"Stage {page_number} preserves rotated scientific evidence and semantic reading order.", fontsize=10)
+        page.set_rotation(90)
+    return _save_document(document, target)
+
+
 def _fixture_ocr_adapter(image_path: Path, _lang: str) -> list[dict[str, Any]]:
     if "page_002" not in image_path.name:
         return []
@@ -233,6 +247,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     repeated_margin = _repeated_margin_fixture(fixtures / "repeated_margin_noise.pdf")
     chinese = _native_chinese_fixture(fixtures / "native_chinese.pdf")
     hyphenated = _hyphenated_native_fixture(fixtures / "hyphenated_native.pdf")
+    rotated_margin = _rotated_repeated_margin_fixture(fixtures / "rotated_repeated_margin.pdf")
 
     results = [
         _run_case(
@@ -312,6 +327,18 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
                 _check("transformer_repaired", sum("transformer encoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])) >= 2, [item.get("text") for item in parsed.get("evidence", [])], "two transformer encoder mentions"),
                 _check("decoder_repaired", any("relation decoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "relation decoder"),
                 _check("repair_count", parsed["extraction_report"].get("native_hyphenation_repair_count") == 3, parsed["extraction_report"].get("native_hyphenation_repair_count"), 3),
+            ],
+        ),
+        _run_case(
+            "rotated_repeated_margin",
+            rotated_margin,
+            root,
+            lambda parsed: [
+                _check("all_pages_rotated", parsed["extraction_report"].get("rotated_pages") == [1, 2, 3, 4], parsed["extraction_report"].get("rotated_pages"), [1, 2, 3, 4]),
+                _check("rotated_noise_removed", parsed["extraction_report"].get("repeated_margin_noise_removed_count") == 8, parsed["extraction_report"].get("repeated_margin_noise_removed_count"), 8),
+                _check("repeated_section_boundaries", parsed["extraction_report"].get("section_count") == 4, parsed["extraction_report"].get("section_count"), 4),
+                _check("header_absent", all("Rotated Conference Header" not in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no rotated header evidence"),
+                _check("body_preserved", all(any(f"Stage {page_number} preserves" in item.get("text", "") for item in parsed.get("evidence", [])) for page_number in range(1, 5)), [item.get("text") for item in parsed.get("evidence", [])], "all rotated stage evidence"),
             ],
         ),
     ]

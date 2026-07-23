@@ -55,6 +55,10 @@ OCR normalization also repairs numbered CJK section boundaries such as `2方法`
 
 Production validation treats visible inputs, outputs, and innovations without evidence IDs as hard errors. Before validation, exact entity labels may be grounded deterministically to matching evidence; innovation labels are grounded only when the same evidence also contains an explicit novelty cue such as `we propose`, `we introduce`, or `本文提出`. Otherwise the result remains engineering-only instead of silently presenting an unsupported contribution.
 
+Repeated-margin filtering interprets page edges in the PDF's semantic orientation. On a 90-degree page, the original header is detected at the displayed right edge and the original footer at the left edge; corresponding mappings are applied for 180 and 270 degrees. Mixed-orientation papers therefore use one header/footer signature space without leaking rotated publisher furniture into evidence.
+
+Section headings are deduplicated only within their concrete page/block occurrence, not globally by title text. Repeated `Methods`, `Experiments`, or appendix headings therefore create new evidence boundaries after publisher headers have been removed.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.

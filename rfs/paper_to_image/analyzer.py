@@ -601,6 +601,35 @@ def _repeated_margin_signature(text: str) -> str:
     return value
 
 
+def _semantic_margin_region(page: dict[str, Any], bbox: list[float] | tuple[float, ...]) -> str | None:
+    width = float(page.get("width") or 0.0)
+    height = float(page.get("height") or 0.0)
+    if width <= 0 or height <= 0:
+        return None
+    rotation = int(page.get("rotation") or 0) % 360
+    if rotation == 90:
+        if float(bbox[0]) >= width * 0.88:
+            return "header"
+        if float(bbox[2]) <= width * 0.12:
+            return "footer"
+    elif rotation == 180:
+        if float(bbox[1]) >= height * 0.88:
+            return "header"
+        if float(bbox[3]) <= height * 0.12:
+            return "footer"
+    elif rotation == 270:
+        if float(bbox[2]) <= width * 0.12:
+            return "header"
+        if float(bbox[0]) >= width * 0.88:
+            return "footer"
+    else:
+        if float(bbox[3]) <= height * 0.12:
+            return "header"
+        if float(bbox[1]) >= height * 0.88:
+            return "footer"
+    return None
+
+
 def _remove_repeated_margin_noise(pages: list[dict[str, Any]]) -> int:
     if len(pages) < 3:
         return 0
@@ -608,22 +637,20 @@ def _remove_repeated_margin_noise(pages: list[dict[str, Any]]) -> int:
     candidates: dict[tuple[int, str], tuple[str, str]] = {}
     for page in pages:
         page_number = int(page.get("page") or 0)
-        height = float(page.get("height") or 0.0)
-        if height <= 0:
-            continue
         for block in page.get("blocks", []):
             bbox = block.get("bbox")
             text = str(block.get("text") or "").strip()
+            if str(block.get("kind") or "") == "heading" or bool(block.get("font_bold")):
+                continue
             if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or not text or len(text) > 140 or len(_lexical_units(text)) > 12 or _cjk_character_count(text) > 36:
                 continue
-            top_region = float(bbox[3]) <= height * 0.12
-            bottom_region = float(bbox[1]) >= height * 0.88
-            if not top_region and not bottom_region:
+            region = _semantic_margin_region(page, bbox)
+            if not region:
                 continue
             signature = _repeated_margin_signature(text)
             if not signature:
                 continue
-            key = ("top" if top_region else "bottom", signature)
+            key = (region, signature)
             occurrences.setdefault(key, set()).add(page_number)
             candidates[(page_number, str(block.get("id") or ""))] = key
 
@@ -1179,7 +1206,7 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if not (explicit or numbered or known or typographic):
                     continue
                 normalized = numbered.group(2).strip() if numbered else line.strip().rstrip(".:")
-                key = normalized.casefold()
+                key = (normalized.casefold(), int(page.get("page") or 0), str(block.get("id") or ""), line_index)
                 if normalized and key not in seen:
                     seen.add(key)
                     headings.append({
