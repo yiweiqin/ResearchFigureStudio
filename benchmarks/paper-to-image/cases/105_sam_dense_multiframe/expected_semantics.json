@@ -26,7 +26,7 @@
     {"source": "fully_automatic", "target": "sa1b", "type": "data_generation", "required": true},
     {"source": "sam_model", "target": "data_engine", "type": "annotation_support", "required": true}
   ],
-  "forbidden_labels": ["Text-to-Image Generation", "Object Detector Only", "Single-stage Manual Annotation", "Language Model"],
+  "forbidden_labels": ["Text-to-Image Generation", "Object Detector Only", "Single-stage Manual Annotation", "Language Model", "Class Descriptions", "Contrastive Learning", "Text Embeddings", "Zero-Shot Classifier"],
   "expected_panels": ["promptable_task", "sam_model", "data_engine"],
   "topology_requirements": {"panel_count": 3, "dense_multi_panel": true, "feedback_between_model_and_data_engine": true}
 }

@@ -75,6 +75,8 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 - Engineering previews are opt-in and never production-approved.
 - Critical text and relations remain editable PPT objects.
 - Image/OCR guesses cannot override paper-grounded terminology or relation endpoints.
+- Deterministic completion is graph-scoped: rich VLM contracts only gain overview-local or directly connected evidence-backed entities, while heuristic contracts grow from overview seeds or the largest connected method chain.
+- Benchmark entity matching uses both label fidelity and relation consistency so relation labels and variable suffixes cannot steal mappings from real contract entities.
 - VLM correction is optional and bounded; deterministic reports remain available offline.
 - Historical sample-specific scripts stay under `experiments/legacy_reference_rebuilds/` and are not imported by production code.
 

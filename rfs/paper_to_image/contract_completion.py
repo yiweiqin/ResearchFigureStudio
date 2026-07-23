@@ -71,15 +71,15 @@ CONCEPT_RULES = (
     ConceptRule("prompt_encoder", "Prompt Encoder", "modules", "encoder", r"\bprompt encoder\b"),
     ConceptRule("mask_decoder", "Mask Decoder", "modules", "decoder", r"\bmask decoder\b"),
     ConceptRule("mlp", "MLP", "modules", "neural field", r"\bneural radiance field\b|\bfeeding[^.]{0,100}\bmlp\b|\bmlp to produce\b", ("neural radiance field", "neural network")),
-    ConceptRule("image_embeddings", "Image Embeddings", "modules", "representation", r"\bimage embeddings?\b|\bimage features?\b", (), True),
-    ConceptRule("text_embeddings", "Text Embeddings", "modules", "representation", r"\btext embeddings?\b|\btext features?\b"),
+    ConceptRule("image_embeddings", "Image Embeddings", "modules", "representation", r"\bimage embeddings?\b|\bimage features?\b", ("image embedding", "image features"), True),
+    ConceptRule("text_embeddings", "Text Embeddings", "modules", "representation", r"\btext embeddings?\b|\btext features?\b", ("text embedding", "text features")),
     ConceptRule("contrastive_objective", "Contrastive Learning", "modules", "training objective", r"\bcontrastive (?:pre-?training|learning|objective|loss)\b|\bcorrect pairings?\b", ("contrastive pre-training", "image-text contrastive loss", "correct pairings")),
     ConceptRule("bipartite_matching", "Bipartite Matching", "modules", "training objective", r"\bbipartite matching\b|\bhungarian matching\b", ("hungarian matching", "set prediction loss")),
     ConceptRule("volume_density", "Volume Density", "modules", "field output", r"\bvolume density\b", ("density", "sigma")),
     ConceptRule("color", "Color", "modules", "field output", r"\b(?:rgb|emitted) colou?r\b|\bradiance\b|\bcolou?r and volume density\b", ("rgb color", "radiance"), True),
     ConceptRule("volume_rendering", "Volume Rendering", "modules", "renderer", r"\b(?:differentiable\s+)?volume rendering\b", ("differentiable volume rendering",)),
     ConceptRule("class_predictions", "Class Predictions", "outputs", "output", r"\bclass (?:prediction|predictions|labels?)\b|\bpredicts?[^.]{0,80}\bclass\b", ("classes", "class labels")),
-    ConceptRule("class_prediction", "Class Prediction", "outputs", "output", r"\bimage classification predictions?\b|\bclassification predictions?\b|\bclass label\b", ("image classification predictions", "classification predictions", "class label")),
+    ConceptRule("class_prediction", "Class Prediction", "outputs", "output", r"\bimage classification predictions?\b|\bclassification predictions?\b|\bclass label\b", ("image classification predictions", "classification predictions", "class label", "class")),
     ConceptRule("box_predictions", "Bounding Box Predictions", "outputs", "output", r"\bbounding box(?:es| predictions?)?\b|\bbox predictions?\b", ("bounding boxes", "box predictions")),
     ConceptRule("classification", "Classification", "outputs", "output head", r"\bclassification head\b|\bpredicts? the class label\b", ("class label",)),
     ConceptRule("box_regression", "Bounding-box Regression", "outputs", "output head", r"\bbounding[ -]?box regression\b|\bbox regression\b", ("bounding box", "box branch")),
@@ -92,7 +92,7 @@ CONCEPT_RULES = (
     ConceptRule("source_tokens", "Inputs", "inputs", "source sequence", r"\bencoder maps an input sequence(?: of symbol representations)?\b|\blearned embeddings to convert the input\s+tokens\b", ("input sequence", "source tokens")),
     ConceptRule("input_embedding", "Input Embedding", "modules", "embedding", r"\blearned embeddings to convert the input\s+tokens\b|\binput embeddings?\b", ("input embeddings",), context_pattern=r"\bencoder\b.*\bdecoder\b|\bencoder and decoder stacks\b"),
     ConceptRule("encoder_stack", "Encoder Stack", "modules", "encoder", r"\bencoder is composed of a stack\b|\bencoder stack\b", ("encoder", "transformer encoder")),
-    ConceptRule("target_tokens", "Outputs (shifted right)", "inputs", "target sequence", r"\boutput embeddings? (?:are )?offset by one position\b|\binput\s+tokens and output tokens\b", ("target tokens", "target sequence", "outputs shifted right")),
+    ConceptRule("target_tokens", "Outputs (shifted right)", "inputs", "target sequence", r"\boutput embeddings? (?:are )?offset by one position\b|\binput\s+tokens and output tokens\b", ("target tokens", "target sequence", "output sequence", "outputs shifted right")),
     ConceptRule("output_embedding", "Output Embedding", "modules", "embedding", r"\boutput embeddings?\b|\binput\s+tokens and output tokens\b", ("output embeddings",), context_pattern=r"\bencoder\b.*\bdecoder\b|\bencoder and decoder stacks\b"),
     ConceptRule("decoder_stack", "Decoder Stack", "modules", "decoder", r"\bdecoder is also composed of a stack\b|\bdecoder stack\b", ("decoder", "transformer decoder")),
     ConceptRule("output_linear", "Linear", "modules", "output projection", r"\blearned linear transfor(?:mation|\-\s*mation) and softmax function to convert the decoder output\b", ("linear layer", "output projection")),
@@ -126,6 +126,7 @@ RELATION_RULES = (
     ("class_token", "transformer_encoder", "conditioning"),
     ("transformer_encoder", "mlp_head", "data_flow"),
     ("mlp_head", "class_prediction", "data_flow"),
+    ("mlp_head", "classification", "data_flow"),
     ("input_image", "cnn_backbone", "data_flow"),
     ("input_image", "backbone", "data_flow"),
     ("cnn_backbone", "transformer_encoder", "data_flow"),
@@ -278,7 +279,7 @@ def _find_matches(rule: ConceptRule, selected: list[dict[str, Any]], relevant: l
     pattern = re.compile(rule.pattern, re.IGNORECASE)
     if rule.context_pattern:
         context = re.compile(rule.context_pattern, re.IGNORECASE | re.DOTALL)
-        context_text = " ".join(str(item.get("text") or "") for item in relevant)
+        context_text = " ".join(str(item.get("text") or "") for item in [*selected, *relevant])
         if not context.search(context_text):
             return []
     primary = [item for item in selected if pattern.search(str(item.get("text") or ""))]
@@ -301,9 +302,12 @@ def _find_existing(spec: dict[str, Any], rule: ConceptRule) -> tuple[str, dict[s
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             if not isinstance(item, dict):
                 continue
-            value = _normalized(_label(item))
+            raw_value = _label(item)
+            value = _normalized(raw_value)
             item_id = _normalized(item.get("id"))
             if item_id in accepted or value in accepted:
+                return field, item
+            if rule.label.isupper() and re.match(rf"^\s*{re.escape(rule.label)}\s*(?:\(|$)", raw_value, re.IGNORECASE):
                 return field, item
             if rule.key != "self_feedback" and field == rule.field and len(value) >= 8 and any(len(candidate) >= 8 and (value in candidate or candidate in value) for candidate in accepted if candidate):
                 return field, item
@@ -400,8 +404,86 @@ def _ground_declared_entities(spec: dict[str, Any], relevant: list[dict[str, Any
     return grounded
 
 
+def _heuristic_rule_scope(
+    selected: list[dict[str, Any]],
+    relevant: list[dict[str, Any]],
+    declared_rule_keys: set[str],
+) -> tuple[set[str], dict[str, list[dict[str, Any]]]]:
+    matches = {
+        rule.key: found
+        for rule in CONCEPT_RULES
+        if (found := _find_matches(rule, selected, relevant))
+    }
+    candidates = set(matches)
+    if not candidates:
+        return set(), matches
+    seeds = declared_rule_keys | {
+        rule.key
+        for rule in CONCEPT_RULES
+        if rule.key in candidates and _find_matches(rule, selected, [])
+    }
+    adjacency = {key: set() for key in candidates}
+    for source_key, target_key, _ in RELATION_RULES:
+        if source_key in candidates and target_key in candidates:
+            adjacency[source_key].add(target_key)
+            adjacency[target_key].add(source_key)
+
+    def component(start: str) -> set[str]:
+        reached: set[str] = set()
+        pending = [start]
+        while pending:
+            current = pending.pop()
+            if current in reached:
+                continue
+            reached.add(current)
+            pending.extend(adjacency.get(current, set()) - reached)
+        return reached
+
+    if seeds & candidates:
+        allowed: set[str] = set()
+        for seed in seeds & candidates:
+            allowed.update(component(seed))
+        return allowed, matches
+
+    components: list[set[str]] = []
+    remaining = set(candidates)
+    while remaining:
+        group = component(next(iter(remaining)))
+        components.append(group)
+        remaining -= group
+    components.sort(key=lambda group: (len(group), sum(len(matches[key]) for key in group)), reverse=True)
+    return components[0], matches
+
+
 def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     selected, relevant = _relevant_evidence(parsed)
+    declared_entities = [
+        item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+    fallback_declared = any(str(item.get("role") or "") == "paper-derived stage requiring VLM verification" for item in declared_entities)
+    conservative_expansion = len(declared_entities) >= 3 and len([item for item in spec.get("relations", []) if isinstance(item, dict)]) >= 1 and not fallback_declared
+    selected_pages = {int(item.get("page") or 0) for item in selected if item.get("page")}
+    relevant_non_background = [
+        item
+        for item in relevant
+        if not any(term in str(item.get("section_hint") or "").casefold() for term in ("related work", "reference", "acknowledg"))
+        and not (
+            any(term in str(item.get("section_hint") or "").casefold() for term in ("introduction", "background"))
+            and re.search(r"\b(?:for example|e\.g\.|such as)\b[^\n]{0,160}\[\s*\d+", str(item.get("text") or ""), re.IGNORECASE)
+        )
+    ]
+    initially_declared_rule_keys = {
+        rule.key
+        for rule in CONCEPT_RULES
+        if _find_existing(spec, rule)
+    }
+    heuristic_rule_keys: set[str] | None = None
+    heuristic_matches: dict[str, list[dict[str, Any]]] = {}
+    if not conservative_expansion:
+        heuristic_rule_keys, heuristic_matches = _heuristic_rule_scope(selected, relevant_non_background, initially_declared_rule_keys)
     grounded_statements = {
         field: _ground_statement(spec.get(field), relevant)
         for field in ("research_problem", "central_claim")
@@ -412,11 +494,24 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
     upgraded_entities: list[str] = []
     adopted_entities: list[str] = []
     for rule in CONCEPT_RULES:
-        matches = _find_matches(rule, selected, relevant)
+        existing = _find_existing(spec, rule)
+        if existing:
+            matches = _find_matches(rule, selected, relevant)
+        elif not conservative_expansion:
+            matches = heuristic_matches.get(rule.key, []) if rule.key in (heuristic_rule_keys or set()) else []
+        else:
+            matches = _find_matches(rule, selected, [])
+            if not matches:
+                connected_to_declared = any(
+                    (source_key == rule.key and target_key in initially_declared_rule_keys)
+                    or (target_key == rule.key and source_key in initially_declared_rule_keys)
+                    for source_key, target_key, _ in RELATION_RULES
+                )
+                if connected_to_declared:
+                    matches = _find_matches(rule, [], relevant_non_background)
         if not matches:
             continue
         evidence_ids = list(dict.fromkeys(str(item.get("id")) for item in matches if item.get("id")))
-        existing = _find_existing(spec, rule)
         if existing:
             _, item = existing
             current = _label(item)
@@ -509,5 +604,8 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
         "repaired_relations": repaired_relations,
         "grounded_statements": {field: ids for field, ids in grounded_statements.items() if ids},
         "grounded_entities": grounded_entities,
+        "conservative_expansion": conservative_expansion,
+        "expansion_page_scope": sorted(selected_pages),
+        "new_entities_require_declared_neighbor": conservative_expansion,
         "rules_are_evidence_gated": True,
     }

@@ -703,7 +703,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 17, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 25, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"

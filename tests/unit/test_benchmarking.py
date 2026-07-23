@@ -48,6 +48,53 @@ class BenchmarkingTests(unittest.TestCase):
         self.assertEqual(result["entity_recall"], 1.0)
         self.assertEqual(result["relation_recall"], 1.0)
 
+    def test_planning_contract_prefers_real_entity_with_variable_suffix_over_relation_label(self):
+        expected = {
+            "entities": [
+                {"id": "refiner", "label": "Refine"},
+                {"id": "result", "label": "Refined Output"},
+            ],
+            "relations": [{"source": "refiner", "target": "result"}],
+        }
+        specification = {
+            "modules": [{"id": "refine", "name": "Refine"}],
+            "outputs": [{"id": "final", "name": "Refined Output (yn)"}],
+            "relations": [{"source": "refine", "target": "final", "label": "Refined Output"}],
+        }
+
+        result = _score_planning_contract(expected, specification)
+
+        self.assertEqual(result["entity_mapping"]["result"], "final")
+        self.assertEqual(result["relation_recall"], 1.0)
+
+    def test_planning_contract_uses_relations_to_disambiguate_equal_input_labels(self):
+        expected = {
+            "entities": [
+                {"id": "task_input", "label": "Input"},
+                {"id": "generator", "label": "Generate"},
+            ],
+            "relations": [{"source": "task_input", "target": "generator"}],
+        }
+        specification = {
+            "inputs": [
+                {"id": "iteration_input", "name": "Input (y0)"},
+                {"id": "task_input", "name": "Input"},
+            ],
+            "modules": [
+                {"id": "model", "name": "Model"},
+                {"id": "generate", "name": "Generate"},
+            ],
+            "relations": [
+                {"source": "iteration_input", "target": "model"},
+                {"source": "task_input", "target": "generate"},
+            ],
+        }
+
+        result = _score_planning_contract(expected, specification)
+
+        self.assertEqual(result["entity_mapping"]["task_input"], "task_input")
+        self.assertEqual(result["relation_recall"], 1.0)
+
     def test_bundled_cases_validate_and_list(self):
         p2i = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
         i2p = ROOT / "benchmarks" / "image-to-ppt" / "cases" / "001_three_stage_layout"

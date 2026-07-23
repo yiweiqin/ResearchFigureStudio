@@ -63,6 +63,15 @@ def _normalized_text(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
 
 
+def _normalized_label_variants(value: object) -> set[str]:
+    label = str(value or "").strip()
+    variants = {_normalized_text(label)}
+    without_suffix = re.sub(r"\s*\([^()]{1,24}\)\s*$", "", label).strip()
+    if without_suffix:
+        variants.add(_normalized_text(without_suffix))
+    return {item for item in variants if item}
+
+
 def _score_planning_contract(expected: dict, specification: dict) -> dict[str, Any]:
     if not specification:
         return {"available": False}
@@ -72,7 +81,7 @@ def _score_planning_contract(expected: dict, specification: dict) -> dict[str, A
             if not isinstance(item, dict):
                 continue
             label = next((str(item.get(key) or "").strip() for key in ("visible_label", "name", "text", "statement", "label", "id") if str(item.get(key) or "").strip()), "")
-            actual_entities.append({"id": str(item.get("id") or f"{field}_{index}"), "label": label, "normalized": _normalized_text(label), "field": field})
+            actual_entities.append({"id": str(item.get("id") or f"{field}_{index}"), "label": label, "normalized": _normalized_text(label), "normalized_variants": _normalized_label_variants(label), "field": field})
     expanded_relations = set()
     for index, item in enumerate(specification.get("relations", []) if isinstance(specification.get("relations"), list) else []):
         if not isinstance(item, dict):
@@ -84,41 +93,14 @@ def _score_planning_contract(expected: dict, specification: dict) -> dict[str, A
         label = str(item.get("label") or "").strip()
         if source and target and label:
             label_id = f"relation_label_{index}"
-            actual_entities.append({"id": label_id, "label": label, "normalized": _normalized_text(label), "field": "relation_label"})
+            actual_entities.append({"id": label_id, "label": label, "normalized": _normalized_text(label), "normalized_variants": _normalized_label_variants(label), "field": "relation_label"})
             expanded_relations.add((source, label_id))
             expanded_relations.add((label_id, target))
-    expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
-    mapping: dict[str, str] = {}
-    matched = []
-    used_actual_ids: set[str] = set()
-    for item in expected_entities:
-        primary = _normalized_text(item.get("label"))
-        aliases = [_normalized_text(value) for value in item.get("aliases", []) if _normalized_text(value)]
-        def match_score(actual: dict[str, str]) -> int:
-            value = actual["normalized"]
-            if not value or actual["id"] in used_actual_ids:
-                return 0
-            bonus = 2 if actual.get("field") in {"inputs", "modules", "outputs", "innovations"} else 1 if actual.get("field") == "relation_label" else 0
-            if primary and primary == value:
-                return 5 + bonus
-            if any(alias == value for alias in aliases):
-                return 4 + bonus
-            if any(alias in value or value in alias for alias in aliases):
-                return 3 + bonus
-            if primary and (primary in value or value in primary):
-                return 1 + bonus
-            return 0
-        ranked = sorted(((match_score(actual), actual) for actual in actual_entities), key=lambda pair: pair[0], reverse=True)
-        match = ranked[0][1] if ranked and ranked[0][0] > 0 else None
-        if match:
-            mapping[str(item.get("id"))] = match["id"]
-            used_actual_ids.add(match["id"])
-            matched.append(str(item.get("id")))
-    expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
     actual_relations = expanded_relations
     adjacency: dict[str, set[str]] = {}
     for source, target in actual_relations:
         adjacency.setdefault(source, set()).add(target)
+
     def connected(source: str, target: str, max_hops: int = 2) -> bool:
         if (source, target) in actual_relations:
             return True
@@ -130,6 +112,71 @@ def _score_planning_contract(expected: dict, specification: dict) -> dict[str, A
                 return True
             visited.update(frontier)
         return False
+
+    expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
+    mapping: dict[str, str] = {}
+    matched = []
+    used_actual_ids: set[str] = set()
+    candidate_scores: dict[str, dict[str, int]] = {}
+    for item in expected_entities:
+        expected_id = str(item.get("id"))
+        primary = _normalized_text(item.get("label"))
+        aliases = [_normalized_text(value) for value in item.get("aliases", []) if _normalized_text(value)]
+        def match_score(actual: dict[str, Any]) -> int:
+            value = actual["normalized"]
+            variants = actual.get("normalized_variants") or {value}
+            if not value:
+                return 0
+            bonus = 2 if actual.get("field") in {"inputs", "modules", "outputs", "innovations"} else 1 if actual.get("field") == "relation_label" else 0
+            if primary and primary in variants:
+                return 5 + bonus
+            if any(alias in variants for alias in aliases):
+                return 4 + bonus
+            if any(alias in value or value in alias for alias in aliases):
+                return 3 + bonus
+            if primary and (primary in value or value in primary):
+                return 1 + bonus
+            return 0
+        candidate_scores[expected_id] = {actual["id"]: match_score(actual) for actual in actual_entities}
+        ranked = sorted(
+            ((score, actual) for actual in actual_entities if actual["id"] not in used_actual_ids and (score := candidate_scores[expected_id][actual["id"]]) > 0),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        match = ranked[0][1] if ranked and ranked[0][0] > 0 else None
+        if match:
+            mapping[expected_id] = match["id"]
+            used_actual_ids.add(match["id"])
+            matched.append(expected_id)
+    expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
+    for expected_id, current_actual in list(mapping.items()):
+        blocked = set(mapping.values()) - {current_actual}
+
+        def relation_support(actual_id: str) -> int:
+            support = 0
+            for relation in expected_relations:
+                source_expected = str(relation.get("source"))
+                target_expected = str(relation.get("target"))
+                if source_expected == expected_id and target_expected in mapping:
+                    support += int(connected(actual_id, mapping[target_expected]))
+                elif target_expected == expected_id and source_expected in mapping:
+                    support += int(connected(mapping[source_expected], actual_id))
+            return support
+
+        alternatives = [
+            actual_id
+            for actual_id, score in candidate_scores.get(expected_id, {}).items()
+            if score > 0 and actual_id not in blocked
+        ]
+        if alternatives:
+            mapping[expected_id] = max(
+                alternatives,
+                key=lambda actual_id: (
+                    candidate_scores[expected_id][actual_id],
+                    relation_support(actual_id),
+                    actual_id == current_actual,
+                ),
+            )
     relation_matches = 0
     matched_relations = []
     missing_relations = []

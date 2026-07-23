@@ -363,6 +363,160 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(any(item.get("id") == "fallback_contrastive" for item in spec["modules"]))
         self.assertEqual(spec["topology"], "multimodal")
 
+    def test_rich_clip_contract_reuses_singular_embedding_entities(self):
+        caption = "Figure 1. CLIP trains an image encoder and a text encoder on paired image and text inputs, then embeds class descriptions for a zero-shot classifier."
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 3, "kind": "paragraph", "text": "The image and text embeddings are aligned by a contrastive objective.", "section_hint": "Method", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [
+                    {"id": "images", "name": "Image", "evidence_ids": ["E0001"]},
+                    {"id": "texts", "name": "Text", "evidence_ids": ["E0001"]},
+                    {"id": "classes", "name": "Class Descriptions", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "image_encoder", "name": "Image Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "text_encoder", "name": "Text Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "contrastive", "name": "Contrastive Learning", "evidence_ids": ["E0002"]},
+                ],
+                "outputs": [
+                    {"id": "image_embedding", "name": "image embedding", "evidence_ids": ["E0002"]},
+                    {"id": "text_embedding", "name": "text embedding", "evidence_ids": ["E0002"]},
+                    {"id": "classifier", "name": "Zero-Shot Classifier", "evidence_ids": ["E0001"]},
+                ],
+                "relations": [{"source": "image_embedding", "target": "classifier", "type": "classification", "evidence_ids": ["E0001", "E0002"]}],
+                "innovations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        embedding_labels = [
+            item.get("name")
+            for field in ("inputs", "modules", "outputs")
+            for item in spec[field]
+            if "embedding" in str(item.get("name") or "").casefold()
+        ]
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertEqual(len([label for label in embedding_labels if "image" in label.casefold()]), 1)
+        self.assertEqual(len([label for label in embedding_labels if "text" in label.casefold()]), 1)
+        self.assertIn(("text_embedding", "classifier"), pairs)
+
+    def test_rich_bert_contract_uses_selected_caption_for_context_rules(self):
+        caption = "Figure 2: BERT input representation. The input embeddings are the sum of the token embeddings, the segmentation embeddings and the position embeddings."
+        parsed = {
+            "page_count": 12,
+            "document_index": {"figures": [{"page": 5, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 5, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [{"id": "tokens", "name": "Input Sequence", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "token_embeddings", "name": "Token Embeddings", "evidence_ids": ["E0001"]},
+                    {"id": "position_embeddings", "name": "Position Embeddings", "evidence_ids": ["E0001"]},
+                    {"id": "bert", "name": "Bidirectional Transformer Encoder", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [{"source": "tokens", "target": "token_embeddings", "type": "embedding", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {item.get("name"): item.get("id") for field in ("inputs", "modules", "outputs") for item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertIn("Segment Embeddings", ids)
+        self.assertIn("Input Representation", ids)
+        self.assertIn((ids["Segment Embeddings"], ids["Input Representation"]), pairs)
+
+    def test_rich_nerf_contract_reuses_parenthesized_mlp_and_recovers_distant_method_step(self):
+        overview = "Figure 2: A neural radiance field samples 5D coordinates along camera rays and uses an MLP to predict color and volume density for volume rendering."
+        encoding = "We transform each sampled 3D point with a positional encoding before passing it into the MLP."
+        parsed = {
+            "page_count": 10,
+            "document_index": {"figures": [{"page": 2, "caption": overview}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": overview, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 6, "kind": "paragraph", "text": encoding, "section_hint": "Method", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [{"id": "ray", "name": "Camera Rays", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "points", "name": "Sampled 3D Points", "evidence_ids": ["E0001", "E0002"]},
+                    {"id": "field", "name": "MLP (F_theta)", "evidence_ids": ["E0001", "E0002"]},
+                    {"id": "render", "name": "Volume Rendering", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [{"id": "image", "name": "Rendered Image", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [{"source": "ray", "target": "points", "type": "sampling", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        mlps = [item for item in spec["modules"] if str(item.get("name") or "").casefold().startswith("mlp")]
+        positional = next(item for item in spec["modules"] if item.get("name") == "Positional Encoding")
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertEqual(len(mlps), 1)
+        self.assertIn(("points", positional["id"]), pairs)
+        self.assertIn((positional["id"], "field"), pairs)
+
+    def test_rich_transformer_contract_recovers_connected_steps_from_distant_method_evidence(self):
+        caption = "Figure 1: The Transformer follows an encoder-decoder architecture."
+        method = "We use learned embeddings to convert the input tokens and output tokens to vectors. Output embeddings are offset by one position. A linear transformation and softmax convert the decoder output to predicted next-token probabilities."
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 6, "kind": "paragraph", "text": method, "section_hint": "Method", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [
+                    {"id": "input_embedding", "name": "Input Embedding", "evidence_ids": ["E0002"]},
+                    {"id": "output_embedding", "name": "Output Embedding", "evidence_ids": ["E0002"]},
+                    {"id": "target_sequence", "name": "output sequence", "evidence_ids": ["E0002"]},
+                ],
+                "modules": [
+                    {"id": "encoder", "name": "Encoder Stack", "evidence_ids": ["E0001"]},
+                    {"id": "decoder", "name": "Decoder Stack", "evidence_ids": ["E0001"]},
+                    {"id": "softmax", "name": "Softmax", "evidence_ids": ["E0002"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [{"source": "encoder", "target": "decoder", "type": "cross_attention", "evidence_ids": ["E0001"]}],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {item.get("name"): item.get("id") for field in ("inputs", "modules", "outputs") for item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertIn((ids["Inputs"], "input_embedding"), pairs)
+        self.assertEqual(ids["Outputs (shifted right)"], "target_sequence")
+        self.assertIn(("target_sequence", "output_embedding"), pairs)
+        self.assertIn(("softmax", ids["Output Probabilities"]), pairs)
+
     def test_generic_completion_recovers_nerf_branch_without_false_multimodal_topology(self):
         caption = "Fig. 2: An overview of our neural radiance field and differentiable rendering procedure. We synthesize images by sampling 5D coordinates along camera rays, feeding locations and viewing direction into an MLP to produce a color and volume density, and using volume rendering to composite these values into an image."
         positional = "Fig. 4: Our full model passes input coordinates through a high-frequency positional encoding."
@@ -505,6 +659,47 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(pairs[("mips", ids["Top-K Documents"])]["evidence_ids"])
         self.assertFalse(any("latent_z" in (item["source"], item["target"]) for item in spec["relations"]))
         self.assertTrue(validation["ok"])
+
+    def test_rich_sam_contract_does_not_import_unrelated_clip_components(self):
+        sam_caption = "Figure 1: The promptable segmentation model contains an image encoder, prompt encoder, and mask decoder that produces a valid segmentation mask."
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": sam_caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": sam_caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 1, "kind": "paragraph", "text": "CLIP uses class descriptions, a text encoder, text embeddings, and contrastive learning.", "section_hint": "Introduction", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "image", "name": "Image", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "image_encoder", "name": "Image Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "prompt_encoder", "name": "Prompt Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "mask_decoder", "name": "Mask Decoder", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [{"id": "mask", "name": "Valid Segmentation Mask", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [
+                    {"source": "image", "target": "image_encoder", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "image_encoder", "target": "mask_decoder", "type": "feature_flow", "evidence_ids": ["E0001"]},
+                    {"source": "prompt_encoder", "target": "mask_decoder", "type": "conditioning", "evidence_ids": ["E0001"]},
+                    {"source": "mask_decoder", "target": "mask", "type": "prediction", "evidence_ids": ["E0001"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        labels = {_item.get("name") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+
+        self.assertNotIn("Class Descriptions", labels)
+        self.assertNotIn("Text Encoder", labels)
+        self.assertNotIn("Contrastive Learning", labels)
+        self.assertTrue(plan["contract_completion_report"]["conservative_expansion"])
 
     def test_generic_completion_repairs_vlm_ids_labels_and_relation_grounding(self):
         caption = "Figure 1: Pre-training and fine-tuning procedures."

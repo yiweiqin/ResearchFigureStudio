@@ -18,7 +18,7 @@
     {"source": "top_k_documents", "target": "generator", "type": "conditioning", "required": true},
     {"source": "generator", "target": "output_sequence", "type": "generation", "required": true}
   ],
-  "forbidden_labels": ["Image Encoder", "Object Queries", "Mask Decoder", "Convolutional Backbone"],
+  "forbidden_labels": ["Image Encoder", "Object Queries", "Mask Decoder", "Convolutional Backbone", "Class Prediction", "Class Predictions", "Classification Head"],
   "expected_reading_order": ["input_query", "query_encoder", "document_index", "retriever", "top_k_documents", "generator", "output_sequence"],
   "topology_requirements": {"primary_flow": "retrieval_then_generation", "branch_count": 2, "feedback_loop_count": 0, "dense_multi_panel": false}
 }
