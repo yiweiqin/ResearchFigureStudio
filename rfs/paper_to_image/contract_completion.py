@@ -436,6 +436,7 @@ def _heuristic_rule_scope(
     relevant: list[dict[str, Any]],
     declared_rule_keys: set[str],
 ) -> tuple[set[str], dict[str, list[dict[str, Any]]]]:
+    selected_ids = {str(item.get("id")) for item in selected if item.get("id")}
     scoped_relevant = relevant
     matches = {
         rule.key: found
@@ -473,6 +474,17 @@ def _heuristic_rule_scope(
                 right_center = (float(right_bbox[1]) + float(right_bbox[3])) / 2.0
                 if abs(left_center - right_center) <= 360.0:
                     return True
+        left_selected = any(str(item.get("id")) in selected_ids for item in left_items)
+        right_selected = any(str(item.get("id")) in selected_ids for item in right_items)
+
+        def method_grounded(items: list[dict[str, Any]]) -> bool:
+            blocked = ("introduction", "background", "related work", "reference", "acknowledg", "experiment", "result")
+            return any(not any(term in str(item.get("section_hint") or "").casefold() for term in blocked) for item in items)
+
+        if left_selected and method_grounded(right_items):
+            return True
+        if right_selected and method_grounded(left_items):
+            return True
         return False
 
     for source_key, target_key, _ in RELATION_RULES:

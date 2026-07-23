@@ -378,7 +378,7 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         selected, details = _prioritize_ocr_candidates(pages, list(range(1, 13)), 6)
 
-        self.assertEqual(selected, [1, 2, 3, 4, 6, 10])
+        self.assertEqual(selected, [1, 2, 3, 4, 10, 6])
         self.assertEqual([item["rank"] for item in details], [1, 2, 3, 4, 5, 6])
 
     def test_rapidocr_worker_count_is_bounded_and_adapter_safe(self):
@@ -386,6 +386,11 @@ class PaperAnalyzerTests(unittest.TestCase):
             self.assertEqual(_rapidocr_worker_count("rapidocr", None, 6), min(3, __import__("os").cpu_count() or 1))
             self.assertEqual(_rapidocr_worker_count("rapidocr", lambda *_args: [], 6), 1)
             self.assertEqual(_rapidocr_worker_count("easyocr", None, 6), 1)
+
+        with patch.dict("os.environ", {"RFS_OCR_WORKERS": ""}, clear=False), patch("rfs.paper_to_image.analyzer.os.cpu_count", return_value=12):
+            self.assertEqual(_rapidocr_worker_count("rapidocr", None, 6), 4)
+        with patch.dict("os.environ", {"RFS_OCR_WORKERS": ""}, clear=False), patch("rfs.paper_to_image.analyzer.os.cpu_count", return_value=4):
+            self.assertEqual(_rapidocr_worker_count("rapidocr", None, 6), 2)
 
     def test_invalid_rapidocr_environment_setting_falls_back(self):
         with patch.dict("os.environ", {"RFS_RAPIDOCR_THREADS": "invalid"}, clear=False):
@@ -440,15 +445,35 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter, max_ocr_pages=6)
 
-        self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 4, 6, 10])
-        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 4, 6, 10])
-        self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 4, 6, 10])
+        self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 4, 10, 6])
+        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 4, 10, 6])
+        self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 4, 10, 6])
         self.assertEqual(parsed["extraction_report"]["status"], "warning")
         self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
         self.assertEqual(parsed["extraction_report"]["semantic_scope"], "sampled_pages_only")
         self.assertFalse(parsed["extraction_report"]["scientific_scope_complete"])
         self.assertTrue(parsed["extraction_report"]["ocr_schedule_complete"])
         self.assertTrue(parsed["extraction_report"]["ocr_run_complete"])
+
+    def test_three_high_confidence_scan_pages_are_usable_partial_evidence(self):
+        path = self._multipage_pdf([[] for _ in range(12)])
+
+        def adapter(image_path, _lang):
+            page_number = int(Path(image_path).stem.rsplit("_", 1)[-1])
+            return [{
+                "text": f"Page {page_number} Abstract Method architecture evidence with enough reliable text for a partial engineering contract.",
+                "confidence": 0.97,
+                "quad": [[20, 20], [560, 20], [560, 70], [20, 70]],
+            }]
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter, max_ocr_pages=3)
+        report = parsed["extraction_report"]
+
+        self.assertEqual(report["ocr_pages"], [1, 2, 3])
+        self.assertTrue(report["sampled_scan_ready"])
+        self.assertEqual(report["status"], "warning")
+        self.assertEqual(report["semantic_scope"], "sampled_pages_only")
+        self.assertFalse(report["scientific_scope_complete"])
 
     def test_deadline_limited_ocr_is_not_cached_as_complete(self):
         path = self._multipage_pdf([[] for _ in range(3)])

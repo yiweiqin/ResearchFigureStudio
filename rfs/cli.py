@@ -82,7 +82,7 @@ def _doctor() -> dict:
         "rapidocr": {
             "available": importlib.util.find_spec("rapidocr_onnxruntime") is not None,
             "runtime": "onnxruntime",
-            "worker_policy": "up to 3 page workers; deadline runs use killable worker processes; 2 intra-op threads for a single page",
+            "worker_policy": "up to 4 page workers on 8+ CPUs, 2 on 4-7 CPUs, 1 below 4; deadline runs use killable worker processes; 2 intra-op threads for a single page",
             "worker_override": os.getenv("RFS_OCR_WORKERS"),
             "thread_override": os.getenv("RFS_RAPIDOCR_THREADS"),
             "detector_limit_override": os.getenv("RFS_RAPIDOCR_DET_LIMIT"),

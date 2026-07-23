@@ -605,11 +605,13 @@ def _rapidocr_worker_count(engine: str, adapter: Callable | None, page_count: in
             import rapidocr_onnxruntime  # noqa: F401
         except Exception:
             return 1
+    cpu_count = int(os.cpu_count() or 1)
+    default_workers = 4 if cpu_count >= 8 else 2 if cpu_count >= 4 else 1
     try:
-        configured = int(os.getenv("RFS_OCR_WORKERS") or 3)
+        configured = int(os.getenv("RFS_OCR_WORKERS") or default_workers)
     except ValueError:
-        configured = 3
-    return max(1, min(int(page_count), configured, int(os.cpu_count() or 1)))
+        configured = default_workers
+    return max(1, min(int(page_count), configured, cpu_count))
 
 
 def _deadline_ocr_wave(
@@ -762,8 +764,8 @@ def _prioritize_ocr_candidates(
         min(2, page_count),
         min(3, page_count),
         min(4, page_count),
-        max(1, round(page_count * 0.50)),
         max(1, round(page_count * 0.85)),
+        max(1, round(page_count * 0.50)),
     ]
     for anchor in anchors:
         if len(selected) >= max_pages:
@@ -892,9 +894,14 @@ def _read_pdf_pages(
                 })
                 ocr_pages.append(page_number)
 
-        def deadline_allows_wave() -> bool:
+        def deadline_allows_wave(rescue_page: bool = False) -> bool:
             if deadline_at is not None:
                 remaining = deadline_at - time.monotonic()
+                if rescue_page:
+                    if remaining < 45.0:
+                        warnings.append("OCR stopped to preserve deadline validation budget")
+                        return False
+                    return True
                 completed_times = [float(item["elapsed_seconds"]) for item in ocr_page_durations if isinstance(item.get("elapsed_seconds"), (int, float))]
                 estimated = (max(completed_times) * 1.25) if completed_times else 45.0
                 if remaining < estimated + 20:
@@ -903,12 +910,16 @@ def _read_pdf_pages(
             return True
 
         if deadline_at is not None and ocr_adapter is None:
-            for start in range(0, len(prioritized), ocr_worker_count):
-                if not deadline_allows_wave():
+            start = 0
+            while start < len(prioritized):
+                rescue_page = start > 0
+                if not deadline_allows_wave(rescue_page=rescue_page):
                     break
-                batch = prioritized[start:start + ocr_worker_count]
+                wave_size = 1 if rescue_page else ocr_worker_count
+                batch = prioritized[start:start + wave_size]
                 for page_number, result, ocr_elapsed in _deadline_ocr_wave(path, batch, ocr_engine, ocr_lang, deadline_at):
                     consume_ocr_result(page_number, result, ocr_elapsed)
+                start += wave_size
         elif ocr_worker_count > 1:
             def isolated_ocr(page_number: int) -> tuple[tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], float]:
                 ocr_started = time.monotonic()
@@ -1296,7 +1307,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     short_ocr_block_ratio = round(len(short_ocr_blocks) / max(1, len(ocr_blocks)), 4) if ocr_blocks else None
     sampled_scan_ready = bool(
         partial_scan
-        and len(readable) >= min(6, len(pages))
+        and len(readable) >= min(3, len(pages))
         and coverage.get("abstract")
         and coverage.get("method")
         and mean_ocr_confidence is not None

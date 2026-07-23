@@ -641,7 +641,7 @@ class PaperContractTests(unittest.TestCase):
 
     def test_generic_completion_uses_selected_architecture_page_context_and_diagram_labels(self):
         captions = [
-            "Figure 1: Model overview directly predicts a set by combining a CNN with a transformer and bipartite matching.",
+            "Figure 1: Direct set prediction combines a CNN with a transformer and bipartite matching.",
             "Figure 10: Architecture of the proposed transformer's subsystem. See the detailed description on this page.",
         ]
         parsed = {
@@ -649,7 +649,7 @@ class PaperContractTests(unittest.TestCase):
             "document_index": {"figures": [{"page": 2, "caption": captions[0]}, {"page": 20, "caption": captions[1]}]},
             "evidence": [
                 {"id": "E0001", "page": 2, "kind": "caption", "bbox": [40, 300, 500, 320], "text": captions[0], "section_hint": "Figure Captions", "confidence": 0.98},
-                {"id": "E0002", "page": 2, "kind": "paragraph", "bbox": [40, 220, 500, 240], "text": "The input image is processed for direct prediction with bipartite matching.", "section_hint": "Introduction", "confidence": 0.98},
+                {"id": "E0002", "page": 4, "kind": "paragraph", "bbox": [40, 220, 500, 240], "text": "The input image is processed for direct prediction with bipartite matching.", "section_hint": "Object Detection Method", "confidence": 0.98},
                 {"id": "E0003", "page": 20, "kind": "caption", "bbox": [40, 600, 500, 620], "text": captions[1], "section_hint": "Figure Captions", "confidence": 0.98},
                 {"id": "E0004", "page": 20, "kind": "paragraph", "bbox": [40, 100, 500, 120], "text": "Image features from the CNN backbone are passed through the transformer encoder.", "section_hint": "Detailed Architecture", "confidence": 0.98},
                 {"id": "E0005", "page": 20, "kind": "paragraph", "bbox": [40, 150, 500, 170], "text": "The decoder receives object queries and encoder memory.", "section_hint": "Detailed Architecture", "confidence": 0.98},
