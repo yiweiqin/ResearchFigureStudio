@@ -1070,6 +1070,47 @@ def build_overlay_spec(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def synchronize_plan_to_contract(plan: dict[str, Any]) -> None:
+    spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
+    entities = [
+        item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+    entity_ids = [str(item.get("id") or "") for item in entities if str(item.get("id") or "")]
+    labels = [_item_label(item) for item in entities if _item_label(item)]
+    spec["storyline"] = labels
+    spec["must_show"] = labels
+    topology = str(spec.get("topology") or "unknown")
+    if topology == "multimodal":
+        spec["training_flow"] = []
+        spec["inference_flow"] = []
+    plan["figure_specification"] = spec
+    plan["design_plan"] = {
+        "summary": "Information narrative synchronized to the normalized scientific contract.",
+        "reading_order": entity_ids,
+        "groups": [],
+        "innovation_emphasis": [_item_label(item) for item in spec.get("innovations", []) if isinstance(item, dict) and _item_label(item)],
+        "preserve": labels,
+        "remove": list(spec.get("forbidden_inventions", []) if isinstance(spec.get("forbidden_inventions"), list) else []),
+    }
+    layout = plan.get("layout_intent") if isinstance(plan.get("layout_intent"), dict) else {}
+    layout.update({
+        "summary": "Layout intent synchronized to the normalized scientific topology.",
+        "pattern": {"feedback": "loop", "multimodal": "hub_and_spoke", "dense_multiframe": "stacked", "branch": "two_stage"}.get(topology, "left_to_right"),
+        "flow_description": "Render only declared entities and directed relations; do not add implementation details outside the visible-label whitelist.",
+    })
+    plan["layout_intent"] = layout
+    plan["visual_metaphors"] = {
+        "summary": "Paper-grounded visual metaphors synchronized to the normalized contract.",
+        "items": [
+            {"module_id": str(item.get("id") or ""), "metaphor": _item_label(item), "must_show": [], "avoid_showing": list(spec.get("forbidden_inventions", []))}
+            for item in entities
+        ],
+    }
+
+
 def merge_review_grounded_contract(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     primary_spec = primary.get("figure_specification") if isinstance(primary.get("figure_specification"), dict) else {}
     fallback_spec = fallback.get("figure_specification") if isinstance(fallback.get("figure_specification"), dict) else {}
@@ -1326,6 +1367,7 @@ def prepare_paper_figure_contract(
     write_json(root / "planning_metadata.json", {"summary": "Planner execution metadata.", **planner_metadata})
     expand_plan_evidence(plan, paper_review, parsed)
     normalize_figure_contract(plan, parsed)
+    synchronize_plan_to_contract(plan)
     completion_report = plan.get("contract_completion_report") if isinstance(plan.get("contract_completion_report"), dict) else {}
     write_json(root / "contract_completion_report.json", completion_report)
     for name in ("paper_summary", "figure_specification", "design_plan", "layout_intent", "visual_metaphors", "style_plan"):

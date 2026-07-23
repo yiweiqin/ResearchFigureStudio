@@ -232,6 +232,26 @@ class PaperToImageTests(unittest.TestCase):
             self.assertEqual(review["ocr"]["allowed_duplicate_labels"], ["Document Parser"])
             self.assertEqual(review["ocr"]["duplicate_labels"], [])
 
+    def test_candidate_review_rejects_visible_labels_outside_contract_whitelist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+
+            def critic(path, template, prompt):
+                result = _passing_critic(path, template, prompt)
+                result["ocr"]["detected_labels"].append("Contrastive Loss")
+                return result
+
+            review = review_candidate(candidate, blueprint, _plan(), {"template_id": "linear", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=critic)
+
+            self.assertFalse(review["production_pass"])
+            self.assertEqual(review["ocr"]["unexpected_labels"], ["Contrastive Loss"])
+            self.assertIn("Remove unexpected visible label: Contrastive Loss", review["repair"])
+            self.assertIn("Contrastive Loss", review["remove"])
+
     def test_complex_feedback_candidate_requires_focused_topology_pass(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -535,6 +555,10 @@ class PaperToImageTests(unittest.TestCase):
             self.assertEqual(len(manifest["requests"]), 3)
             self.assertNotIn("secret-value", manifest_text)
             self.assertTrue(all(item["endpoint"].endswith("/images/edits") for item in manifest["requests"]))
+            self.assertEqual(result["stability"]["seed_count"], 3)
+            self.assertEqual(result["stability"]["production_pass_rate"], 1.0)
+            self.assertEqual(result["stability"]["status"], "stable")
+            self.assertTrue((root / "stability_report.json").exists())
 
     @patch("rfs.paper_to_image.generator.requests.post", side_effect=requests.Timeout("provider stalled"))
     def test_image2_timeout_is_not_blindly_retried(self, post):
@@ -560,6 +584,48 @@ class PaperToImageTests(unittest.TestCase):
                 )
 
             self.assertEqual(post.call_count, 1)
+
+    @patch("rfs.paper_to_image.generator.requests.post")
+    def test_three_seed_stability_replaces_only_provider_failed_candidate(self, post):
+        calls = {"count": 0}
+
+        def response(*_args, **_kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise requests.Timeout("provider stalled")
+            return FakeResponse()
+
+        post.side_effect = response
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_STABILITY_REPLACEMENT_RETRIES": "1", "RFS_PAPER_IMAGE_WORKERS": "3"}, clear=False):
+            root = Path(temp)
+            template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
+            render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
+
+            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic)
+
+            self.assertEqual(post.call_count, 4)
+            self.assertEqual(result["stability"]["production_pass_rate"], 1.0)
+            self.assertEqual(sum("provider_replacement_attempt" in item for item in result["candidates"]), 1)
+
+    @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
+    def test_resume_candidates_reuses_existing_images_and_generates_only_missing_seed(self, post):
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_PAPER_IMAGE_WORKERS": "3"}, clear=False):
+            root = Path(temp)
+            template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
+            render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
+            candidate_dir = root / "candidates"
+            candidate_dir.mkdir()
+            Image.new("RGB", (1536, 1024), "white").save(candidate_dir / "candidate_01.png")
+            Image.new("RGB", (1536, 1024), "white").save(candidate_dir / "candidate_02.png")
+
+            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic, resume_candidates=True)
+
+            self.assertEqual(post.call_count, 1)
+            modes = {item["candidate_id"]: item["generation"]["mode"] for item in result["candidates"]}
+            self.assertEqual(modes["candidate_01"], "existing_candidate_resume")
+            self.assertEqual(modes["candidate_02"], "existing_candidate_resume")
+            self.assertEqual(modes["candidate_03"], "edit")
+            self.assertEqual(result["stability"]["production_pass_rate"], 1.0)
 
     @patch("rfs.paper_to_image.generator.requests.post")
     def test_repair_source_skips_fresh_candidate_generation_when_source_passes(self, post):

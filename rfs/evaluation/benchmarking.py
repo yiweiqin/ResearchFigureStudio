@@ -339,10 +339,57 @@ def _select_candidate_review(run: Path) -> dict:
     return selected.get("review", {}) if isinstance(selected, dict) else {}
 
 
+def _unexpected_visible_labels(review: dict, specification: dict) -> list[str]:
+    allowed = {
+        _normalized_text(value)
+        for value in specification.get("required_labels", []) if _normalized_text(value)
+    }
+    allowed.update(
+        _normalized_text(value)
+        for value in specification.get("repeatable_labels", []) if _normalized_text(value)
+    )
+    detected = review.get("ocr", {}).get("detected_labels", []) if isinstance(review.get("ocr"), dict) else []
+    return [str(value) for value in detected if _normalized_text(value) and _normalized_text(value) not in allowed]
+
+
+def _audit_candidate_stability(candidate_report: dict, specification: dict) -> dict[str, Any]:
+    candidates = [
+        item for item in candidate_report.get("candidates", [])
+        if isinstance(item, dict) and str(item.get("candidate_id") or "").startswith("candidate_") and not item.get("repair_source")
+    ]
+    requested = int(candidate_report.get("requested_candidates") or len(candidates))
+    if requested < 2:
+        return {"summary": "Repeated-generation stability audit has insufficient samples.", "seed_count": requested, "available": False}
+    records = []
+    pass_count = 0
+    for item in candidates:
+        review = item.get("review", {}) if isinstance(item.get("review"), dict) else {}
+        unexpected = _unexpected_visible_labels(review, specification)
+        effective_pass = bool(item.get("production_pass")) and not unexpected
+        pass_count += int(effective_pass)
+        records.append({
+            "candidate_id": item.get("candidate_id"),
+            "reported_production_pass": bool(item.get("production_pass")),
+            "effective_production_pass": effective_pass,
+            "unexpected_labels": unexpected,
+        })
+    pass_rate = round(pass_count / max(1, requested), 4)
+    return {
+        "summary": "Repeated-generation stability audited against the normalized visible-label whitelist.",
+        "available": True,
+        "seed_count": requested,
+        "production_pass_count": pass_count,
+        "production_pass_rate": pass_rate,
+        "stable": pass_rate >= 0.8,
+        "candidates": records,
+    }
+
+
 def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str, Any]:
     case_root, run = Path(case_dir).resolve(), Path(run_dir).resolve()
     case = _load(case_root / "case.json")
     expected = _load(case_root / str(case.get("expected_semantics") or "expected_semantics.json"))
+    candidate_report = _load(run / "candidate_review.json")
     review = _select_candidate_review(run)
     benchmark_review = _load(run / "benchmark_review.json")
     if benchmark_review:
@@ -354,7 +401,13 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
     clarity = review.get("clarity", {}) if isinstance(review.get("clarity"), dict) else {}
     information = review.get("information", {}) if isinstance(review.get("information"), dict) else {}
     stability = review.get("stability", {}) if isinstance(review.get("stability"), dict) else {}
-    planning_contract = _score_planning_contract(expected, _load(run / "figure_specification.json"))
+    if not stability:
+        stability = _load(run / "stability_report.json") or (candidate_report.get("stability", {}) if isinstance(candidate_report.get("stability"), dict) else {})
+    if isinstance(benchmark_review.get("stability"), dict):
+        stability = benchmark_review["stability"]
+    specification = _load(run / "figure_specification.json")
+    planning_contract = _score_planning_contract(expected, specification)
+    stability_audit = _audit_candidate_stability(candidate_report, specification)
 
     expected_entities = [item for item in expected.get("entities", []) if isinstance(item, dict) and item.get("required", True)]
     expected_relations = [item for item in expected.get("relations", []) if isinstance(item, dict) and item.get("required", True)]
@@ -373,7 +426,14 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
     aesthetic_score = _clamp(aesthetic.get("score", _mean([_clamp(value) for value in aesthetic_dimensions])))
     clarity_score = _clamp(clarity.get("score", aesthetic.get("readability", 0.0)))
     information_score = _clamp(information.get("score", information.get("coverage", scientific_score)))
-    stability_score = _clamp(stability.get("production_pass_rate", stability.get("score", 0.0)))
+    stability_score = _clamp(
+        stability_audit.get("production_pass_rate")
+        if stability_audit.get("available")
+        else stability.get("production_pass_rate", stability.get("score", 0.0))
+    )
+    unexpected_labels = list(review.get("ocr", {}).get("unexpected_labels", []) if isinstance(review.get("ocr"), dict) else [])
+    if not unexpected_labels:
+        unexpected_labels = _unexpected_visible_labels(review, specification)
     hard_failures = list(review.get("hard_errors", []))
     if not scientific or not aesthetic or scientific.get("engineering_only") or aesthetic.get("engineering_only"):
         hard_failures.append("frozen benchmark judge did not provide scientific and aesthetic sections")
@@ -385,6 +445,10 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         hard_failures.append("required relations missing or incorrect")
     if exact_label_rate < 1.0:
         hard_failures.append("required labels missing or misspelled")
+    if unexpected_labels:
+        hard_failures.append("unexpected visible labels outside the normalized figure contract")
+    if stability_audit.get("available") and not stability_audit.get("stable"):
+        hard_failures.append("repeated generation stability below production threshold")
     plan_entity_min = float(case.get("thresholds", {}).get("plan_entity_recall", 1.0))
     plan_relation_min = float(case.get("thresholds", {}).get("plan_relation_recall", 1.0))
     if planning_contract.get("available") and float(planning_contract.get("entity_recall", 0.0)) < plan_entity_min:
@@ -405,6 +469,7 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         "stability_score": stability_score,
         "hallucination_count": len(invented),
         "forbidden_content_count": len(forbidden_found),
+        "unexpected_label_count": len(unexpected_labels),
         "plan_entity_recall": planning_contract.get("entity_recall"),
         "plan_relation_recall": planning_contract.get("relation_recall"),
         "plan_forbidden_content_count": len(planning_contract.get("forbidden_labels_found", [])),
@@ -420,6 +485,7 @@ def score_paper_to_image(case_dir: str | Path, run_dir: str | Path) -> dict[str,
         "run_dir": str(run),
         "metrics": metrics,
         "planning_contract": planning_contract,
+        "stability_audit": stability_audit,
         "total_score": total_score,
         "hard_failures": sorted(set(hard_failures)),
         "threshold_failures": threshold_failures,

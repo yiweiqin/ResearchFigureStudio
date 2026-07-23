@@ -217,6 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_image.add_argument("--review-model", help="Optional VLM candidate-review model. Defaults to RFS_PAPER_TO_IMAGE_REVIEW_MODEL/RFS_CRITIC_MODEL/MODEL_VLM.")
     paper_image.add_argument("--repair-rounds", type=int, default=1, help="Localized Image2 edit repair rounds, clamped to 0-1. Default: 1.")
     paper_image.add_argument("--repair-source", help="Reuse an existing failed Image2 candidate as the starting point and run review/repair without generating fresh initial candidates.")
+    paper_image.add_argument("--resume-candidates", action="store_true", help="Reuse existing candidate_XX images in --out, re-review them with current gates, and generate only missing candidates.")
     paper_image.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "vlm", "off"], default="auto", help="OCR source for exact-label validation. Auto tries local OCR and uses VLM review evidence. Default: auto.")
     paper_image.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch", help="OCR language hint. Default: en_ch.")
     paper_image.add_argument("--json", action="store_true", help="Emit JSON.")
@@ -466,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
                 template=args.template,
                 repair_rounds=args.repair_rounds,
                 repair_source=args.repair_source,
+                resume_candidates=args.resume_candidates,
                 ocr_engine=args.ocr_engine,
                 ocr_lang=args.ocr_lang,
             )

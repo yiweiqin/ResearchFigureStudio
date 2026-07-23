@@ -38,6 +38,7 @@ def run_paper_to_image(
     ocr_adapter=None,
     critic_adapter=None,
     topology_adapter=None,
+    resume_candidates: bool = False,
 ) -> dict:
     started = time.time()
     effective_planner_model = planner_model or os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
@@ -139,6 +140,7 @@ def run_paper_to_image(
         "template": selected_template["template_id"],
         "repair_rounds": max(0, min(1, int(repair_rounds))),
         "repair_source": str(Path(repair_source).resolve()) if repair_source else None,
+        "resume_candidates": bool(resume_candidates),
         "ocr_engine": ocr_engine,
         "ocr_lang": ocr_lang,
     }
@@ -163,6 +165,7 @@ def run_paper_to_image(
         ocr_adapter=ocr_adapter,
         critic_adapter=critic_adapter,
         topology_adapter=topology_adapter,
+        resume_candidates=resume_candidates,
     )
     elapsed = round(time.time() - started, 3)
     run_summary: dict[str, Any] = {
@@ -184,6 +187,7 @@ def run_paper_to_image(
         "selected_candidate_id": generation["selected_candidate_id"],
         "selected_passed_all_checks": generation["selected_passed_all_checks"],
         "repair_source": str(Path(repair_source).resolve()) if repair_source else None,
+        "resume_candidates": bool(resume_candidates),
         "elapsed_seconds": elapsed,
         "pptx_generated": False,
         "artifacts": [
@@ -208,6 +212,7 @@ def run_paper_to_image(
             "generation_parameters.json",
             "image2_request_manifest.json",
             "candidate_review.json",
+            "stability_report.json",
             "ocr_review.json",
             "template_alignment_report.json",
             "scientific_critic_report.json",

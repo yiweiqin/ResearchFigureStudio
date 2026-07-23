@@ -281,10 +281,17 @@ def review_candidate(
         ocr.setdefault("local_engine", local_engine)
         ocr.setdefault("local_detected_text", [])
     repeatable_normalized = {_normalize_text(value) for value in repeatable_labels if _normalize_text(value)}
+    required_normalized = {_normalize_text(value) for value in labels if _normalize_text(value)}
     duplicate_labels = [str(value) for value in ocr.get("duplicate_labels", [])]
     allowed_duplicate_labels = [value for value in duplicate_labels if _normalize_text(value) in repeatable_normalized]
     ocr["allowed_duplicate_labels"] = allowed_duplicate_labels
     ocr["duplicate_labels"] = [value for value in duplicate_labels if _normalize_text(value) not in repeatable_normalized]
+    detected_labels = [str(value).strip() for value in ocr.get("detected_labels", []) if str(value).strip()]
+    allowed_visible_labels = required_normalized | repeatable_normalized
+    ocr["unexpected_labels"] = [
+        value for value in detected_labels
+        if _normalize_text(value) and _normalize_text(value) not in allowed_visible_labels
+    ]
     scientific = _normalize_section(vlm_raw.get("scientific"), "Scientific")
     template_review = _normalize_section(vlm_raw.get("template"), "Template")
     aesthetic = _normalize_section(vlm_raw.get("aesthetic"), "Aesthetic")
@@ -292,7 +299,7 @@ def review_candidate(
     topology_issues = sum(len(topology_review.get(field, [])) for field in ["missing_relations", "reversed_relations", "bypassed_relations", "invented_relations"])
     if topology_required:
         topology_review["passed"] = bool(topology_review.get("passed")) and topology_review["score"] >= 0.9 and topology_issues == 0 and not topology_warning
-    ocr_issues = sum(len(ocr.get(field, [])) for field in ["missing_labels", "misspelled_labels", "duplicate_labels", "forbidden_labels_found"])
+    ocr_issues = sum(len(ocr.get(field, [])) for field in ["missing_labels", "misspelled_labels", "duplicate_labels", "forbidden_labels_found", "unexpected_labels"])
     if ocr_issues == 0:
         ocr["score"] = 1.0
     ocr["passed"] = ocr["score"] >= 0.999 and ocr_issues == 0
@@ -330,6 +337,10 @@ def review_candidate(
     repair.extend(_issue_text(value) for value in topology_review.get("repair", []) if _issue_text(value))
     repair_regions = list(vlm_raw.get("repair_regions", []))
     repair_regions.extend(_issue_text(value) for value in topology_review.get("repair_regions", []) if _issue_text(value))
+    unexpected_labels = [str(value) for value in ocr.get("unexpected_labels", []) if str(value).strip()]
+    repair.extend(f"Remove unexpected visible label: {value}" for value in unexpected_labels)
+    remove = list(vlm_raw.get("remove", []))
+    remove.extend(unexpected_labels)
     production_pass = bool(basic["passed"] and ocr["passed"] and scientific["passed"] and topology_review["passed"] and template_review["passed"] and aesthetic["passed"] and not hard_errors)
     score = 0.25 * scientific["score"] + 0.20 * ocr["score"] + 0.20 * topology_review["score"] + 0.20 * template_review["score"] + 0.15 * aesthetic["score"]
     return {
@@ -345,7 +356,7 @@ def review_candidate(
         "hard_errors": hard_errors,
         "preserve": list(vlm_raw.get("preserve", [])),
         "repair": list(dict.fromkeys(repair)),
-        "remove": list(vlm_raw.get("remove", [])),
+        "remove": list(dict.fromkeys(remove)),
         "repair_regions": list(dict.fromkeys(repair_regions)),
         "local_ocr_warning": local_warning,
         "vlm_warning": vlm_warning,

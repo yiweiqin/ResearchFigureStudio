@@ -258,6 +258,79 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("paper planning missed required benchmark entities", result["hard_failures"])
             self.assertIn("paper planning missed required benchmark relations", result["hard_failures"])
 
+    def test_paper_to_image_score_uses_generated_stability_report(self):
+        case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            review = {
+                "scientific": {"score": 1.0, "missing_modules": [], "missing_relations": [], "reversed_relations": [], "invented_items": []},
+                "ocr": {"score": 1.0, "missing_labels": [], "misspelled_labels": [], "forbidden_labels_found": []},
+                "aesthetic": {"score": 0.9, "readability": 0.9},
+                "clarity": {"score": 0.9},
+                "information": {"score": 0.95},
+                "hard_errors": [],
+            }
+            (run / "candidate_review.json").write_text(json.dumps({
+                "selected_candidate_id": "candidate_01",
+                "candidates": [{"candidate_id": "candidate_01", "score": 0.95, "review": review}],
+            }), encoding="utf-8")
+            (run / "stability_report.json").write_text(json.dumps({
+                "summary": "Generated stability.",
+                "seed_count": 3,
+                "mean_score": 0.94,
+                "worst_case_score": 0.91,
+                "standard_deviation": 0.02,
+                "production_pass_rate": 1.0,
+            }), encoding="utf-8")
+
+            result = score_benchmark_case(case_dir, run)
+
+            self.assertEqual(result["metrics"]["stability_score"], 1.0)
+            self.assertEqual(result["total_score"], 0.9575)
+
+    def test_stability_audit_rejects_candidates_with_unexpected_visible_labels(self):
+        case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            base_review = {
+                "scientific": {"score": 1.0, "missing_modules": [], "missing_relations": [], "reversed_relations": [], "invented_items": []},
+                "aesthetic": {"score": 1.0, "readability": 1.0},
+                "clarity": {"score": 1.0},
+                "information": {"score": 1.0},
+                "hard_errors": [],
+            }
+            required = ["Raw Document", "Document Encoding", "Evidence Aggregation", "Final Prediction"]
+            candidates = []
+            for index in range(1, 4):
+                labels = [*required, "Contrastive Loss"] if index == 2 else required
+                review = {**base_review, "ocr": {"score": 1.0, "detected_labels": labels, "missing_labels": [], "misspelled_labels": [], "forbidden_labels_found": []}}
+                candidates.append({"candidate_id": f"candidate_{index:02d}", "score": 1.0, "production_pass": True, "review": review})
+            (run / "candidate_review.json").write_text(json.dumps({
+                "requested_candidates": 3,
+                "selected_candidate_id": "candidate_01",
+                "candidates": candidates,
+                "stability": {"production_pass_rate": 1.0},
+            }), encoding="utf-8")
+            (run / "figure_specification.json").write_text(json.dumps({
+                "inputs": [{"id": "raw", "name": "Raw Document"}],
+                "modules": [{"id": "encoding", "name": "Document Encoding"}, {"id": "aggregation", "name": "Evidence Aggregation"}],
+                "outputs": [{"id": "prediction", "name": "Final Prediction"}],
+                "relations": [
+                    {"source": "raw", "target": "encoding"},
+                    {"source": "encoding", "target": "aggregation"},
+                    {"source": "aggregation", "target": "prediction"},
+                ],
+                "required_labels": required,
+            }), encoding="utf-8")
+
+            result = score_benchmark_case(case_dir, run)
+
+            self.assertFalse(result["passed"])
+            self.assertEqual(result["metrics"]["stability_score"], 0.6667)
+            self.assertIn("repeated generation stability below production threshold", result["hard_failures"])
+            second = next(item for item in result["stability_audit"]["candidates"] if item["candidate_id"] == "candidate_02")
+            self.assertEqual(second["unexpected_labels"], ["Contrastive Loss"])
+
     def test_full_slide_picture_is_detected_as_editability_cheating(self):
         case_dir = ROOT / "benchmarks" / "image-to-ppt" / "cases" / "001_three_stage_layout"
         with tempfile.TemporaryDirectory() as tmp:

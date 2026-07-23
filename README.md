@@ -222,6 +222,20 @@ Image-2 generation uses a 120-second default request timeout configured by
 or provider failures receive at most the configured `--image-retries` attempts,
 whose default is one.
 
+Use `--candidates 3` for a minimum stability audit. Independent candidates are
+generated and reviewed concurrently, and `stability_report.json` records the
+production pass rate, mean score, worst-case score, standard deviation, and
+failure-mode counts. Benchmark scoring consumes this report automatically
+instead of treating one selected best image as evidence of stability.
+
+Every visible scientific label is checked against the normalized contract
+whitelist. Paper-supported but out-of-scope details still fail the overview if
+they were intentionally omitted from the figure contract. For interrupted
+stability runs, rerun the same output directory with `--resume-candidates`;
+existing images are re-reviewed and only missing candidates are generated.
+Three-seed stability runs may automatically replace one provider-failed seed,
+without regenerating successful candidates.
+
 ## Offline Smoke Test
 
 Use placeholder assets to validate the local pipeline without calling any API:

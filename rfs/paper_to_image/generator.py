@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shutil
+import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -100,6 +101,91 @@ def _image2_edit_url() -> str:
     if not base:
         raise RuntimeError("Reference-conditioned Image2 requires API_BASE")
     return f"{base}/images/edits"
+
+
+def _candidate_failure_modes(record: dict) -> list[str]:
+    review = record.get("review", {}) if isinstance(record.get("review"), dict) else {}
+    modes = []
+    ocr = review.get("ocr", {}) if isinstance(review.get("ocr"), dict) else {}
+    scientific = review.get("scientific", {}) if isinstance(review.get("scientific"), dict) else {}
+    topology = review.get("topology", {}) if isinstance(review.get("topology"), dict) else {}
+    template = review.get("template", {}) if isinstance(review.get("template"), dict) else {}
+    aesthetic = review.get("aesthetic", {}) if isinstance(review.get("aesthetic"), dict) else {}
+    if ocr.get("missing_labels") or ocr.get("misspelled_labels") or ocr.get("duplicate_labels") or ocr.get("unexpected_labels"):
+        modes.append("label_accuracy")
+    if scientific.get("missing_modules"):
+        modes.append("missing_modules")
+    if scientific.get("missing_relations") or topology.get("missing_relations"):
+        modes.append("missing_relations")
+    if scientific.get("reversed_relations") or topology.get("reversed_relations"):
+        modes.append("reversed_relations")
+    if topology.get("bypassed_relations"):
+        modes.append("bypassed_relations")
+    if scientific.get("invented_items") or topology.get("invented_relations"):
+        modes.append("invented_content")
+    if not template.get("passed", False):
+        modes.append("template_alignment")
+    if not aesthetic.get("passed", False):
+        modes.append("aesthetic_quality")
+    if review.get("vlm_warning") or review.get("topology_warning"):
+        modes.append("review_provider")
+    return list(dict.fromkeys(modes or (["unknown_review_failure"] if not record.get("production_pass") else [])))
+
+
+def _build_stability_report(records: list[dict], failures: list[dict], requested_candidates: int, repair_source: Path | None) -> dict:
+    independent = [
+        item for item in records
+        if str(item.get("candidate_id") or "").startswith("candidate_") and not item.get("repair_source")
+    ]
+    independent_failures = [
+        item for item in failures if str(item.get("candidate_id") or "").startswith("candidate_")
+    ]
+    seed_count = 0 if repair_source else max(int(requested_candidates), len(independent) + len(independent_failures))
+    score_by_id = {str(item.get("candidate_id")): float(item.get("score") or 0.0) for item in independent}
+    scores = [score_by_id.get(f"candidate_{index:02d}", 0.0) for index in range(1, seed_count + 1)]
+    pass_count = sum(bool(item.get("production_pass")) for item in independent)
+    pass_rate = round(pass_count / seed_count, 4) if seed_count else 0.0
+    mean_score = round(statistics.fmean(scores), 4) if scores else 0.0
+    worst_score = round(min(scores), 4) if scores else 0.0
+    deviation = round(statistics.pstdev(scores), 4) if len(scores) >= 2 else 0.0
+    failure_modes: dict[str, int] = {}
+    candidates = []
+    for item in independent:
+        modes = _candidate_failure_modes(item)
+        for mode in modes:
+            failure_modes[mode] = failure_modes.get(mode, 0) + 1
+        candidates.append({
+            "candidate_id": item.get("candidate_id"),
+            "score": round(float(item.get("score") or 0.0), 4),
+            "production_pass": bool(item.get("production_pass")),
+            "failure_modes": modes,
+        })
+    for item in independent_failures:
+        failure_modes["generation_provider"] = failure_modes.get("generation_provider", 0) + 1
+        candidates.append({
+            "candidate_id": item.get("candidate_id"),
+            "score": 0.0,
+            "production_pass": False,
+            "failure_modes": ["generation_provider"],
+            "error": str(item.get("error") or "candidate generation failed"),
+        })
+    stable = bool(seed_count >= 2 and pass_rate >= 0.8 and worst_score >= 0.8)
+    status = "stable" if stable else "unstable" if seed_count >= 2 else "insufficient_samples"
+    return {
+        "summary": "Cross-candidate production stability for independent Image2 generations.",
+        "status": status,
+        "stable": stable,
+        "seed_count": seed_count,
+        "completed_seed_count": len(independent),
+        "production_pass_count": pass_count,
+        "production_pass_rate": pass_rate,
+        "mean_score": mean_score,
+        "worst_case_score": worst_score,
+        "standard_deviation": deviation,
+        "minimum_recommended_seed_count": 3,
+        "candidate_scores": sorted(candidates, key=lambda item: str(item.get("candidate_id") or "")),
+        "failure_mode_counts": dict(sorted(failure_modes.items())),
+    }
 
 
 def _safe_endpoint(value: str) -> str:
@@ -207,6 +293,7 @@ def generate_and_select(
     ocr_adapter: Callable | None = None,
     critic_adapter: Callable | None = None,
     topology_adapter: Callable | None = None,
+    resume_candidates: bool = False,
 ) -> dict:
     root = ensure_dir(out_dir)
     candidate_dir = ensure_dir(root / "candidates")
@@ -240,9 +327,13 @@ def generate_and_select(
         write_text(prompt_path, prompt)
         started = time.monotonic()
         try:
-            generation_started = time.monotonic()
-            generation = _generate_one(prompt, plan, blueprint, path, aspect_ratio, asset_mode, image_model, image_retries)
-            generation_seconds = round(time.monotonic() - generation_started, 3)
+            if resume_candidates and path.exists():
+                generation = {"mode": "existing_candidate_resume", "source": str(path), "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY"))}
+                generation_seconds = 0.0
+            else:
+                generation_started = time.monotonic()
+                generation = _generate_one(prompt, plan, blueprint, path, aspect_ratio, asset_mode, image_model, image_retries)
+                generation_seconds = round(time.monotonic() - generation_started, 3)
             review_started = time.monotonic()
             review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
             review_seconds = round(time.monotonic() - review_started, 3)
@@ -300,6 +391,35 @@ def generate_and_select(
                     requests_manifest.append(result["request"])
                 elif result.get("failure"):
                     failures.append(result["failure"])
+        replacement_budget = 0
+        if asset_mode == "image2" and count >= 3:
+            try:
+                replacement_budget = max(0, min(2, int(os.getenv("RFS_STABILITY_REPLACEMENT_RETRIES", "1"))))
+            except ValueError:
+                replacement_budget = 1
+        for replacement_attempt in range(1, replacement_budget + 1):
+            retryable = [
+                item for item in failures
+                if any(token in str(item.get("error") or "").casefold() for token in ("timed out", "timeout", "http 429", "http 5", "provider"))
+            ]
+            if not retryable:
+                break
+            for failure in retryable:
+                try:
+                    candidate_index = int(str(failure.get("candidate_id") or "").rsplit("_", 1)[-1])
+                except ValueError:
+                    continue
+                result = generate_candidate(candidate_index)
+                failures.remove(failure)
+                if result.get("record"):
+                    result["record"]["provider_replacement_attempt"] = replacement_attempt
+                    result["request"]["provider_replacement_attempt"] = replacement_attempt
+                    records.append(result["record"])
+                    requests_manifest.append(result["request"])
+                else:
+                    replacement_failure = result.get("failure", failure)
+                    replacement_failure["provider_replacement_attempts"] = replacement_attempt
+                    failures.append(replacement_failure)
     records.sort(key=lambda item: item["candidate_id"])
     requests_manifest.sort(key=lambda item: item["candidate_id"])
     failures.sort(key=lambda item: item["candidate_id"])
@@ -356,7 +476,9 @@ def generate_and_select(
         engineering_preview = root / "engineering_preview.png"
         shutil.copyfile(selected["path"], engineering_preview)
 
-    report = {"summary": "Generated and reviewed paper-to-image candidates.", "asset_mode": asset_mode, "review_mode": review_mode, "production_eligible": asset_mode == "image2", "requested_candidates": 0 if repair_source_path else count, "candidate_workers": candidate_workers, "repair_source": str(repair_source_path) if repair_source_path else None, "successful_candidates": len(records), "repair_candidates": len(repair_records), "failures": failures, "candidates": records, "selected_candidate_id": selected["candidate_id"] if selected_path and selected else None, "selected_image": str(selected_path) if selected_path else None, "engineering_preview": str(engineering_preview) if engineering_preview else None, "selected_passed_all_checks": bool(selected_path), "delivery_blocked": asset_mode == "image2" and not selected_path}
+    stability = _build_stability_report(records, failures, count, repair_source_path)
+    write_json(root / "stability_report.json", stability)
+    report = {"summary": "Generated and reviewed paper-to-image candidates.", "asset_mode": asset_mode, "review_mode": review_mode, "production_eligible": asset_mode == "image2", "requested_candidates": 0 if repair_source_path else count, "candidate_workers": candidate_workers, "resume_candidates": bool(resume_candidates), "repair_source": str(repair_source_path) if repair_source_path else None, "successful_candidates": len(records), "repair_candidates": len(repair_records), "failures": failures, "candidates": records, "stability": stability, "selected_candidate_id": selected["candidate_id"] if selected_path and selected else None, "selected_image": str(selected_path) if selected_path else None, "engineering_preview": str(engineering_preview) if engineering_preview else None, "selected_passed_all_checks": bool(selected_path), "delivery_blocked": asset_mode == "image2" and not selected_path}
     write_json(root / "candidate_review.json", report)
     if report["delivery_blocked"]:
         raise RuntimeError("No Image2 candidate passed scientific, OCR, template, and aesthetic production gates")
