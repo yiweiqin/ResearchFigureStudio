@@ -219,6 +219,37 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(repaired, source)
 
+    def test_ocr_spacing_repair_restores_numbered_chinese_section_heading(self):
+        repaired, count = _repair_ocr_spacing("2\u65b9\u6cd5", splitter=lambda token: [token])
+
+        self.assertEqual(repaired, "2 \u65b9\u6cd5")
+        self.assertEqual(count, 1)
+
+    def test_scanned_chinese_numbered_sections_form_real_section_boundaries(self):
+        path = self._multipage_pdf([[]])
+
+        def adapter(_image_path, _lang):
+            lines = [
+                ("\u6458\u8981", 30),
+                ("\u672c\u6587\u63d0\u51fa\u6587\u6863\u7f16\u7801\u5668\u548c\u5173\u7cfb\u89e3\u7801\u5668,\u751f\u6210\u53ef\u7f16\u8f91\u6846\u67b6\u56fe\u3002", 90),
+                ("2\u65b9\u6cd5", 190),
+                ("\u8f93\u5165\u8bba\u6587\u8fdb\u5165\u6587\u6863\u7f16\u7801\u5668,\u7136\u540e\u7531\u5173\u7cfb\u89e3\u7801\u5668\u751f\u6210\u8f93\u51fa\u3002", 250),
+                ("3\u5b9e\u9a8c", 390),
+                ("\u5b9e\u9a8c\u8bc4\u4f30\u5b9e\u4f53\u53ec\u56de\u7387\u548c\u5173\u7cfb\u53ec\u56de\u7387\u3002", 450),
+                ("4\u7ed3\u8bba", 590),
+                ("\u8be5\u65b9\u6cd5\u4fdd\u6301\u8bc1\u636e\u9875\u7801\u548c\u6a21\u5757\u5173\u7cfb\u3002", 650),
+            ]
+            return [
+                {"text": text, "confidence": 0.99, "quad": [[40, top], [900, top], [900, top + 45], [40, top + 45]]}
+                for text, top in lines
+            ]
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter)
+
+        self.assertEqual(parsed["headings"], ["\u6458\u8981", "\u65b9\u6cd5", "\u5b9e\u9a8c", "\u7ed3\u8bba"])
+        self.assertEqual(parsed["extraction_report"]["section_count"], 4)
+        self.assertGreaterEqual(parsed["extraction_report"]["ocr_spacing_repair_count"], 3)
+
     def test_low_text_page_uses_local_ocr_adapter(self):
         path = self._pdf(lambda _page: None)
 

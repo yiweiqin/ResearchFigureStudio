@@ -63,6 +63,9 @@ def _repair_ocr_spacing(text: str, splitter: Callable[[str], list[str]] | None =
     section_terms = "abstract|introduction|background|method|methods|approach|experiments|results|conclusion|discussion|references|appendix"
     value, count = re.subn(rf"(?<!\w)(\d+(?:\.\d+)*)(?=(?:{section_terms})\b)", r"\1 ", value, flags=re.IGNORECASE)
     repairs += count
+    cjk_section_terms = "\u7cfb\u7edf\u6982\u8ff0|\u65b9\u6cd5\u8bba|\u53c2\u8003\u6587\u732e|\u5b9e\u9a8c|\u7ed3\u8bba|\u8ba8\u8bba|\u5f15\u8a00|\u80cc\u666f|\u65b9\u6cd5|\u67b6\u6784|\u6846\u67b6|\u8bc4\u4f30|\u7ed3\u679c|\u9644\u5f55"
+    value, count = re.subn(rf"^(\d+(?:\.\d+)*)(?=(?:{cjk_section_terms})(?:\s|$))", r"\1 ", value)
+    repairs += count
     value, count = re.subn(r"(?<=[,:;])(?=[A-Z])", " ", value)
     repairs += count
     if splitter is None:
