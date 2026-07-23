@@ -639,7 +639,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
                 endpoint_ids.add(endpoint_id)
             evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
             if not evidence_ids:
-                warnings.append(f"{field}[{index}] has no evidence_ids")
+                errors.append(f"{field}[{index}] has no evidence_ids")
             invalid = [value for value in evidence_ids if value not in valid_evidence]
             if invalid:
                 errors.append(f"{field}[{index}] references unknown evidence ids: {invalid}")

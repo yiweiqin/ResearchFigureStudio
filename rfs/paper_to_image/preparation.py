@@ -150,6 +150,40 @@ def _repair_cross_script_terminology(spec: dict[str, Any], parsed: dict[str, Any
     spec["terminology"] = repaired
 
 
+def _ground_exact_visible_entities(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    evidence = [item for item in parsed.get("evidence", []) if isinstance(item, dict) and item.get("id") and item.get("text")]
+    novelty_pattern = re.compile(r"\b(?:we\s+(?:introduce|propose|present|develop)|novel|new\s+(?:method|model|system|framework)|contribution)\b|\u672c\u6587\u63d0\u51fa|\u6211\u4eec\u63d0\u51fa|\u9996\u6b21|\u521b\u65b0", re.IGNORECASE)
+    overview_pattern = re.compile(r"overview|framework|architecture|pipeline|procedure|pre-training|fine-tuning|system|model|\u6846\u67b6|\u67b6\u6784|\u7cfb\u7edf", re.IGNORECASE)
+    overview_pages = {
+        int(item.get("page") or 0)
+        for item in parsed.get("document_index", {}).get("figures", [])
+        if isinstance(item, dict) and overview_pattern.search(str(item.get("caption") or ""))
+    }
+    grounded: list[str] = []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        for index, item in enumerate(spec.get(field, []) if isinstance(spec.get(field), list) else []):
+            if not isinstance(item, dict) or item.get("evidence_ids"):
+                continue
+            label = _item_label(item)
+            compact = _normalized_label(label)
+            if not compact:
+                continue
+            matches = []
+            for record in evidence:
+                record_compact = _normalized_label(str(record.get("text") or ""))
+                short_diagram_label = len(compact) < 3 and int(record.get("page") or 0) in overview_pages and record_compact == compact
+                if not short_diagram_label and (len(compact) < 3 or compact not in record_compact):
+                    continue
+                if field == "innovations" and not novelty_pattern.search(str(record.get("text") or "")):
+                    continue
+                matches.append(str(record["id"]))
+            if not matches:
+                continue
+            item["evidence_ids"] = list(dict.fromkeys(matches))[:3]
+            grounded.append(f"{field}[{index}]")
+    return grounded
+
+
 def _stable_id(prefix: str, value: str, index: int) -> str:
     slug = "_".join(part for part in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split() if part)[:48]
     return f"{prefix}_{slug or index}"
@@ -568,6 +602,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     allowed_topologies = {"linear", "branch", "feedback", "multimodal", "dense_multiframe", "unknown"}
     if str(spec.get("topology") or "") not in allowed_topologies:
         spec["topology"] = _infer_topology(spec)
+    completion_report["exact_visible_entity_groundings"] = _ground_exact_visible_entities(spec, parsed)
     _repair_cross_script_terminology(spec, parsed)
     labels = []
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
@@ -734,7 +769,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 28, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 29, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"

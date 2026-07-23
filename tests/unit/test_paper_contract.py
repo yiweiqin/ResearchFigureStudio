@@ -153,6 +153,84 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn("文档编码器", spec["required_labels"])
         self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
 
+    def test_contract_grounds_exact_innovation_only_from_novelty_evidence(self):
+        parsed = {
+            "evidence": [
+                {"id": "E0001", "text": "本文提出论文编码器和关系解码器,生成可编辑框架图。", "section_hint": "摘要", "confidence": 1.0},
+                {"id": "E0002", "text": "A baseline also contains a relation decoder.", "section_hint": "Related Work", "confidence": 1.0},
+            ]
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [{"id": "decoder", "name": "关系解码器", "evidence_ids": ["E0001"]}],
+                "outputs": [],
+                "innovations": [{"id": "innovation_decoder", "name": "关系解码器", "evidence_ids": []}],
+                "relations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["innovations"][0]["evidence_ids"], ["E0001"])
+        self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
+
+    def test_validation_rejects_visible_input_without_evidence(self):
+        parsed = {"evidence": [{"id": "E0001", "text": "The encoder produces an output.", "confidence": 1.0}]}
+        plan = {
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "Input Image", "evidence_ids": []}],
+                "modules": [{"id": "encoder", "name": "encoder", "evidence_ids": ["E0001"]}],
+                "outputs": [],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            }
+        }
+
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertFalse(validation["ok"])
+        self.assertIn("inputs[0] has no evidence_ids", validation["errors"])
+
+    def test_contract_grounds_short_diagram_labels_only_on_overview_figure_page(self):
+        parsed = {
+            "document_index": {"figures": [{"page": 3, "caption": "Figure 1: Overall pre-training and fine-tuning procedures."}]},
+            "evidence": [
+                {"id": "E0001", "page": 3, "text": "T 1", "confidence": 1.0},
+                {"id": "E0002", "page": 3, "text": "C", "confidence": 1.0},
+                {"id": "E0003", "page": 8, "text": "C", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [{"id": "encoder", "name": "Encoder", "evidence_ids": ["E0001"]}],
+                "outputs": [
+                    {"id": "token_output", "name": "T 1", "evidence_ids": []},
+                    {"id": "class_output", "name": "C", "evidence_ids": []},
+                ],
+                "innovations": [],
+                "relations": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["outputs"][0]["evidence_ids"], ["E0001"])
+        self.assertEqual(spec["outputs"][1]["evidence_ids"], ["E0002"])
+        self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
+
     def test_contract_grounds_declared_multword_entity_by_exact_paper_term(self):
         parsed = {
             "page_count": 6,
