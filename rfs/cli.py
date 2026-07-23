@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .coevolution import analyze_coevolution_run, run_image_coevolution
 from .editable_rebuild import rebuild_editable
-from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, run_fast_benchmark_case, run_fast_benchmark_suite, score_benchmark_case, validate_benchmark_case
+from .evaluation import fetch_benchmark_case, list_benchmark_cases, run_benchmark_case, run_fast_benchmark_case, run_fast_benchmark_suite, run_pdf_extraction_stress_suite, score_benchmark_case, validate_benchmark_case
 from .paper_to_image import inspect_paper, run_fast_framework_prompt, run_paper_to_image
 from .workflows import run_paper_to_editable
 from .professional_rebuild import rebuild_editable_pro
@@ -304,7 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     coevolution_report.add_argument("--json", action="store_true", help="Emit JSON.")
 
     benchmark = sub.add_parser("benchmark", help="List, validate, run, or score ResearchFigureStudio benchmark cases.")
-    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "fast", "fast-suite", "run", "score"])
+    benchmark.add_argument("benchmark_action", choices=["list", "validate", "fetch", "fast", "fast-suite", "pdf-suite", "run", "score"])
     benchmark.add_argument("--suite", choices=["paper-to-image", "image-to-ppt"], help="Optional suite filter for list.")
     benchmark.add_argument("--root", default="benchmarks", help="Benchmark root for list. Default: benchmarks.")
     benchmark.add_argument("--case", help="Benchmark case directory for validate, fetch, run, or score.")
@@ -315,7 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--deadline", type=int, default=180, help="Soft deadline for benchmark fast. Default: 180.")
     benchmark.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm", help="Planner mode for benchmark fast.")
     benchmark.add_argument("--planner-model", help="Optional model for benchmark fast.")
-    benchmark.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for benchmark fast.")
+    benchmark.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for fast or pdf-suite benchmarks.")
     benchmark.add_argument("--json", action="store_true", help="Emit JSON.")
 
     validate = sub.add_parser("validate", help="Validate an existing ResearchFigureStudio output directory.")
@@ -577,6 +577,10 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.out:
                     parser.error("benchmark fast-suite requires --out")
                 result = run_fast_benchmark_suite(args.root, args.out, case_ids=args.case_id, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
+            elif args.benchmark_action == "pdf-suite":
+                if not args.out:
+                    parser.error("benchmark pdf-suite requires --out")
+                result = run_pdf_extraction_stress_suite(args.out, ocr_engine=args.ocr_engine)
             else:
                 if not args.case or not args.run_dir:
                     parser.error("benchmark score requires --case and --run")

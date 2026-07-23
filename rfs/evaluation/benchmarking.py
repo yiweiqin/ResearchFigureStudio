@@ -854,6 +854,7 @@ def run_fast_benchmark_suite(
         "multi_column_page_total": sum(int(value) for value in extraction_metric("multi_column_page_count")),
         "mean_section_count": _mean(extraction_metric("section_count")),
         "typographic_heading_total": sum(int(value) for value in extraction_metric("typographic_heading_count")),
+        "merged_heading_line_total": sum(int(value) for value in extraction_metric("merged_heading_line_count")),
         "figure_caption_total": sum(int(value) for value in extraction_metric("figure_caption_count")),
         "table_caption_total": sum(int(value) for value in extraction_metric("table_caption_count")),
         "ocr_candidate_page_total": sum(int(value) for value in extraction_metric("ocr_candidate_count")),

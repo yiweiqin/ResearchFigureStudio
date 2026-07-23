@@ -115,6 +115,14 @@ Run a repeatable fast suite with provider, cache, recall, and timing aggregation
 rfs benchmark fast-suite --root benchmarks --out output\benchmarks\fast-suite --planner-mode heuristic --json
 ```
 
+Run the generated multi-layout PDF extraction stress suite independently of paper semantics:
+
+```powershell
+rfs benchmark pdf-suite --out output\benchmarks\pdf-extraction --ocr-engine auto --json
+```
+
+It generates fixed two-column, unnumbered-bold-section, rotated-page, and mixed native/scanned PDFs. The deterministic four-case tier always runs; `--ocr-engine auto` adds a fifth real local-OCR probe. Each case writes its fixture, rendered preview, document model, extraction report, assertions, and timing so reading-order or OCR regressions are reproducible without committing third-party PDFs.
+
 Use `paper-to-image` when the required endpoint is a generated raster framework
 figure rather than an editable PowerPoint file. The production route performs a
 universal evidence-grounded paper review, loads a domain extension, converts

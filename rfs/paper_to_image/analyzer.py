@@ -86,6 +86,8 @@ def _looks_like_typographic_heading(text: str) -> bool:
         return False
     if re.match(r"^(?:figure|fig\.|table)\b", value, re.IGNORECASE) or re.search(r"[=<>]{1,2}|\bdoi\b|https?://", value, re.IGNORECASE):
         return False
+    if value.endswith(":") and len(words) <= 2:
+        return False
     if value.endswith((",", ";", "?", "!")) or (value.endswith(".") and len(words) > 5):
         return False
     if first_alpha and first_alpha.lower() != first_alpha.upper() and not first_alpha.isupper():
@@ -164,7 +166,7 @@ def _reading_order(blocks: list[dict[str, Any]], page_width: float) -> tuple[lis
     usable = [item for item in blocks if _clean(item.get("text", ""))]
     if not usable:
         return [], 0.0
-    spanning = [item for item in usable if float(item["bbox"][2]) - float(item["bbox"][0]) >= page_width * 0.62]
+    spanning = [item for item in usable if float(item["bbox"][2]) - float(item["bbox"][0]) >= page_width * 0.56]
     non_spanning = [item for item in usable if item not in spanning]
     detection_items = [
         item
@@ -251,8 +253,15 @@ def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
                 round(max(float(value[3]) for value in bbox_values), 3),
             ]
             sizes = [float(span.get("size") or 0.0) for span in spans if float(span.get("size") or 0.0) > 0]
-            fonts = [str(span.get("font") or "") for span in spans]
-            font_bold = any(int(span.get("flags") or 0) & 16 for span in spans) or any(re.search(r"(?:bold|demi|semi|medi)", font, re.IGNORECASE) for font in fonts)
+            span_bold = [
+                bool(int(span.get("flags") or 0) & 16) or bool(re.search(r"(?:bold|demi|semi|medi)", str(span.get("font") or ""), re.IGNORECASE))
+                for span in spans
+            ]
+            span_lengths = [max(1, len(_clean(span.get("text", "")))) for span in spans]
+            bold_characters = sum(length for length, bold in zip(span_lengths, span_bold) if bold)
+            total_characters = sum(span_lengths)
+            font_bold_ratio = round(bold_characters / max(1, total_characters), 4)
+            font_bold = font_bold_ratio >= 0.8
             records.append({
                 "bbox": bbox,
                 "text": text,
@@ -261,6 +270,7 @@ def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
                 "parent_block": parent_index,
                 "font_size": round(max(sizes), 3) if sizes else None,
                 "font_bold": font_bold,
+                "font_bold_ratio": font_bold_ratio,
             })
     return records
 
@@ -801,7 +811,11 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     headings = []
     seen = set()
     body_started = False
+    body_anchor: tuple[int, float] | None = None
     for page in pages:
+        font_sizes = sorted(float(block.get("font_size")) for block in page.get("blocks", []) if isinstance(block.get("font_size"), (int, float)) and len(_normalized_compare_text(str(block.get("text") or ""))) >= 20)
+        middle = len(font_sizes) // 2
+        body_font_size = (font_sizes[middle] if len(font_sizes) % 2 else (font_sizes[middle - 1] + font_sizes[middle]) / 2.0) if font_sizes else None
         for block in page.get("blocks", []):
             lines = [_clean(value) for value in str(block.get("text", "")).splitlines() if _clean(value)]
             for line_index, line in enumerate(lines):
@@ -810,16 +824,27 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 explicit = re.match(r"^(abstract|references|acknowledg(?:e)?ments?|appendix)$", line, re.IGNORECASE)
                 numbered = re.match(r"^\s*((?:\d+(?:\.\d+)*)|(?:[ivx]+))[.)]?\s+(.{2,120})$", line, re.IGNORECASE)
                 compact_line = _normalized_compare_text(line)
+                block_bold = bool(block.get("font_bold"))
+                font_size = float(block.get("font_size") or 0.0)
+                first_line_alpha = next((char for char in line if char.isalpha()), "")
+                heading_case = not first_line_alpha or not first_line_alpha.isascii() or first_line_alpha.isupper()
                 known = len(line) <= 60 and not line.endswith((".", ",", ";")) and any(
-                    compact_alias and compact_line.startswith(compact_alias)
+                    compact_alias and heading_case and (compact_line == compact_alias or (block_bold and compact_line.startswith(compact_alias)))
                     for aliases in SECTION_ALIASES.values()
                     for alias in aliases
                     for compact_alias in [_normalized_compare_text(alias)]
                 )
-                typographic = body_started and bool(block.get("font_bold")) and _looks_like_typographic_heading(line)
+                block_y = float((block.get("bbox") or [0, 0, 0, 0])[1])
+                after_anchor = body_anchor is not None and (int(page["page"]) > body_anchor[0] or block_y >= body_anchor[1])
+                position_ok = after_anchor if body_anchor is not None else body_started
+                size_ok = body_font_size is None or font_size >= body_font_size * 0.95
+                typographic = position_ok and block_bold and size_ok and _looks_like_typographic_heading(line)
                 if numbered:
                     title_candidate = numbered.group(2).strip()
                     first_alpha = next((char for char in title_candidate if char.isalpha()), "")
+                    numbered_style = block.get("source") != "pymupdf" or body_font_size is None or block_bold or font_size >= body_font_size * 1.05
+                    if not numbered_style:
+                        first_alpha = ""
                     if not title_candidate or not title_candidate[0].isalpha():
                         first_alpha = ""
                     has_case = bool(first_alpha and first_alpha.lower() != first_alpha.upper())
@@ -831,9 +856,51 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 key = normalized.casefold()
                 if normalized and key not in seen:
                     seen.add(key)
-                    headings.append({"id": f"section_{len(headings) + 1:03d}", "title": normalized, "page": page["page"], "block_id": block["id"], "line_index": line_index})
+                    headings.append({
+                        "id": f"section_{len(headings) + 1:03d}",
+                        "title": normalized,
+                        "page": page["page"],
+                        "block_id": block["id"],
+                        "line_index": line_index,
+                        "_candidate_type": "explicit" if explicit else "numbered" if numbered else "known" if known else "typographic",
+                        "_bbox": block.get("bbox"),
+                        "_font_size": font_size,
+                        "_reading_order": int(block.get("reading_order") or 0),
+                    })
+                if body_anchor is None and (explicit or numbered or known):
+                    body_anchor = (int(page["page"]), block_y)
                 body_started = body_started or bool(explicit or numbered or known)
-    return headings[:80]
+    merged: list[dict[str, Any]] = []
+    for heading in headings:
+        previous = merged[-1] if merged else None
+        previous_bbox = previous.get("_bbox") if previous else None
+        current_bbox = heading.get("_bbox")
+        same_multiline_heading = bool(
+            previous
+            and previous.get("_candidate_type") == "typographic"
+            and heading.get("_candidate_type") == "typographic"
+            and int(previous.get("page") or 0) == int(heading.get("page") or 0)
+            and int(heading.get("_reading_order") or 0) == int(previous.get("_reading_order") or 0) + 1
+            and previous_bbox
+            and current_bbox
+            and float(current_bbox[1]) - float(previous_bbox[3]) <= max(float(previous.get("_font_size") or 0), float(heading.get("_font_size") or 0), 1.0) * 0.8
+            and len(f"{previous.get('title', '')} {heading.get('title', '')}") <= 140
+        )
+        if same_multiline_heading:
+            previous["title"] = _clean(f"{previous.get('title', '')} {heading.get('title', '')}").rstrip(".:")
+            previous.setdefault("continuation_block_ids", []).append(str(heading.get("block_id") or ""))
+            previous["_bbox"] = [
+                min(float(previous_bbox[0]), float(current_bbox[0])),
+                min(float(previous_bbox[1]), float(current_bbox[1])),
+                max(float(previous_bbox[2]), float(current_bbox[2])),
+                max(float(previous_bbox[3]), float(current_bbox[3])),
+            ]
+            previous["_reading_order"] = int(heading.get("_reading_order") or 0)
+            continue
+        merged.append(heading)
+    for index, heading in enumerate(merged, 1):
+        heading["id"] = f"section_{index:03d}"
+    return [{key: value for key, value in heading.items() if not key.startswith("_")} for heading in merged[:80]]
 
 
 def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1033,7 +1100,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     partial_scan = bool(fully_scanned_source and 0 < ocr_count < len(pages))
     pdf_type = "scanned" if fully_scanned_source else "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count else "born_digital"
     coverage = _section_coverage(pages, index.get("sections", []))
-    indexed_section_blocks = {(int(item.get("page") or 0), str(item.get("block_id") or "")) for item in index.get("sections", [])}
+    bold_block_ids = {(int(page["page"]), str(block.get("id") or "")) for page in pages for block in page.get("blocks", []) if block.get("font_bold")}
     warnings = list(details.get("warnings", []))
     ocr_blocks = [block for page in pages if page.get("used_ocr") for block in page.get("blocks", []) if isinstance(block, dict)]
     ocr_confidences = [float(block.get("confidence") or 0.0) for block in ocr_blocks]
@@ -1092,7 +1159,8 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "figure_caption_count": len(index.get("figures", [])),
         "table_caption_count": len(index.get("tables", [])),
         "section_count": len(index.get("sections", [])),
-        "typographic_heading_count": sum(bool(block.get("font_bold")) and (int(page["page"]), str(block.get("id") or "")) in indexed_section_blocks for page in pages for block in page.get("blocks", [])),
+        "typographic_heading_count": sum((int(item.get("page") or 0), str(item.get("block_id") or "")) in bold_block_ids for item in index.get("sections", [])),
+        "merged_heading_line_count": sum(len(item.get("continuation_block_ids", [])) for item in index.get("sections", [])),
         "poppler_available": details.get("poppler_available", False),
         "warnings": warnings,
         "elapsed_seconds": details.get("elapsed_seconds", 0.0),
@@ -1119,7 +1187,12 @@ def parse_paper(
         pages, loader = _read_non_pdf_pages(source, max_chars)
         details = {"warnings": [], "ocr_candidate_pages": [], "ocr_pages": [], "poppler_available": False, "elapsed_seconds": 0.0}
     sections = _heading_candidates(pages)
-    section_blocks = {(int(item.get("page") or 0), str(item.get("block_id") or "")) for item in sections}
+    section_blocks = {
+        (int(item.get("page") or 0), block_id)
+        for item in sections
+        for block_id in [str(item.get("block_id") or ""), *(str(value) for value in item.get("continuation_block_ids", []))]
+        if block_id
+    }
     for page in pages:
         for block in page.get("blocks", []):
             if (int(page["page"]), str(block.get("id") or "")) in section_blocks:

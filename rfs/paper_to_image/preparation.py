@@ -917,6 +917,7 @@ def prepare_paper_figure_contract(
             "rotated_pages": parsed["extraction_report"].get("rotated_pages", []),
             "section_count": parsed["extraction_report"].get("section_count", 0),
             "typographic_heading_count": parsed["extraction_report"].get("typographic_heading_count", 0),
+            "merged_heading_line_count": parsed["extraction_report"].get("merged_heading_line_count", 0),
             "figure_caption_count": parsed["extraction_report"].get("figure_caption_count", 0),
             "table_caption_count": parsed["extraction_report"].get("table_caption_count", 0),
             "section_coverage": parsed["extraction_report"].get("section_coverage", {}),

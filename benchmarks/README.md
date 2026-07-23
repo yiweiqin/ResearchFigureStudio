@@ -1,6 +1,6 @@
 # ResearchFigureStudio Benchmarks
 
-ResearchFigureStudio uses two independent benchmark suites so failures can be attributed to either reference-image generation or editable reconstruction.
+ResearchFigureStudio uses two independent product benchmark suites plus a generated PDF extraction stress suite, so failures can be attributed to paper parsing, reference-image generation, or editable reconstruction.
 
 ## Suites
 
@@ -16,6 +16,10 @@ Measures rendered visual fidelity, object and relation reconstruction, text alig
 
 A full-slide copy of the reference image is a hard failure even if pixel similarity is perfect.
 
+### Generated PDF extraction stress suite
+
+`benchmark pdf-suite` creates deterministic native two-column, unnumbered-bold-section, rotated-page, and mixed native/scanned PDFs at runtime. It validates section boundaries, cross-column reading order, displayed coordinates, caption recovery, local OCR scheduling, and elapsed time. `--ocr-engine auto` adds a real installed-OCR probe after the deterministic adapter-backed tier.
+
 ## Commands
 
 ```powershell
@@ -24,6 +28,7 @@ rfs benchmark validate --case benchmarks/paper-to-image/cases/001_linear_pipelin
 rfs benchmark fetch --case benchmarks/paper-to-image/cases/101_vit_linear --json
 rfs benchmark fast --case benchmarks/paper-to-image/cases/101_vit_linear --out output/benchmarks/vit_fast --planner-mode heuristic --json
 rfs benchmark fast-suite --root benchmarks --out output/benchmarks/fast_suite --planner-mode heuristic --json
+rfs benchmark pdf-suite --out output/benchmarks/pdf_extraction --ocr-engine auto --json
 rfs benchmark run --case benchmarks/paper-to-image/cases/001_linear_pipeline --out output/benchmarks/p2i_001 --json
 rfs benchmark score --case benchmarks/image-to-ppt/cases/001_three_stage_layout --run output/rebuild_case --json
 ```

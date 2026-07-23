@@ -15,6 +15,7 @@ from rfs.evaluation.benchmarking import (
     score_benchmark_case,
     validate_benchmark_case,
 )
+from rfs.evaluation.pdf_extraction_benchmark import run_pdf_extraction_stress_suite
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -139,9 +140,21 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("max_detected_column_count", result["aggregate"])
             self.assertIn("mean_section_count", result["aggregate"])
             self.assertIn("typographic_heading_total", result["aggregate"])
+            self.assertIn("merged_heading_line_total", result["aggregate"])
             self.assertIn("figure_caption_total", result["aggregate"])
             self.assertIn("max_ocr_worker_count", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
+
+    def test_pdf_extraction_stress_suite_runs_deterministically_without_runtime_ocr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_pdf_extraction_stress_suite(tmp, ocr_engine="off")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["aggregate"]["case_count"], 4)
+            self.assertEqual(result["aggregate"]["passed_case_count"], 4)
+            self.assertTrue((Path(tmp) / "fixtures" / "native_two_column.pdf").exists())
+            self.assertTrue((Path(tmp) / "mixed_scan_fixture_adapter" / "document_model.json").exists())
+            self.assertTrue((Path(tmp) / "pdf_extraction_stress_report.json").exists())
 
     def test_paper_to_image_score_uses_hard_scientific_gates(self):
         case_dir = ROOT / "benchmarks" / "paper-to-image" / "cases" / "001_linear_pipeline"
