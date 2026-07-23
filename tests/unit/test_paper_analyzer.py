@@ -250,6 +250,39 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(parsed["extraction_report"]["section_count"], 4)
         self.assertGreaterEqual(parsed["extraction_report"]["ocr_spacing_repair_count"], 3)
 
+    def test_truncated_pdf_fails_before_parser_noise(self):
+        path = self._multipage_pdf([["Abstract", "A valid document before truncation."]])
+        payload = path.read_bytes()
+        path.write_bytes(payload[: max(16, len(payload) // 2)])
+
+        with self.assertRaisesRegex(ValueError, "EOF marker is missing"):
+            parse_paper(path, ocr_engine="off")
+
+    def test_non_pdf_payload_with_pdf_extension_fails_preflight(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        path = root / "not_really.pdf"
+        path.write_bytes(b"this is not a PDF document")
+
+        with self.assertRaisesRegex(ValueError, "valid PDF header"):
+            parse_paper(path, ocr_engine="off")
+
+    def test_encrypted_pdf_returns_explicit_password_error(self):
+        from pypdf import PdfReader, PdfWriter
+
+        source = self._multipage_pdf([["Abstract", "Encrypted scientific content."]])
+        target = source.parent / "encrypted.pdf"
+        reader = PdfReader(str(source))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.encrypt("secret")
+        with target.open("wb") as handle:
+            writer.write(handle)
+
+        with self.assertRaisesRegex(ValueError, "encrypted"):
+            parse_paper(target, ocr_engine="off")
+
     def test_low_text_page_uses_local_ocr_adapter(self):
         path = self._pdf(lambda _page: None)
 

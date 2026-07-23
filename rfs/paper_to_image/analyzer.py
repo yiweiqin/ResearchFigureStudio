@@ -437,6 +437,20 @@ def _pdf_metadata(path: Path) -> dict[str, Any]:
         return {"page_count": None, "encrypted": None, "metadata": {}, "warning": "pypdf unavailable"}
 
 
+def _validate_pdf_container(path: Path) -> None:
+    size = path.stat().st_size
+    if size < 8:
+        raise ValueError("PDF is empty or too small to contain a valid document")
+    with path.open("rb") as handle:
+        header = handle.read(min(1024, size))
+        handle.seek(max(0, size - 4096))
+        tail = handle.read()
+    if b"%PDF-" not in header:
+        raise ValueError("File does not contain a valid PDF header")
+    if b"%%EOF" not in tail:
+        raise ValueError("PDF appears truncated because the EOF marker is missing")
+
+
 def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     if adapter:
         return list(adapter(image_path, lang) or []), "adapter", {}
@@ -1543,6 +1557,7 @@ def parse_paper(
         raise FileNotFoundError(f"Paper does not exist: {source}")
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     if source.suffix.lower() == ".pdf":
+        _validate_pdf_container(source)
         pages, details = _read_pdf_pages(source, max_chars, deadline_at, ocr_engine, ocr_lang, ocr_adapter, max_ocr_pages, ocr_rescue_min_remaining)
         loader = "structured-pdf"
     else:
