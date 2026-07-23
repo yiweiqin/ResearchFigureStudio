@@ -507,13 +507,16 @@ def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: 
 
 def collect_visible_labels(spec: dict, limit: int = 24) -> list[str]:
     labels: list[str] = []
+    normalized_labels: set[str] = set()
 
     def add(value: object) -> None:
         if isinstance(value, dict):
             value = value.get("visible_label") or value.get("name") or value.get("text") or value.get("statement")
         label = str(value or "").strip()
-        if label and len(label) <= 64 and label not in labels:
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", label.casefold())
+        if label and len(label) <= 64 and normalized and normalized not in normalized_labels:
             labels.append(label)
+            normalized_labels.add(normalized)
 
     for item in spec.get("required_labels", []) if isinstance(spec.get("required_labels"), list) else []:
         add(item)
@@ -530,6 +533,48 @@ def collect_visible_labels(spec: dict, limit: int = 24) -> list[str]:
     return labels[: max(1, int(limit))]
 
 
+def collect_visual_relations(spec: dict) -> list[dict[str, str]]:
+    entities = {
+        str(item.get("id")): str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or item.get("id"))
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    repeatable = {re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value).casefold()) for value in spec.get("repeatable_labels", []) if str(value).strip()} if isinstance(spec.get("repeatable_labels"), list) else set()
+    shared_ids = {
+        item_id for item_id, label in entities.items()
+        if re.sub(r"[^\w\u4e00-\u9fff]+", "", label.casefold()) in repeatable
+    }
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if not isinstance(relation, dict):
+            continue
+        source, target = str(relation.get("source") or ""), str(relation.get("target") or "")
+        if not source or not target or source == target or source in shared_ids or target in shared_ids:
+            continue
+        entry = grouped.setdefault((source, target), {"types": [], "labels": []})
+        relation_type = str(relation.get("type") or "data_flow")
+        if relation_type not in entry["types"]:
+            entry["types"].append(relation_type)
+        label = str(relation.get("label") or "").strip()
+        if label and label not in entry["labels"]:
+            entry["labels"].append(label)
+    priority = ("feedback_loop", "evaluation", "revision_input", "feedback", "conditioning", "data_flow", "prediction", "generation_input")
+    result: list[dict[str, str]] = []
+    for (source, target), entry in grouped.items():
+        types = list(entry["types"])
+        relation_type = next((value for value in priority if value in types), types[0] if types else "data_flow")
+        result.append({
+            "source": source,
+            "source_label": entities.get(source, source),
+            "target": target,
+            "target_label": entities.get(target, target),
+            "type": relation_type,
+            "label": str(entry["labels"][0]) if entry["labels"] else "",
+        })
+    return result
+
+
 def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int = 1, selected_template: dict | None = None) -> str:
     spec = plan["figure_specification"]
     design = plan["design_plan"]
@@ -538,7 +583,17 @@ def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int =
     style = plan["style_plan"]
     template = selected_template or {}
     labels = collect_visible_labels(spec)
-    numbered_labels = "\n".join(f"{index}. {label}" for index, label in enumerate(labels, start=1))
+    repeatable_labels = [str(value).strip() for value in spec.get("repeatable_labels", []) if str(value).strip()] if isinstance(spec.get("repeatable_labels"), list) else []
+    repeatable_normalized = {re.sub(r"[^\w\u4e00-\u9fff]+", "", value.casefold()) for value in repeatable_labels}
+    numbered_labels = "\n".join(
+        f"{index}. {label}" + (" (may repeat to show evidence-supported component reuse)" if re.sub(r"[^\w\u4e00-\u9fff]+", "", label.casefold()) in repeatable_normalized else "")
+        for index, label in enumerate(labels, start=1)
+    )
+    visual_relations = collect_visual_relations(spec)
+    connector_checklist = "\n".join(
+        f"{index}. {item['source_label']} -> {item['target_label']} [{item['type']}]" + (f" label: {item['label']}" if item["label"] else "")
+        for index, item in enumerate(visual_relations, start=1)
+    )
     return f"""
 # Summary
 
@@ -573,7 +628,12 @@ Exact visible label whitelist (render these exactly and do not invent alternativ
 Mandatory visible label checklist:
 {numbered_labels}
 
-Every checklist item must appear once as clearly readable text in the completed figure. An icon, symbol, equation variable, or unlabeled output card does not satisfy a checklist item. Reserve enough width for long labels and place each output label beside or inside its output node.
+Every checklist item must appear at least once as clearly readable text in the completed figure. Labels explicitly marked as repeatable may appear more than once only to show reuse of the same paper-supported component; every other label must appear exactly once. An icon, symbol, equation variable, or unlabeled output card does not satisfy a checklist item. Reserve enough width for long labels and place each output label beside or inside its output node.
+
+Mandatory directed connector checklist:
+{connector_checklist}
+
+Every connector above must be visible with the stated direction. Do not bypass an intermediate module, do not replace two required inputs with one shortcut arrow, and do not add direct source-to-output paths that are absent from this checklist. Shared component labels may repeat as visual badges without adding extra implementation-level arrows.
 
 Forbidden copied reference terms:
 {json.dumps(template.get('forbidden_copy_terms', []), ensure_ascii=False)}
@@ -589,8 +649,9 @@ Hard requirements:
 - Do not render paragraphs, citations, fake equations, fake axes, fake charts, or invented numbers.
 - Avoid commercial-poster styling, cyberpunk effects, unrelated robots, generic brains, and repeated dashboard cards.
 - Treat the supplied blueprint as a hard macro-layout guide, but replace all reference content with this paper's content.
+- Template panels are macro spatial regions, not an exact limit on the number of scientific content nodes inside those regions.
 - Every visible scientific word must come from the exact label whitelist; do not paraphrase labels.
-- Render every mandatory visible label exactly once; never replace an output label with an icon-only node.
+- Render every mandatory visible label at least once; repeat only labels explicitly marked as evidence-supported shared components, and never replace an output label with an icon-only node.
 - Keep separately named scientific components as separately editable nodes; do not collapse special tokens, embeddings, heads, inputs, or outputs into composite labels.
 - Include explicit input-boundary and output-boundary connectors.
 """.strip()

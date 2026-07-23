@@ -456,22 +456,34 @@ def _correct_unsupported_entity_names(spec: dict[str, Any], parsed: dict[str, An
 
 
 def _deduplicate_entities(spec: dict[str, Any]) -> list[str]:
+    terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
+    visible_aliases = {
+        _normalized(source): str(visible).strip()
+        for source, visible in terminology.items()
+        if _normalized(source) and str(visible).strip()
+    }
     id_remap: dict[str, str] = {}
     removed: list[str] = []
+    seen: dict[str, dict[str, Any]] = {}
     for field in ("inputs", "modules", "outputs", "innovations"):
         items = spec.get(field, []) if isinstance(spec.get(field), list) else []
-        seen: dict[str, dict[str, Any]] = {}
+        field_seen = {} if field == "innovations" else seen
         unique: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
+            raw_key = _normalized(_label(item))
+            if raw_key in visible_aliases:
+                item["name"] = visible_aliases[raw_key]
             key = _normalized(_label(item))
-            if not key or key not in seen:
+            if field == "inputs" and (key == "input" or re.fullmatch(r"input[a-z0-9]{1,4}", key)):
+                key = "input"
+            if not key or key not in field_seen:
                 if key:
-                    seen[key] = item
+                    field_seen[key] = item
                 unique.append(item)
                 continue
-            kept = seen[key]
+            kept = field_seen[key]
             kept["evidence_ids"] = list(dict.fromkeys([*kept.get("evidence_ids", []), *item.get("evidence_ids", [])]))
             duplicate_id = str(item.get("id") or "")
             kept_id = str(kept.get("id") or "")
@@ -680,11 +692,12 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
             if not progress:
                 break
 
+    deduplicated_entities.extend(_deduplicate_entities(spec))
+    found = {}
     for rule in CONCEPT_RULES:
-        if rule.key not in found:
-            existing = _find_existing(spec, rule)
-            if existing:
-                found[rule.key] = existing[1]
+        existing = _find_existing(spec, rule)
+        if existing:
+            found[rule.key] = existing[1]
 
     relations = spec.setdefault("relations", [])
     existing_pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}

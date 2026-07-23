@@ -667,13 +667,33 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     _repair_cross_script_terminology(spec, parsed)
     completion_report["removed_unverbatim_relation_labels"] = _clear_unverbatim_relation_labels(spec, parsed)
     labels = []
+    normalized_labels: set[str] = set()
+    def add_required_label(value: object) -> None:
+        label = str(value or "").strip()
+        normalized = _normalized_label(label)
+        if label and normalized and normalized not in normalized_labels:
+            labels.append(label)
+            normalized_labels.add(normalized)
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
-    labels.extend(str(value).strip() for value in terminology.values() if str(value).strip())
     for field in ("inputs", "modules", "outputs"):
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             if isinstance(item, dict) and _item_label(item):
-                labels.append(_item_label(item))
-    spec["required_labels"] = list(dict.fromkeys(labels))
+                add_required_label(_item_label(item))
+    for value in terminology.values():
+        add_required_label(value)
+    spec["required_labels"] = labels
+    repeatable_labels = [str(value).strip() for value in spec.get("repeatable_labels", []) if str(value).strip()] if isinstance(spec.get("repeatable_labels"), list) else []
+    central_claim_text = str(spec.get("central_claim", {}).get("text") or "") if isinstance(spec.get("central_claim"), dict) else str(spec.get("central_claim") or "")
+    shared_component_signal = bool(re.search(r"\b(?:same|shared|reused?|single underlying)\b", central_claim_text, re.IGNORECASE))
+    if shared_component_signal:
+        for item in spec.get("modules", []) if isinstance(spec.get("modules"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            label = _item_label(item)
+            role = str(item.get("role") or "").casefold()
+            if label and ("model" in label.casefold() or "shared" in role or "reused" in role) and label not in repeatable_labels:
+                repeatable_labels.append(label)
+    spec["repeatable_labels"] = repeatable_labels
     raw_uncertainties = list(summary.get("unknowns", []) if isinstance(summary.get("unknowns"), list) else [])
     raw_uncertainties.extend(
         f"Dropped unresolved relation {value} because its endpoint was not declared."

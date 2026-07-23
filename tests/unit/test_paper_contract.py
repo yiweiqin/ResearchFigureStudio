@@ -1,3 +1,4 @@
+import re
 import unittest
 
 from rfs.paper_to_image.planner import validate_plan_grounding
@@ -591,6 +592,55 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn("Zero-shot Prediction", output_names)
         self.assertNotIn("Zero-Shot Classifier", output_names)
         self.assertEqual(sum(item["name"] == "Zero-shot Prediction" for item in spec["outputs"]), 1)
+
+    def test_feedback_contract_merges_formula_and_display_name_duplicates(self):
+        caption = "Figure 1: Input x is used to Generate an Initial Output, obtain Self-Feedback, Refine it into a Refined Output, and repeat the feedback loop."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "inputs": [
+                    {"id": "input_x", "name": "input x", "evidence_ids": ["E0001"]},
+                    {"id": "input_input", "name": "Input", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "generate", "name": "Generate", "evidence_ids": ["E0001"]},
+                    {"id": "initial_output", "name": "Initial Output", "evidence_ids": ["E0001"]},
+                    {"id": "feedback", "name": "Self-Feedback", "evidence_ids": ["E0001"]},
+                    {"id": "refine", "name": "Refine", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [
+                    {"id": "y_0", "name": "y 0", "evidence_ids": ["E0001"]},
+                    {"id": "y_t_plus_1", "name": "y t + 1", "evidence_ids": ["E0001"]},
+                    {"id": "refined_output", "name": "Refined Output", "evidence_ids": ["E0001"]},
+                ],
+                "relations": [
+                    {"source": "input_x", "target": "generate", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "generate", "target": "y_0", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "y_0", "target": "feedback", "type": "feedback", "evidence_ids": ["E0001"]},
+                    {"source": "refine", "target": "y_t_plus_1", "type": "data_flow", "evidence_ids": ["E0001"]},
+                ],
+                "innovations": [],
+                "must_show": [],
+                "terminology": {"y 0": "Initial Output", "y t + 1": "Refined Output"},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        all_entities = [item for field in ("inputs", "modules", "outputs") for item in spec[field]]
+        normalized_names = [re.sub(r"[^a-z0-9]+", "", item["name"].casefold()) for item in all_entities]
+        endpoint_ids = {item["id"] for item in all_entities}
+
+        self.assertEqual(len(spec["inputs"]), 1)
+        self.assertTrue(normalized_names[0].startswith("input"))
+        self.assertEqual(sum(name == "initialoutput" for name in normalized_names), 1)
+        self.assertEqual(sum(name == "refinedoutput" for name in normalized_names), 1)
+        self.assertTrue(all(item["source"] in endpoint_ids and item["target"] in endpoint_ids for item in spec["relations"]))
+        self.assertEqual(len(spec["required_labels"]), len({_normalized.casefold() for _normalized in spec["required_labels"]}))
 
     def test_overview_caption_and_stage_list_complete_missing_panels(self):
         caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM) that powers data annotation, and a data engine for collecting SA-1B, our dataset."

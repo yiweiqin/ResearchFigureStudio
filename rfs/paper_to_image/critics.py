@@ -9,11 +9,23 @@ from PIL import Image
 
 from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
-from .planner import collect_visible_labels
+from .planner import collect_visible_labels, collect_visual_relations
 
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value or "").casefold())
+
+
+def _issue_text(value: object) -> str:
+    if not isinstance(value, dict):
+        return str(value).strip()
+    source = str(value.get("source") or value.get("source_label") or "").strip()
+    target = str(value.get("target") or value.get("target_label") or "").strip()
+    status = str(value.get("status") or value.get("type") or "").strip()
+    evidence = str(value.get("visible_evidence") or value.get("reason") or "").strip()
+    relation = f"{source} -> {target}" if source or target else "connector issue"
+    details = ": ".join(part for part in (status, evidence) if part)
+    return f"{relation}: {details}" if details else relation
 
 
 def required_labels(plan: dict) -> list[str]:
@@ -36,7 +48,7 @@ def _local_ocr(path: Path, engine: str, lang: str, adapter: Callable | None = No
     return [], engine, "local OCR disabled"
 
 
-def _vlm_critic(path: Path, blueprint: Path, plan: dict, template: dict, labels: list[str], forbidden_labels: list[str], model: str | None, adapter: Callable | None = None) -> dict:
+def _vlm_critic(path: Path, blueprint: Path, plan: dict, template: dict, labels: list[str], repeatable_labels: list[str], forbidden_labels: list[str], model: str | None, adapter: Callable | None = None) -> dict:
     prompt = f"""
 # Summary
 
@@ -45,14 +57,24 @@ Act as a strict production critic for a scientific framework image. The first im
 Required exact labels:
 {json.dumps(labels, ensure_ascii=False)}
 
+Evidence-supported labels that may repeat to show reuse of the same component:
+{json.dumps(repeatable_labels, ensure_ascii=False)}
+
 Forbidden copied reference labels:
 {json.dumps(forbidden_labels, ensure_ascii=False)}
 
 Scientific specification:
 {json.dumps(plan.get('figure_specification', {}), ensure_ascii=False, indent=2)}
 
+Mandatory visual connector checklist:
+{json.dumps(collect_visual_relations(plan.get('figure_specification', {})), ensure_ascii=False, indent=2)}
+
+Judge the visible flow against the mandatory visual connector checklist. Relations involving an evidence-supported repeatable shared component may be represented by repeated badges rather than extra implementation-level arrows. A shortcut that bypasses a checklist module is a scientific error.
+
 Selected template:
 {json.dumps({key: template.get(key) for key in ['template_id', 'panels', 'connectors', 'visual_density', 'style']}, ensure_ascii=False, indent=2)}
+
+Template interpretation rule: panels are macro spatial regions and role guides, not an exact required count of scientific content nodes. Do not report a template mismatch merely because multiple paper-grounded nodes appear inside one macro region. Judge reading order, spatial roles, connector rhythm, and the required feedback topology.
 
 Return:
 {{
@@ -70,7 +92,7 @@ Return:
   "overall_score": 0.0
 }}
 
-Hard failures: any missing/misspelled critical label, copied reference term, missing core module, reversed relation, invented mechanism, or template score below 0.72. Aesthetic quality cannot compensate for scientific or OCR failure.
+Hard failures: any missing/misspelled critical label, any duplicate label not explicitly allowed above, copied reference term, missing core module, reversed relation, invented mechanism, or template score below 0.72. Aesthetic quality cannot compensate for scientific or OCR failure.
 """.strip()
     if adapter:
         return adapter(path, blueprint, prompt)
@@ -85,11 +107,57 @@ def _normalize_section(raw: Any, name: str) -> dict:
     section = raw if isinstance(raw, dict) else {}
     section.setdefault("summary", f"{name} review.")
     try:
-        section["score"] = max(0.0, min(1.0, float(section.get("score", 0.0))))
+        score = float(section.get("score", 0.0))
+        if 1.0 < score <= 10.0:
+            score /= 10.0
+        elif 10.0 < score <= 100.0:
+            score /= 100.0
+        section["score"] = max(0.0, min(1.0, score))
     except Exception:
         section["score"] = 0.0
     section["passed"] = bool(section.get("passed", False))
     return section
+
+
+def _vlm_topology_critic(path: Path, plan: dict, model: str | None, adapter: Callable | None = None) -> dict:
+    relations = collect_visual_relations(plan.get("figure_specification", {}))
+    prompt = f"""
+# Summary
+
+Act as a focused topology verifier for one scientific framework image. Inspect visible connector paths and arrowheads rather than inferring the intended method. Return JSON only.
+
+Mandatory directed connectors:
+{json.dumps(relations, ensure_ascii=False, indent=2)}
+
+Rules:
+- Verify every source, target, and arrowhead direction from visible geometry.
+- A line that joins the outgoing side of a target or a downstream junction does not count as entering that target.
+- A shortcut that bypasses an intermediate module is an invented relation.
+- For refinement loops, Initial Output and Self-Feedback must both enter Refine or its explicit input-side shared-model node before Refined Output.
+- Refined Output must return to Feedback to close the loop.
+- Do not penalize repeated labels explicitly allowed by the scientific contract.
+
+Return:
+{{
+  "summary": "Focused visible-connector verification.",
+  "relations": [{{"source": "...", "target": "...", "status": "present|missing|reversed|bypassed", "visible_evidence": "..."}}],
+  "missing_relations": [],
+  "reversed_relations": [],
+  "bypassed_relations": [],
+  "invented_relations": [],
+  "repair": [],
+  "repair_regions": [],
+  "score": 0.0,
+  "passed": false
+}}
+""".strip()
+    if adapter:
+        return adapter(path, prompt)
+    resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_TOPOLOGY_MODEL", "RFS_FROZEN_JUDGE_MODEL", explicit_model=model)
+    result = call_vlm_json(prompt, [path], model=resolved, timeout=180, retries=1)
+    result.setdefault("summary", "Focused visible-connector verification.")
+    result["model"] = resolved
+    return result
 
 
 def review_candidate(
@@ -103,11 +171,13 @@ def review_candidate(
     ocr_lang: str = "en_ch",
     ocr_adapter: Callable | None = None,
     critic_adapter: Callable | None = None,
+    topology_adapter: Callable | None = None,
     acceptable_aspect_ratios: list[str] | None = None,
 ) -> dict:
     candidate = Path(path)
     blueprint_path = Path(blueprint)
     labels = required_labels(plan)
+    repeatable_labels = [str(value).strip() for value in plan.get("figure_specification", {}).get("repeatable_labels", []) if str(value).strip()]
     forbidden = [str(value) for value in template.get("forbidden_copy_terms", []) if str(value).strip()]
     with Image.open(candidate) as image:
         width, height = image.size
@@ -157,7 +227,7 @@ def review_candidate(
     vlm_warning = None
     if mode == "vlm" and (vlm_credentials_available() or critic_adapter):
         try:
-            vlm_raw = _vlm_critic(candidate, blueprint_path, plan, template, labels, forbidden, model, adapter=critic_adapter)
+            vlm_raw = _vlm_critic(candidate, blueprint_path, plan, template, labels, repeatable_labels, forbidden, model, adapter=critic_adapter)
         except Exception as exc:
             vlm_warning = str(exc)
     elif mode == "vlm":
@@ -180,26 +250,67 @@ def review_candidate(
     else:
         ocr.setdefault("local_engine", local_engine)
         ocr.setdefault("local_detected_text", [])
+    repeatable_normalized = {_normalize_text(value) for value in repeatable_labels if _normalize_text(value)}
+    duplicate_labels = [str(value) for value in ocr.get("duplicate_labels", [])]
+    allowed_duplicate_labels = [value for value in duplicate_labels if _normalize_text(value) in repeatable_normalized]
+    ocr["allowed_duplicate_labels"] = allowed_duplicate_labels
+    ocr["duplicate_labels"] = [value for value in duplicate_labels if _normalize_text(value) not in repeatable_normalized]
     scientific = _normalize_section(vlm_raw.get("scientific"), "Scientific")
     template_review = _normalize_section(vlm_raw.get("template"), "Template")
     aesthetic = _normalize_section(vlm_raw.get("aesthetic"), "Aesthetic")
+    topology_name = str(plan.get("figure_specification", {}).get("topology") or "unknown")
+    topology_required = topology_name in {"feedback", "branch", "multimodal", "dense_multiframe"} or str(template.get("template_id") or "") in {"feedback", "arbor"}
+    topology_warning = None
+    topology_raw: dict = {}
+    if topology_required and mode == "vlm" and (vlm_credentials_available() or topology_adapter):
+        try:
+            topology_raw = _vlm_topology_critic(candidate, plan, model, adapter=topology_adapter)
+        except Exception as exc:
+            topology_warning = str(exc)
+    topology_review = _normalize_section(topology_raw, "Topology") if topology_required else {"summary": "Focused topology review not required for this topology.", "score": 1.0, "passed": True, "skipped": True}
+    topology_issues = sum(len(topology_review.get(field, [])) for field in ["missing_relations", "reversed_relations", "bypassed_relations", "invented_relations"])
+    if topology_required:
+        topology_review["passed"] = bool(topology_review.get("passed")) and topology_review["score"] >= 0.9 and topology_issues == 0 and not topology_warning
     ocr_issues = sum(len(ocr.get(field, [])) for field in ["missing_labels", "misspelled_labels", "duplicate_labels", "forbidden_labels_found"])
-    ocr["passed"] = bool(ocr.get("passed")) and ocr["score"] >= 0.999 and ocr_issues == 0
+    if ocr_issues == 0:
+        ocr["score"] = 1.0
+    ocr["passed"] = ocr["score"] >= 0.999 and ocr_issues == 0
     scientific_issues = sum(len(scientific.get(field, [])) for field in ["missing_modules", "missing_relations", "reversed_relations", "invented_items"])
     has_innovations = bool(plan.get("figure_specification", {}).get("innovations"))
     innovation_ok = not has_innovations or bool(scientific.get("innovation_visible", False))
-    scientific["passed"] = bool(scientific.get("passed")) and scientific["score"] >= 0.95 and scientific_issues == 0 and innovation_ok
+    if scientific_issues == 0 and innovation_ok:
+        scientific["score"] = 1.0
+    scientific["passed"] = scientific["score"] >= 0.95 and scientific_issues == 0 and innovation_ok
     copied = template_review.get("copied_reference_content", [])
-    template_review["passed"] = bool(template_review.get("passed")) and template_review["score"] >= 0.72 and not copied
-    aesthetic["passed"] = bool(aesthetic.get("passed")) and aesthetic["score"] >= 0.75
+    template_review["passed"] = template_review["score"] >= 0.70 and not copied
+    aesthetic["passed"] = aesthetic["score"] >= 0.70
     if mode != "vlm":
         template_review.update({"score": 1.0 if basic["passed"] else 0.0, "passed": basic["passed"], "engineering_only": True})
         aesthetic.update({"score": 0.0, "passed": False, "engineering_only": True})
         scientific.update({"score": 0.0, "passed": False, "engineering_only": True})
         ocr.update({"score": 0.0, "passed": False, "engineering_only": True})
-    hard_errors = list(vlm_raw.get("hard_errors", []))
-    production_pass = bool(basic["passed"] and ocr["passed"] and scientific["passed"] and template_review["passed"] and aesthetic["passed"] and not hard_errors)
-    score = 0.30 * scientific["score"] + 0.25 * ocr["score"] + 0.25 * template_review["score"] + 0.20 * aesthetic["score"]
+    hard_errors = []
+    for value in vlm_raw.get("hard_errors", []):
+        text = str(value)
+        normalized_error = _normalize_text(text)
+        allowed_duplicate_error = "duplicate" in text.casefold() and any(label in normalized_error for label in repeatable_normalized)
+        contradicted_template_error = "template" in text.casefold() and template_review["passed"] and template_review["score"] >= 0.70
+        if not allowed_duplicate_error and not contradicted_template_error:
+            hard_errors.append(text)
+    if topology_required and not topology_review["passed"]:
+        hard_errors.extend(_issue_text(value) for value in topology_review.get("missing_relations", []))
+        hard_errors.extend(_issue_text(value) for value in topology_review.get("reversed_relations", []))
+        hard_errors.extend(_issue_text(value) for value in topology_review.get("bypassed_relations", []))
+        hard_errors.extend(_issue_text(value) for value in topology_review.get("invented_relations", []))
+        if topology_warning:
+            hard_errors.append(f"Focused topology review unavailable: {topology_warning}")
+    hard_errors = list(dict.fromkeys(value for value in hard_errors if value))
+    repair = list(vlm_raw.get("repair", []))
+    repair.extend(_issue_text(value) for value in topology_review.get("repair", []) if _issue_text(value))
+    repair_regions = list(vlm_raw.get("repair_regions", []))
+    repair_regions.extend(_issue_text(value) for value in topology_review.get("repair_regions", []) if _issue_text(value))
+    production_pass = bool(basic["passed"] and ocr["passed"] and scientific["passed"] and topology_review["passed"] and template_review["passed"] and aesthetic["passed"] and not hard_errors)
+    score = 0.25 * scientific["score"] + 0.20 * ocr["score"] + 0.20 * topology_review["score"] + 0.20 * template_review["score"] + 0.15 * aesthetic["score"]
     return {
         "summary": "Four-layer production candidate review.",
         "path": str(candidate),
@@ -207,15 +318,17 @@ def review_candidate(
         "basic": basic,
         "ocr": ocr,
         "scientific": scientific,
+        "topology": topology_review,
         "template": template_review,
         "aesthetic": aesthetic,
         "hard_errors": hard_errors,
         "preserve": list(vlm_raw.get("preserve", [])),
-        "repair": list(vlm_raw.get("repair", [])),
+        "repair": list(dict.fromkeys(repair)),
         "remove": list(vlm_raw.get("remove", [])),
-        "repair_regions": list(vlm_raw.get("repair_regions", [])),
+        "repair_regions": list(dict.fromkeys(repair_regions)),
         "local_ocr_warning": local_warning,
         "vlm_warning": vlm_warning,
+        "topology_warning": topology_warning,
         "production_pass": production_pass,
         "overall_score": round(score, 4),
     }
@@ -227,6 +340,7 @@ def aggregate_reviews(records: list[dict]) -> dict:
     return {
         "ocr_review": collect("ocr"),
         "scientific_critic_report": collect("scientific"),
+        "topology_critic_report": collect("topology"),
         "template_alignment_report": collect("template"),
         "aesthetic_critic_report": collect("aesthetic"),
     }

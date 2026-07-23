@@ -37,6 +37,7 @@ def run_paper_to_image(
     ocr_lang: str = "en_ch",
     ocr_adapter=None,
     critic_adapter=None,
+    topology_adapter=None,
 ) -> dict:
     started = time.time()
     effective_planner_model = planner_model or os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
@@ -155,6 +156,7 @@ def run_paper_to_image(
         ocr_lang=ocr_lang,
         ocr_adapter=ocr_adapter,
         critic_adapter=critic_adapter,
+        topology_adapter=topology_adapter,
     )
     elapsed = round(time.time() - started, 3)
     run_summary: dict[str, Any] = {
@@ -203,6 +205,7 @@ def run_paper_to_image(
             "ocr_review.json",
             "template_alignment_report.json",
             "scientific_critic_report.json",
+            "topology_critic_report.json",
             "aesthetic_critic_report.json",
             "selected_image.png" if generation.get("selected_image") else "engineering_preview.png",
         ],

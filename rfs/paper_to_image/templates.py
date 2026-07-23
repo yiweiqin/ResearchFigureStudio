@@ -12,6 +12,25 @@ from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_avail
 
 
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
+    "feedback": {
+        "summary": "Compact two-row iterative generation, feedback, and refinement template.",
+        "template_id": "feedback",
+        "name": "Feedback refinement loop",
+        "aspect_ratio": 1.78,
+        "topology": ["feedback", "iteration", "two_row_loop", "shared_model"],
+        "ideal_module_range": [4, 9],
+        "visual_density": "high",
+        "panels": [
+            {"id": "task_input", "role": "input", "bbox_percent": {"x": 0.02, "y": 0.28, "w": 0.13, "h": 0.43}},
+            {"id": "generation", "role": "initial_generation", "bbox_percent": {"x": 0.20, "y": 0.10, "w": 0.20, "h": 0.28}},
+            {"id": "initial_output", "role": "initial_output", "bbox_percent": {"x": 0.44, "y": 0.10, "w": 0.18, "h": 0.28}},
+            {"id": "feedback", "role": "self_feedback", "bbox_percent": {"x": 0.72, "y": 0.29, "w": 0.20, "h": 0.30}},
+            {"id": "refinement", "role": "refinement", "bbox_percent": {"x": 0.24, "y": 0.63, "w": 0.22, "h": 0.24}},
+            {"id": "refined_output", "role": "refined_output", "bbox_percent": {"x": 0.54, "y": 0.63, "w": 0.20, "h": 0.24}},
+        ],
+        "connectors": ["input_to_generation", "generation_to_initial_output", "initial_output_to_feedback", "initial_output_to_refinement", "feedback_to_refinement", "refinement_to_refined_output", "refined_output_to_feedback_loop"],
+        "style": {"background": "white", "panel_fill": "near_white", "stroke": "muted_blue", "accent": ["navy", "teal", "orange"], "corners": "rounded", "shadow": "soft_cards"},
+    },
     "arbor": {
         "summary": "Tree-centered iterative research template.",
         "template_id": "arbor",
@@ -208,8 +227,10 @@ def select_template(profiles: list[dict], review: dict, requested: str = "auto",
         module_fit = 1.0 if low <= features["module_count"] <= high else max(0.0, 1.0 - min(abs(features["module_count"] - low), abs(features["module_count"] - high)) / 10)
         topology = 0.0
         reasons = [f"module_fit={module_fit:.2f}"]
-        if template_id == "arbor" and (features["has_loop"] or features["has_tree"]):
-            topology += 1.0; reasons.append("loop/tree topology")
+        if template_id == "feedback" and features["has_loop"] and not features["has_tree"]:
+            topology += 1.0; reasons.append("explicit feedback-loop topology")
+        if template_id == "arbor" and features["has_tree"]:
+            topology += 1.0; reasons.append("tree/branch topology")
         if template_id == "linear" and not features["has_loop"] and not features["has_tree"] and not features["has_retrieval"] and 2 <= features["module_count"] <= 8:
             topology += 0.9; reasons.append("sequential stage count")
         if template_id == "tripanel" and features["has_retrieval"]:
@@ -283,6 +304,22 @@ def render_layout_blueprint(profile: dict, out_path: str | Path, target_ratio: s
         arrow = 12
         points = [end, (end[0] - arrow * math.cos(angle - 0.45), end[1] - arrow * math.sin(angle - 0.45)), (end[0] - arrow * math.cos(angle + 0.45), end[1] - arrow * math.sin(angle + 0.45))]
         draw.polygon(points, fill=(80, 111, 134))
+    if profile.get("template_id") == "feedback" and len(centers) >= 6:
+        extra_pairs = [(centers[2], centers[4]), (centers[5], centers[3])]
+        for pair_index, (start, end) in enumerate(extra_pairs):
+            if pair_index == 0:
+                mid_y = max(start[1], end[1])
+                path = [start, (start[0], mid_y), end]
+            else:
+                loop_x = min(width - 18, max(start[0], end[0]) + round(width * 0.08))
+                path = [start, (loop_x, start[1]), (loop_x, end[1]), end]
+            draw.line(path, fill=(31, 117, 126), width=4, joint="curve")
+            if len(path) >= 2:
+                tail, head = path[-2], path[-1]
+                angle = math.atan2(head[1] - tail[1], head[0] - tail[0])
+                arrow = 12
+                points = [head, (head[0] - arrow * math.cos(angle - 0.45), head[1] - arrow * math.sin(angle - 0.45)), (head[0] - arrow * math.cos(angle + 0.45), head[1] - arrow * math.sin(angle + 0.45))]
+                draw.polygon(points, fill=(31, 117, 126))
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)

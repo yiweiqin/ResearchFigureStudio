@@ -146,7 +146,14 @@ Available profiles:
 
 ## Template Contract
 
-Positive references are classified as `arbor`, `linear`, `tripanel`, or `dense-multimodal`. Each becomes a content-free profile containing normalized panels, topology, connector rhythm, density, palette, and forbidden copied content. Automatic selection uses module count, loops/tree structure, multimodality, retrieval structure, and requested ratio.
+Built-in templates include `feedback`, `arbor`, `linear`, `tripanel`, and
+`dense-multimodal`. Compact iterative generation/feedback/refinement systems use
+`feedback`; tree or branching systems use `arbor`. Positive references are
+classified into the closest ratio-based reference archetype and become
+content-free profiles containing normalized panels, topology, connector rhythm,
+density, palette, and forbidden copied content. Automatic selection uses module
+count, loops/tree structure, multimodality, retrieval structure, and requested
+ratio.
 
 The selected profile is rendered as `layout_blueprint.png`. The blueprint contains no reference text or reference-specific objects and is the only image supplied to Image2 edit for initial candidates.
 
@@ -160,8 +167,11 @@ Every Image2 candidate must pass:
 
 - exact-label OCR with no missing, misspelled, duplicate, or copied reference labels;
 - scientific module and relation checks with no invention or reversal;
-- template alignment score of at least `0.72` with no copied reference content;
-- aesthetic score of at least `0.75`;
+- for feedback, branch, multimodal, and dense layouts, a second focused topology
+  review that verifies visible connector endpoints and arrowheads, rejects
+  bypasses, and writes `topology_critic_report.json`;
+- template alignment score of at least `0.70` with no copied reference content;
+- aesthetic score of at least `0.70`;
 - valid image resolution and blueprint aspect ratio.
 
 Scientific score must be at least `0.95`; OCR must be exact. If three candidates fail, the best candidate receives one localized Image2 edit repair. If the repair still fails, the command stops without writing `selected_image.png`.

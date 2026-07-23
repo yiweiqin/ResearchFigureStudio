@@ -15,7 +15,7 @@ from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import required_labels, review_candidate
 from rfs.paper_to_image.generator import generate_and_select, native_image2_aspect_ratio
-from rfs.paper_to_image.planner import compile_image_prompt
+from rfs.paper_to_image.planner import collect_visual_relations, compile_image_prompt
 from rfs.paper_to_image.review import detect_domain_profile, validate_review_coverage
 from rfs.paper_to_image.templates import build_template_profiles, render_layout_blueprint, select_template
 
@@ -148,6 +148,45 @@ class PaperToImageTests(unittest.TestCase):
         self.assertIn("Evidence Grounding", prompt)
         self.assertIn("never replace an output label with an icon-only node", prompt)
 
+    def test_visual_relation_checklist_deduplicates_edges_and_skips_shared_model_wiring(self):
+        spec = {
+            "inputs": [{"id": "input", "name": "Input"}],
+            "modules": [
+                {"id": "model", "name": "Model M"},
+                {"id": "generate", "name": "Generate"},
+                {"id": "initial", "name": "Initial Output"},
+                {"id": "feedback", "name": "Feedback"},
+                {"id": "refine", "name": "Refine"},
+            ],
+            "outputs": [{"id": "refined", "name": "Refined Output"}],
+            "innovations": [],
+            "repeatable_labels": ["Model M"],
+            "relations": [
+                {"source": "input", "target": "model", "type": "data_flow"},
+                {"source": "model", "target": "initial", "type": "prediction"},
+                {"source": "input", "target": "generate", "type": "generation_input"},
+                {"source": "input", "target": "generate", "type": "data_flow"},
+                {"source": "generate", "target": "initial", "type": "data_flow"},
+                {"source": "initial", "target": "feedback", "type": "data_flow"},
+                {"source": "initial", "target": "feedback", "type": "evaluation"},
+                {"source": "initial", "target": "refine", "type": "revision_input"},
+                {"source": "feedback", "target": "refine", "type": "feedback"},
+                {"source": "refine", "target": "refined", "type": "prediction"},
+                {"source": "refine", "target": "refined", "type": "data_flow"},
+                {"source": "refined", "target": "feedback", "type": "feedback_loop"},
+            ],
+        }
+
+        relations = collect_visual_relations(spec)
+        pairs = {(item["source"], item["target"]): item["type"] for item in relations}
+
+        self.assertNotIn(("input", "model"), pairs)
+        self.assertNotIn(("model", "initial"), pairs)
+        self.assertEqual(pairs[("input", "generate")], "data_flow")
+        self.assertEqual(pairs[("initial", "feedback")], "evaluation")
+        self.assertEqual(pairs[("refine", "refined")], "data_flow")
+        self.assertEqual(pairs[("refined", "feedback")], "feedback_loop")
+
     def test_candidate_review_accepts_requested_ratio_when_image2_ignores_blueprint_ratio(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -169,6 +208,79 @@ class PaperToImageTests(unittest.TestCase):
 
             self.assertTrue(review["basic"]["passed"])
             self.assertEqual(review["basic"]["matched_aspect_ratio"], "16:9")
+
+    def test_candidate_review_allows_evidence_supported_shared_label_reuse(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            plan = _plan()
+            plan["figure_specification"]["repeatable_labels"] = ["Document Parser"]
+
+            def critic(path, template, prompt):
+                result = _passing_critic(path, template, prompt)
+                result["ocr"].update({"duplicate_labels": ["Document Parser"], "passed": False})
+                result["hard_errors"] = ["Duplicate label: Document Parser", "Template mismatch: too many content nodes"]
+                return result
+
+            review = review_candidate(candidate, blueprint, plan, {"template_id": "linear", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=critic)
+
+            self.assertTrue(review["production_pass"])
+            self.assertEqual(review["ocr"]["allowed_duplicate_labels"], ["Document Parser"])
+            self.assertEqual(review["ocr"]["duplicate_labels"], [])
+
+    def test_complex_feedback_candidate_requires_focused_topology_pass(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            plan = _plan()
+            plan["figure_specification"].update({
+                "topology": "feedback",
+                "inputs": [{"id": "input", "name": "Input"}],
+                "modules": [{"id": "refine", "name": "Refine"}],
+                "outputs": [{"id": "output", "name": "Refined Output"}],
+                "relations": [{"source": "input", "target": "refine", "type": "revision_input"}, {"source": "refine", "target": "output", "type": "data_flow"}],
+                "terminology": {},
+            })
+
+            topology = lambda _path, _prompt: {"summary": "Focused topology.", "missing_relations": ["Input -> Refine"], "reversed_relations": [], "bypassed_relations": [], "invented_relations": [], "repair": ["Connect Input to Refine"], "repair_regions": ["Refine input"], "score": 0.5, "passed": False}
+            review = review_candidate(candidate, blueprint, plan, {"template_id": "feedback", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=_passing_critic, topology_adapter=topology)
+
+            self.assertFalse(review["production_pass"])
+            self.assertFalse(review["topology"]["passed"])
+            self.assertIn("Input -> Refine", review["hard_errors"])
+            self.assertIn("Connect Input to Refine", review["repair"])
+
+    def test_issue_free_ten_point_scale_review_is_normalized_by_findings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            plan = _plan()
+            plan["figure_specification"]["topology"] = "feedback"
+
+            def critic(path, template, prompt):
+                result = _passing_critic(path, template, prompt)
+                for section in ("ocr", "scientific", "template", "aesthetic"):
+                    result[section]["score"] = 7.0
+                    result[section]["passed"] = False
+                return result
+
+            topology = lambda _path, _prompt: {"summary": "Focused topology.", "missing_relations": [], "reversed_relations": [], "bypassed_relations": [], "invented_relations": [], "repair": [], "repair_regions": [], "score": 10.0, "passed": True}
+            review = review_candidate(candidate, blueprint, plan, {"template_id": "feedback", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=critic, topology_adapter=topology)
+
+            self.assertTrue(review["production_pass"])
+            self.assertEqual(review["ocr"]["score"], 1.0)
+            self.assertEqual(review["scientific"]["score"], 1.0)
+            self.assertEqual(review["template"]["score"], 0.7)
+            self.assertEqual(review["aesthetic"]["score"], 0.7)
 
     def test_inspect_pdf_cli_defaults(self):
         parser = build_parser()
@@ -348,6 +460,20 @@ class PaperToImageTests(unittest.TestCase):
             selected = select_template(profiles, review, requested="auto", target_ratio="16:9")
 
             self.assertEqual(selected["template_id"], "linear")
+
+    def test_feedback_workflow_selects_feedback_template_instead_of_arbor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            review = {
+                "modules": [{"statement": value} for value in ("Generate", "Initial Output", "Feedback", "Refine", "Refined Output")],
+                "inputs": [{"statement": "Input"}],
+                "relations": [{"relation_type": "feedback", "statement": "Refined Output returns to Feedback"}],
+                "workflows": {"feedback": [{"statement": "iterative self-feedback loop"}]},
+            }
+
+            selected = select_template(profiles, review, requested="auto", target_ratio="16:9")
+
+            self.assertEqual(selected["template_id"], "feedback")
 
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_mock_image2_generates_three_candidates_and_safe_manifest(self, _post):

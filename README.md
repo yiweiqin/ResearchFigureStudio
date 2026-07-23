@@ -170,7 +170,7 @@ rfs paper-to-image `
 The main outputs are `paper_review.json`, `review_coverage_report.json`,
 `domain_profile.json`, `template_profiles/`, `selected_template.json`,
 `layout_blueprint.png`, `figure_specification.json`, `image_prompt.txt`,
-`image2_request_manifest.json`, four critic reports, the `candidates/`
+`image2_request_manifest.json`, the general and focused-topology critic reports, the `candidates/`
 directory, and production-only `selected_image.png`.
 
 To repair a reviewed failed candidate without paying for a new initial candidate
@@ -200,6 +200,12 @@ If a key was pasted into a chat, issue, or terminal transcript, revoke it and us
 a newly rotated key through environment variables before running production.
 See [docs/paper-to-image.md](docs/paper-to-image.md) for the review schema,
 template contract, production gates, and failure behavior.
+
+Automatic selection includes a dedicated `feedback` template for compact
+generation → feedback → refinement loops. Tree/branch systems continue to use
+`arbor`; simple sequential systems use `linear`. Feedback, branch, multimodal,
+and dense candidates also run a focused connector judge that verifies visible
+arrow endpoints and rejects shortcuts that bypass required modules.
 
 ## Offline Smoke Test
 
