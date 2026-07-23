@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+import requests
 from PIL import Image
 
 from rfs.cli import _doctor, _probe_executable, build_parser
@@ -504,6 +505,20 @@ class PaperToImageTests(unittest.TestCase):
 
             self.assertEqual(selected["template_id"], "multimodal")
 
+    def test_dense_contract_topology_selects_dense_multiframe_template(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            review = {
+                "inputs": [{"statement": "Image"}, {"statement": "Prompt"}],
+                "modules": [{"statement": value} for value in ("Image Encoder", "Prompt Encoder", "Mask Decoder")],
+                "relations": [],
+                "workflows": {"feedback": []},
+            }
+
+            selected = select_template(profiles, review, requested="auto", target_ratio="16:9", contract_topology="dense_multiframe")
+
+            self.assertEqual(selected["template_id"], "dense-multiframe")
+
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_mock_image2_generates_three_candidates_and_safe_manifest(self, _post):
         with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_IMAGE_MODEL": "image-2"}, clear=False):
@@ -520,6 +535,31 @@ class PaperToImageTests(unittest.TestCase):
             self.assertEqual(len(manifest["requests"]), 3)
             self.assertNotIn("secret-value", manifest_text)
             self.assertTrue(all(item["endpoint"].endswith("/images/edits") for item in manifest["requests"]))
+
+    @patch("rfs.paper_to_image.generator.requests.post", side_effect=requests.Timeout("provider stalled"))
+    def test_image2_timeout_is_not_blindly_retried(self, post):
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_IMAGE2_TIMEOUT": "30"}, clear=False):
+            root = Path(temp)
+            template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
+            render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
+
+            with self.assertRaises(RuntimeError):
+                generate_and_select(
+                    _plan(),
+                    {"aspect_ratio": "3:2"},
+                    template,
+                    root / "layout_blueprint.png",
+                    root,
+                    asset_mode="image2",
+                    candidates=1,
+                    image_retries=3,
+                    review_mode="vlm",
+                    repair_rounds=0,
+                    ocr_engine="off",
+                    critic_adapter=_passing_critic,
+                )
+
+            self.assertEqual(post.call_count, 1)
 
     @patch("rfs.paper_to_image.generator.requests.post")
     def test_repair_source_skips_fresh_candidate_generation_when_source_passes(self, post):

@@ -146,9 +146,11 @@ Available profiles:
 
 ## Template Contract
 
-Built-in templates include `multimodal`, `branch`, `feedback`, `arbor`, `linear`,
-`tripanel`, and `dense-multimodal`. Multi-input systems that converge through a
-modality encoder bank into one joint space use `multimodal`; compact iterative
+Built-in templates include `dense-multiframe`, `multimodal`, `branch`,
+`feedback`, `arbor`, `linear`, `tripanel`, and `dense-multimodal`. Dense
+task/model/data-engine overviews with nested local flows use `dense-multiframe`;
+multi-input systems that converge through a modality encoder bank into one joint
+space use `multimodal`; compact iterative
 generation/feedback/refinement systems use `feedback`; shared-trunk systems with
 parallel output heads use `branch`; true search-tree systems use `arbor`.
 Positive references are classified into
@@ -167,6 +169,11 @@ two independent judges from creating a multi-minute sequential stall. Configure
 `RFS_PAPER_TO_IMAGE_TOPOLOGY_TIMEOUT` when a slower provider requires a larger
 budget. Existing candidates can be passed through `--repair-source` so review or
 localized repair does not regenerate the correct parts of the image.
+
+Image-2 edit requests default to a 120-second timeout controlled by
+`RFS_IMAGE2_TIMEOUT`. Network timeouts stop the candidate immediately instead of
+blindly regenerating the entire image. Retryable HTTP or provider failures may
+retry up to `--image-retries`; the default is one.
 
 When `--aspect-ratio auto` is used, the template keeps its internal normalized
 geometry while the generation canvas uses the nearest native Image2 ratio

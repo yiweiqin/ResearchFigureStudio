@@ -26,7 +26,7 @@ def run_paper_to_image(
     aspect_ratio: str | None = None,
     language: str | None = None,
     image_model: str | None = None,
-    image_retries: int = 2,
+    image_retries: int = 1,
     review_mode: str = "heuristic",
     review_model: str | None = None,
     domain_profile: str = "auto",
@@ -98,7 +98,13 @@ def run_paper_to_image(
                 write_json(root / "preferences.json", preferences)
 
     template_profiles = build_template_profiles(archived_positive, root / "template_profiles", mode=planner_mode, model=planner_model)
-    selected_template = select_template(template_profiles, paper_review, requested=template, target_ratio=str(preferences.get("aspect_ratio") or "auto"))
+    selected_template = select_template(
+        template_profiles,
+        paper_review,
+        requested=template,
+        target_ratio=str(preferences.get("aspect_ratio") or "auto"),
+        contract_topology=str(plan.get("figure_specification", {}).get("topology") or "unknown"),
+    )
     if str(preferences.get("aspect_ratio") or "auto") == "auto":
         ratio = float(selected_template.get("source_aspect_ratio") or selected_template.get("aspect_ratio") or 16 / 9)
         preferences["template_source_aspect_ratio"] = round(ratio, 6)

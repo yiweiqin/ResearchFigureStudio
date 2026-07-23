@@ -739,6 +739,59 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(len(spec["relations"]), 8)
         self.assertIn("Emergent Cross-modal Alignment", spec["required_labels"])
 
+    def test_dense_multiframe_contract_keeps_task_model_and_data_engine_panels(self):
+        caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM), and a data engine for collecting SA-1B."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "branch",
+                "inputs": [
+                    {"id": "image", "name": "image", "evidence_ids": ["E0001"]},
+                    {"id": "images_alias", "name": "Images", "evidence_ids": ["E0001"]},
+                    {"id": "prompts", "name": "input prompts", "evidence_ids": ["E0001"]},
+                    {"id": "prompt", "name": "Prompt", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "task", "name": "Prompt-able segmentation task", "role": "overview_panel", "evidence_ids": ["E0001"]},
+                    {"id": "sam", "name": "Segmentation model (SAM)", "role": "overview_panel", "evidence_ids": ["E0001"]},
+                    {"id": "engine", "name": "Data engine", "role": "overview_panel", "evidence_ids": ["E0001"]},
+                    {"id": "image_encoder", "name": "image encoder", "evidence_ids": ["E0001"]},
+                    {"id": "prompt_encoder", "name": "prompt encoder", "evidence_ids": ["E0001"]},
+                    {"id": "mask_decoder", "name": "mask decoder", "evidence_ids": ["E0001"]},
+                    {"id": "transformer", "name": "Transformer Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "assisted", "name": "Assisted-Manual", "evidence_ids": ["E0001"]},
+                    {"id": "semi", "name": "Semi-Automatic", "evidence_ids": ["E0001"]},
+                    {"id": "fully", "name": "Fully Automatic", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [
+                    {"id": "mask", "name": "Valid Segmentation Mask", "evidence_ids": ["E0001"]},
+                    {"id": "sa1b", "name": "SA-1B", "evidence_ids": ["E0001"]},
+                    {"id": "confidence", "name": "confidence scores", "evidence_ids": ["E0001"]},
+                ],
+                "innovations": [],
+                "relations": [],
+                "must_show": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        labels = [re.sub(r"[^a-z0-9]+", "", item["name"].casefold()) for field in ("inputs", "modules", "outputs") for item in spec[field]]
+
+        self.assertEqual(spec["topology"], "dense_multiframe")
+        self.assertEqual(len(labels), 13)
+        self.assertEqual(len(spec["relations"]), 9)
+        self.assertIn("promptablesegmentationtask", labels)
+        self.assertIn("segmentanythingmodel", labels)
+        self.assertIn("dataengine", labels)
+        self.assertNotIn("transformerencoder", labels)
+        self.assertNotIn("confidencescores", labels)
+
     def test_overview_caption_and_stage_list_complete_missing_panels(self):
         caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM) that powers data annotation, and a data engine for collecting SA-1B, our dataset."
         parsed = {

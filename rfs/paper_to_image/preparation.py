@@ -557,6 +557,100 @@ def _simplify_multimodal_contract(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _simplify_dense_multiframe_contract(spec: dict[str, Any]) -> dict[str, Any]:
+    all_entities = [
+        (field, item)
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+
+    def candidates(predicate: Callable[[str, dict[str, Any]], bool]) -> list[tuple[str, dict[str, Any]]]:
+        return [(field, item) for field, item in all_entities if predicate(_normalized_label(_item_label(item)), item)]
+
+    promptable = candidates(lambda label, item: "segmentationtask" in label and "prompt" in label)
+    sam_model = candidates(lambda label, item: "segmentanythingmodel" in label or "segmentationmodelsam" in label or label == "sam")
+    data_engine = candidates(lambda label, item: label == "dataengine")
+    image = candidates(lambda label, item: label in {"image", "images", "inputimage"} and item in spec.get("inputs", []))
+    prompt = candidates(lambda label, item: label in {"prompt", "inputprompts", "segmentationprompt", "sparseprompts", "denseprompts"} and item in spec.get("inputs", []))
+    image_encoder = candidates(lambda label, item: label == "imageencoder")
+    prompt_encoder = candidates(lambda label, item: label == "promptencoder")
+    mask_decoder = candidates(lambda label, item: label == "maskdecoder")
+    valid_mask = candidates(lambda label, item: label in {"validsegmentationmask", "validmask", "validmasks"})
+    assisted = candidates(lambda label, item: label == "assistedmanual")
+    semi = candidates(lambda label, item: label == "semiautomatic")
+    fully = candidates(lambda label, item: label == "fullyautomatic")
+    sa1b = candidates(lambda label, item: label == "sa1b")
+    groups = (promptable, sam_model, data_engine, image, prompt, image_encoder, prompt_encoder, mask_decoder, valid_mask, assisted, semi, fully, sa1b)
+    if any(not group for group in groups):
+        return {"applied": False, "removed_entities": [], "rebuilt_relations": []}
+
+    def merge(group: list[tuple[str, dict[str, Any]]], name: str, role: str) -> dict[str, Any]:
+        canonical = group[0][1]
+        canonical["name"] = name
+        canonical["role"] = role
+        canonical["evidence_ids"] = list(dict.fromkeys(value for _, item in group for value in item.get("evidence_ids", [])))
+        return canonical
+
+    promptable_item = merge(promptable, "Promptable Segmentation Task", "overview_panel")
+    sam_item = merge(sam_model, "Segment Anything Model", "overview_panel")
+    data_engine_item = merge(data_engine, "Data Engine", "overview_panel")
+    image_item = merge(image, "Image", "input")
+    prompt_item = merge(prompt, "Prompt", "input")
+    image_encoder_item = merge(image_encoder, "Image Encoder", "module")
+    prompt_encoder_item = merge(prompt_encoder, "Prompt Encoder", "module")
+    mask_decoder_item = merge(mask_decoder, "Mask Decoder", "module")
+    valid_mask_item = merge(valid_mask, "Valid Segmentation Mask", "output")
+    assisted_item = merge(assisted, "Assisted-manual", "data_engine_stage")
+    semi_item = merge(semi, "Semi-automatic", "data_engine_stage")
+    fully_item = merge(fully, "Fully Automatic", "data_engine_stage")
+    sa1b_item = merge(sa1b, "SA-1B", "dataset")
+
+    kept = [
+        promptable_item, sam_item, data_engine_item, image_item, prompt_item,
+        image_encoder_item, prompt_encoder_item, mask_decoder_item, valid_mask_item,
+        assisted_item, semi_item, fully_item, sa1b_item,
+    ]
+    keep_ids = {str(item.get("id")) for item in kept if item.get("id")}
+    removed_entities = [str(item.get("id")) for _, item in all_entities if item.get("id") and str(item.get("id")) not in keep_ids]
+    spec["inputs"] = [image_item, prompt_item]
+    spec["modules"] = [
+        promptable_item, sam_item, data_engine_item,
+        image_encoder_item, prompt_encoder_item, mask_decoder_item,
+        assisted_item, semi_item, fully_item,
+    ]
+    spec["outputs"] = [valid_mask_item, sa1b_item]
+    spec["innovations"] = []
+
+    def relation(source: dict[str, Any], target: dict[str, Any], relation_type: str) -> dict[str, Any]:
+        return {
+            "source": str(source.get("id")),
+            "target": str(target.get("id")),
+            "type": relation_type,
+            "label": "",
+            "evidence_ids": list(dict.fromkeys([*source.get("evidence_ids", []), *target.get("evidence_ids", [])])),
+        }
+
+    relations = [
+        relation(image_item, image_encoder_item, "data_flow"),
+        relation(prompt_item, prompt_encoder_item, "data_flow"),
+        relation(image_encoder_item, mask_decoder_item, "feature_flow"),
+        relation(prompt_encoder_item, mask_decoder_item, "conditioning"),
+        relation(mask_decoder_item, valid_mask_item, "data_flow"),
+        relation(assisted_item, semi_item, "stage_transition"),
+        relation(semi_item, fully_item, "stage_transition"),
+        relation(fully_item, sa1b_item, "data_generation"),
+        relation(sam_item, data_engine_item, "annotation_support"),
+    ]
+    spec["relations"] = relations
+    spec["topology"] = "dense_multiframe"
+    return {
+        "applied": True,
+        "removed_entities": removed_entities,
+        "rebuilt_relations": [f"{item['source']}->{item['target']}" for item in relations],
+    }
+
+
 def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
     aliases: dict[str, set[str]] = {}
     endpoint_ids: set[str] = set()
@@ -862,6 +956,10 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
                 existing_pairs.add(pair)
                 incoming.add(target_id)
     spec["relations"] = relations
+    dense_report = _simplify_dense_multiframe_contract(spec)
+    completion_report["dense_multiframe_simplification_applied"] = dense_report["applied"]
+    completion_report["dense_multiframe_removed_entities"] = dense_report["removed_entities"]
+    completion_report["dense_multiframe_rebuilt_relations"] = dense_report["rebuilt_relations"]
     multimodal_report = _simplify_multimodal_contract(spec)
     completion_report["multimodal_simplification_applied"] = multimodal_report["applied"]
     completion_report["multimodal_removed_entities"] = multimodal_report["removed_entities"]

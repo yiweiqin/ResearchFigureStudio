@@ -113,6 +113,7 @@ def _call_image2_edit(source_path: Path, prompt: str, output_path: Path, aspect_
         raise RuntimeError("Reference-conditioned Image2 requires API_KEY/GEMINI_API_KEY")
     endpoint = _image2_edit_url()
     resolved_model = _image2_model_name(model)
+    request_timeout = max(30, int(os.getenv("RFS_IMAGE2_TIMEOUT", "120")))
     last_error: Exception | None = None
     for attempt in range(max(0, min(5, int(retries))) + 1):
         try:
@@ -122,13 +123,16 @@ def _call_image2_edit(source_path: Path, prompt: str, output_path: Path, aspect_
                     headers={"Authorization": f"Bearer {api_key}"},
                     data={"model": resolved_model, "prompt": prompt, "n": "1", "size": _image_size(aspect_ratio)},
                     files={"image": (source_path.name, handle, "image/png")},
-                    timeout=360,
+                    timeout=request_timeout,
                 )
             if response.status_code == 429 or response.status_code >= 500:
                 raise RuntimeError(f"Image2 edit returned HTTP {response.status_code}")
             response.raise_for_status()
             _write_openai_image(response.json(), output_path)
             return {"mode": "edit", "model": resolved_model, "endpoint": _safe_endpoint(endpoint), "source": str(source_path), "api_key_present": True}
+        except requests.Timeout as exc:
+            last_error = exc
+            break
         except Exception as exc:
             last_error = exc
             if attempt >= max(0, min(5, int(retries))):

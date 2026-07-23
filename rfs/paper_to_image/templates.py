@@ -12,6 +12,22 @@ from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_avail
 
 
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
+    "dense-multiframe": {
+        "summary": "Dense three-panel overview combining task semantics, model internals, and a staged data engine.",
+        "template_id": "dense-multiframe",
+        "name": "Task, model, and data-engine overview",
+        "aspect_ratio": 1.78,
+        "topology": ["three_macro_panels", "nested_model_flow", "staged_data_engine", "model_to_data_feedback"],
+        "ideal_module_range": [8, 16],
+        "visual_density": "very_high",
+        "panels": [
+            {"id": "task", "role": "promptable_task", "bbox_percent": {"x": 0.02, "y": 0.08, "w": 0.27, "h": 0.84}},
+            {"id": "model", "role": "model_architecture", "bbox_percent": {"x": 0.34, "y": 0.08, "w": 0.34, "h": 0.84}},
+            {"id": "data", "role": "data_engine", "bbox_percent": {"x": 0.73, "y": 0.08, "w": 0.25, "h": 0.84}},
+        ],
+        "connectors": ["image_to_image_encoder", "prompt_to_prompt_encoder", "encoders_to_decoder", "decoder_to_mask", "three_stage_data_engine", "model_to_data_engine_support"],
+        "style": {"background": "white", "panel_fill": "soft_tint", "stroke": "muted_blue", "accent": ["blue", "green", "orange"], "corners": "rounded", "shadow": "soft_cards"},
+    },
     "multimodal": {
         "summary": "Multiple modality inputs converge through modality encoders into one joint embedding space and an emergent alignment output.",
         "template_id": "multimodal",
@@ -240,7 +256,7 @@ def _paper_features(review: dict) -> dict:
     }
 
 
-def select_template(profiles: list[dict], review: dict, requested: str = "auto", target_ratio: str = "auto") -> dict:
+def select_template(profiles: list[dict], review: dict, requested: str = "auto", target_ratio: str = "auto", contract_topology: str | None = None) -> dict:
     if requested != "auto":
         matches = [profile for profile in profiles if profile.get("template_id") == requested or profile.get("profile_id") == requested]
         if not matches:
@@ -266,6 +282,9 @@ def select_template(profiles: list[dict], review: dict, requested: str = "auto",
         module_fit = 1.0 if low <= features["module_count"] <= high else max(0.0, 1.0 - min(abs(features["module_count"] - low), abs(features["module_count"] - high)) / 10)
         topology = 0.0
         reasons = [f"module_fit={module_fit:.2f}"]
+        topology_template = {"dense_multiframe": "dense-multiframe"}.get(str(contract_topology or ""), str(contract_topology or ""))
+        if topology_template and template_id == topology_template:
+            topology += 1.5; reasons.append(f"normalized contract topology={contract_topology}")
         if template_id == "feedback" and features["has_loop"] and not features["has_tree"]:
             topology += 1.0; reasons.append("explicit feedback-loop topology")
         if template_id == "branch" and features["has_branch"] and not features["has_loop"] and not features["has_tree"] and not features["has_multimodal"] and not features["has_retrieval"]:
