@@ -446,6 +446,117 @@ def _simplify_branch_contract(spec: dict[str, Any]) -> dict[str, list[str]]:
     return {"merged_entities": merged_entities, "removed_cross_branch_relations": removed_cross_branch_relations}
 
 
+def _simplify_multimodal_contract(spec: dict[str, Any]) -> dict[str, Any]:
+    modality_names = {"image", "images", "text", "audio", "video", "depth", "thermal", "imu"}
+    modality_inputs = []
+    modality_by_name: dict[str, dict[str, Any]] = {}
+    for item in spec.get("inputs", []) if isinstance(spec.get("inputs"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        normalized = _normalized_label(_item_label(item))
+        if normalized not in modality_names:
+            continue
+        key = "image" if normalized == "images" else normalized
+        if key in modality_by_name:
+            canonical = modality_by_name[key]
+            canonical["evidence_ids"] = list(dict.fromkeys([*canonical.get("evidence_ids", []), *item.get("evidence_ids", [])]))
+            continue
+        modality_by_name[key] = item
+        modality_inputs.append(item)
+    all_entities = [
+        (field, item)
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+    encoder_candidates = [
+        (field, item) for field, item in all_entities
+        if "modalityencoder" in _normalized_label(_item_label(item)) or "encodersforeachmodality" in _normalized_label(_item_label(item))
+    ]
+    joint_candidates = [
+        (field, item) for field, item in all_entities
+        if "embedding" in _normalized_label(_item_label(item))
+        and any(term in _normalized_label(_item_label(item)) for term in ("joint", "common", "shared"))
+    ]
+    emergent_candidates = [
+        (field, item) for field, item in all_entities
+        if ("emergent" in _normalized_label(_item_label(item)) and "align" in _normalized_label(_item_label(item)))
+        or "bindingproperty" in _normalized_label(_item_label(item))
+        or "bindingagent" in _normalized_label(_item_label(item))
+    ]
+    if len(modality_inputs) < 3 or not encoder_candidates or not joint_candidates or not emergent_candidates:
+        return {"applied": False, "removed_entities": [], "rebuilt_relations": []}
+
+    def choose(candidates: list[tuple[str, dict[str, Any]]], preferred: tuple[str, ...]) -> tuple[str, dict[str, Any]]:
+        return min(
+            candidates,
+            key=lambda record: next(
+                (index for index, value in enumerate(preferred) if _normalized_label(_item_label(record[1])) == value),
+                len(preferred),
+            ),
+        )
+
+    _, encoder = choose(encoder_candidates, ("modalityencoders", "encodersforeachmodality"))
+    _, joint = choose(joint_candidates, ("jointembeddingspace", "singlejointembeddingspace", "commonembeddingspace", "sharedrepresentationspace"))
+    _, emergent = choose(emergent_candidates, ("emergentcrossmodalalignment", "emergentalignment", "bindingproperty", "bindingagent"))
+    encoder["name"] = "Modality Encoders"
+    encoder["role"] = "module group"
+    joint["name"] = "Joint Embedding Space"
+    joint["role"] = "shared representation"
+    emergent["name"] = "Emergent Cross-modal Alignment"
+    emergent["role"] = "output"
+
+    for canonical, candidates in ((encoder, encoder_candidates), (joint, joint_candidates), (emergent, emergent_candidates)):
+        canonical["evidence_ids"] = list(dict.fromkeys(
+            value for _, item in candidates for value in item.get("evidence_ids", [])
+        ))
+
+    keep_ids = {str(item.get("id")) for item in modality_inputs + [encoder, joint, emergent] if item.get("id")}
+    removed_entities = [
+        str(item.get("id")) for _, item in all_entities if item.get("id") and str(item.get("id")) not in keep_ids
+    ]
+    spec["inputs"] = modality_inputs
+    spec["modules"] = [encoder, joint]
+    spec["outputs"] = [emergent]
+    spec["innovations"] = []
+
+    encoder_id = str(encoder.get("id"))
+    joint_id = str(joint.get("id"))
+    emergent_id = str(emergent.get("id"))
+    relations = []
+    for item in modality_inputs:
+        relations.append({
+            "source": str(item.get("id")),
+            "target": encoder_id,
+            "type": "encoding",
+            "label": "",
+            "evidence_ids": list(dict.fromkeys([*item.get("evidence_ids", []), *encoder.get("evidence_ids", [])])),
+        })
+    relations.extend([
+        {
+            "source": encoder_id,
+            "target": joint_id,
+            "type": "alignment",
+            "label": "",
+            "evidence_ids": list(dict.fromkeys([*encoder.get("evidence_ids", []), *joint.get("evidence_ids", [])])),
+        },
+        {
+            "source": joint_id,
+            "target": emergent_id,
+            "type": "enables",
+            "label": "",
+            "evidence_ids": list(dict.fromkeys([*joint.get("evidence_ids", []), *emergent.get("evidence_ids", [])])),
+        },
+    ])
+    spec["relations"] = relations
+    spec["topology"] = "multimodal"
+    return {
+        "applied": True,
+        "removed_entities": removed_entities,
+        "rebuilt_relations": [f"{item['source']}->{item['target']}" for item in relations],
+    }
+
+
 def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
     aliases: dict[str, set[str]] = {}
     endpoint_ids: set[str] = set()
@@ -751,6 +862,10 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
                 existing_pairs.add(pair)
                 incoming.add(target_id)
     spec["relations"] = relations
+    multimodal_report = _simplify_multimodal_contract(spec)
+    completion_report["multimodal_simplification_applied"] = multimodal_report["applied"]
+    completion_report["multimodal_removed_entities"] = multimodal_report["removed_entities"]
+    completion_report["multimodal_rebuilt_relations"] = multimodal_report["rebuilt_relations"]
     branch_report = _simplify_branch_contract(spec)
     completion_report["branch_merged_entities"] = branch_report["merged_entities"]
     completion_report["removed_cross_branch_relations"] = branch_report["removed_cross_branch_relations"]
@@ -758,8 +873,9 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     spec.setdefault("inference_flow", summary.get("inference_flow") if isinstance(summary.get("inference_flow"), list) else [])
     spec.setdefault("feedback_loops", [item for item in spec.get("relations", []) if isinstance(item, dict) and "feedback" in str(item.get("type") or "").casefold()])
     allowed_topologies = {"linear", "branch", "feedback", "multimodal", "dense_multiframe", "unknown"}
-    if str(spec.get("topology") or "") not in allowed_topologies:
-        spec["topology"] = _infer_topology(spec)
+    inferred_topology = _infer_topology(spec)
+    if str(spec.get("topology") or "") not in allowed_topologies or inferred_topology in {"feedback", "multimodal"}:
+        spec["topology"] = inferred_topology
     completion_report["exact_visible_entity_groundings"] = _ground_exact_visible_entities(spec, parsed)
     _repair_cross_script_terminology(spec, parsed)
     completion_report["removed_unverbatim_relation_labels"] = _clear_unverbatim_relation_labels(spec, parsed)

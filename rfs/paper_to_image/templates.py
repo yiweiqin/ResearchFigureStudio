@@ -12,6 +12,23 @@ from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_avail
 
 
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
+    "multimodal": {
+        "summary": "Multiple modality inputs converge through modality encoders into one joint embedding space and an emergent alignment output.",
+        "template_id": "multimodal",
+        "name": "Multimodal convergence into a shared space",
+        "aspect_ratio": 1.78,
+        "topology": ["many_inputs", "encoder_bank", "many_to_one", "joint_embedding", "emergent_alignment"],
+        "ideal_module_range": [2, 5],
+        "visual_density": "high",
+        "panels": [
+            {"id": "modalities", "role": "stacked_modality_inputs", "bbox_percent": {"x": 0.02, "y": 0.06, "w": 0.25, "h": 0.88}},
+            {"id": "encoders", "role": "modality_encoder_bank", "bbox_percent": {"x": 0.34, "y": 0.18, "w": 0.20, "h": 0.64}},
+            {"id": "embedding", "role": "joint_embedding_space", "bbox_percent": {"x": 0.61, "y": 0.23, "w": 0.18, "h": 0.54}},
+            {"id": "alignment", "role": "emergent_alignment_output", "bbox_percent": {"x": 0.84, "y": 0.28, "w": 0.14, "h": 0.44}},
+        ],
+        "connectors": ["each_modality_to_encoder_bank", "encoder_bank_to_joint_embedding", "joint_embedding_to_emergent_alignment"],
+        "style": {"background": "white", "panel_fill": "near_white", "stroke": "muted_indigo", "accent": ["blue", "violet", "orange", "teal"], "corners": "rounded", "shadow": "soft_cards"},
+    },
     "branch": {
         "summary": "Shared-trunk architecture with proposal convergence and parallel output heads.",
         "template_id": "branch",
@@ -206,16 +223,19 @@ def build_template_profiles(reference_paths: list[str], out_dir: str | Path, mod
 
 
 def _paper_features(review: dict) -> dict:
-    statements = " ".join(str(item.get("statement", "")) for field in ["research_questions", "central_claims", "modules", "relations", "innovations"] for item in review.get(field, [])).lower()
+    statements = " ".join(str(item.get("statement", "")) for field in ["research_questions", "central_claims", "inputs", "modules", "relations", "innovations"] for item in review.get(field, [])).lower()
     relation_types = {str(item.get("relation_type") or item.get("type") or "").lower() for item in review.get("relations", [])}
     workflow = review.get("workflows", {})
+    input_labels = " ".join(str(item.get("visible_label") or item.get("statement") or "").lower() for item in review.get("inputs", []))
+    modality_count = sum(term in input_labels for term in ("image", "text", "audio", "video", "depth", "thermal", "imu"))
     return {
         "module_count": len(review.get("modules", [])),
         "input_count": len(review.get("inputs", [])),
         "has_loop": bool(workflow.get("feedback")) or "feedback" in relation_types or any(token in statements for token in ["iterative", "loop", "tree search", "backpropagate"]),
         "has_tree": any(token in statements for token in ["tree", "prune", "tree search", "search tree"]),
         "has_branch": any(token in statements for token in ["branch", "parallel head", "parallel output", "multi-head", "multihead"]),
-        "has_multimodal": any(token in statements for token in ["multimodal", "multi-modal", "image", "video", "audio", "document"]),
+        "modality_count": modality_count,
+        "has_multimodal": modality_count >= 3 or any(token in statements for token in ["multimodal", "multi-modal", "cross-modal", "cross modal"]),
         "has_retrieval": any(token in statements for token in ["retrieval", "retrieve", "index", "rag", "knowledge graph"]),
     }
 
@@ -250,6 +270,8 @@ def select_template(profiles: list[dict], review: dict, requested: str = "auto",
             topology += 1.0; reasons.append("explicit feedback-loop topology")
         if template_id == "branch" and features["has_branch"] and not features["has_loop"] and not features["has_tree"] and not features["has_multimodal"] and not features["has_retrieval"]:
             topology += 1.0; reasons.append("shared-trunk parallel-branch topology")
+        if template_id == "multimodal" and features["has_multimodal"] and features["modality_count"] >= 3 and features["module_count"] < 8:
+            topology += 1.1; reasons.append("multiple modalities converge into a shared representation")
         if template_id == "arbor" and features["has_tree"]:
             topology += 1.0; reasons.append("tree/branch topology")
         if template_id == "linear" and not features["has_loop"] and not features["has_tree"] and not features["has_branch"] and not features["has_retrieval"] and 2 <= features["module_count"] <= 8:

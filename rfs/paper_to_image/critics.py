@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -97,7 +99,8 @@ Hard failures: any missing/misspelled critical label, any duplicate label not ex
     if adapter:
         return adapter(path, blueprint, prompt)
     resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_REVIEW_MODEL", "RFS_CRITIC_MODEL", explicit_model=model)
-    raw = call_vlm_json(prompt, [path, blueprint], model=resolved, timeout=240, retries=1)
+    timeout = max(15, int(os.getenv("RFS_PAPER_TO_IMAGE_REVIEW_TIMEOUT", "90")))
+    raw = call_vlm_json(prompt, [path, blueprint], model=resolved, timeout=timeout, retries=0)
     raw.setdefault("summary", "Production candidate review.")
     raw["model"] = resolved
     return raw
@@ -154,7 +157,8 @@ Return:
     if adapter:
         return adapter(path, prompt)
     resolved = resolve_vlm_model("RFS_PAPER_TO_IMAGE_TOPOLOGY_MODEL", "RFS_FROZEN_JUDGE_MODEL", explicit_model=model)
-    result = call_vlm_json(prompt, [path], model=resolved, timeout=180, retries=1)
+    timeout = max(15, int(os.getenv("RFS_PAPER_TO_IMAGE_TOPOLOGY_TIMEOUT", "90")))
+    result = call_vlm_json(prompt, [path], model=resolved, timeout=timeout, retries=0)
     result.setdefault("summary", "Focused visible-connector verification.")
     result["model"] = resolved
     return result
@@ -223,15 +227,41 @@ def review_candidate(
     if requested_engine in {"paddle", "easyocr"}:
         local_records, local_engine, local_warning = _local_ocr(candidate, requested_engine, ocr_lang, adapter=ocr_adapter)
 
+    topology_name = str(plan.get("figure_specification", {}).get("topology") or "unknown")
+    topology_required = topology_name in {"feedback", "branch", "multimodal", "dense_multiframe"} or str(template.get("template_id") or "") in {"feedback", "arbor"}
     vlm_raw: dict = {}
+    topology_raw: dict = {}
     vlm_warning = None
-    if mode == "vlm" and (vlm_credentials_available() or critic_adapter):
-        try:
-            vlm_raw = _vlm_critic(candidate, blueprint_path, plan, template, labels, repeatable_labels, forbidden, model, adapter=critic_adapter)
-        except Exception as exc:
-            vlm_warning = str(exc)
+    topology_warning = None
+    review_available = vlm_credentials_available() or critic_adapter or topology_adapter
+    if mode == "vlm" and review_available:
+        with ThreadPoolExecutor(max_workers=2 if topology_required else 1) as executor:
+            critic_future = executor.submit(
+                _vlm_critic,
+                candidate,
+                blueprint_path,
+                plan,
+                template,
+                labels,
+                repeatable_labels,
+                forbidden,
+                model,
+                critic_adapter,
+            )
+            topology_future = executor.submit(_vlm_topology_critic, candidate, plan, model, topology_adapter) if topology_required else None
+            try:
+                vlm_raw = critic_future.result()
+            except Exception as exc:
+                vlm_warning = str(exc)
+            if topology_future is not None:
+                try:
+                    topology_raw = topology_future.result()
+                except Exception as exc:
+                    topology_warning = str(exc)
     elif mode == "vlm":
         vlm_warning = "VLM review credentials unavailable"
+        if topology_required:
+            topology_warning = vlm_warning
 
     detected_local = [str(item.get("text") or "").strip() for item in local_records if str(item.get("text") or "").strip()]
     ocr = _normalize_section(vlm_raw.get("ocr"), "OCR")
@@ -258,15 +288,6 @@ def review_candidate(
     scientific = _normalize_section(vlm_raw.get("scientific"), "Scientific")
     template_review = _normalize_section(vlm_raw.get("template"), "Template")
     aesthetic = _normalize_section(vlm_raw.get("aesthetic"), "Aesthetic")
-    topology_name = str(plan.get("figure_specification", {}).get("topology") or "unknown")
-    topology_required = topology_name in {"feedback", "branch", "multimodal", "dense_multiframe"} or str(template.get("template_id") or "") in {"feedback", "arbor"}
-    topology_warning = None
-    topology_raw: dict = {}
-    if topology_required and mode == "vlm" and (vlm_credentials_available() or topology_adapter):
-        try:
-            topology_raw = _vlm_topology_critic(candidate, plan, model, adapter=topology_adapter)
-        except Exception as exc:
-            topology_warning = str(exc)
     topology_review = _normalize_section(topology_raw, "Topology") if topology_required else {"summary": "Focused topology review not required for this topology.", "score": 1.0, "passed": True, "skipped": True}
     topology_issues = sum(len(topology_review.get(field, [])) for field in ["missing_relations", "reversed_relations", "bypassed_relations", "invented_relations"])
     if topology_required:

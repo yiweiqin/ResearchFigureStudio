@@ -695,6 +695,50 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(len(branch_names), 3)
         self.assertFalse(any(item["source"] in branch_ids and item["target"] in branch_ids and item["source"] != item["target"] for item in spec["relations"]))
 
+    def test_multimodal_contract_keeps_shared_embedding_story_and_removes_training_detail(self):
+        caption = "Figure 1: ImageBind uses images to bind text, audio, depth, thermal, and IMU in one joint embedding space with emergent cross-modal alignment."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "branch",
+                "inputs": [
+                    *[{"id": name.lower(), "name": name, "evidence_ids": ["E0001"]} for name in ("Image", "Text", "Audio", "Depth", "Thermal", "IMU")],
+                    {"id": "images_alias", "name": "Images", "evidence_ids": ["E0001"]},
+                    {"id": "class_descriptions", "name": "Class Descriptions", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "modality_encoders", "name": "Modality encoders", "evidence_ids": ["E0001"]},
+                    {"id": "common_space", "name": "Common embedding space", "evidence_ids": ["E0001"]},
+                    {"id": "text_encoder", "name": "Text Encoder", "evidence_ids": ["E0001"]},
+                    {"id": "contrastive", "name": "Contrastive Learning", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [{"id": "joint_space", "name": "Joint Embedding Space", "evidence_ids": ["E0001"]}],
+                "innovations": [{"id": "emergent", "name": "Emergent Cross-modal Alignment", "evidence_ids": ["E0001"]}],
+                "relations": [],
+                "must_show": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        labels = [_normalized for field in ("inputs", "modules", "outputs") for item in spec[field] if (_normalized := re.sub(r"[^a-z0-9]+", "", item["name"].casefold()))]
+
+        self.assertEqual(spec["topology"], "multimodal")
+        self.assertEqual(len(spec["inputs"]), 6)
+        self.assertEqual(labels.count("modalityencoders"), 1)
+        self.assertEqual(labels.count("jointembeddingspace"), 1)
+        self.assertEqual(labels.count("emergentcrossmodalalignment"), 1)
+        self.assertNotIn("classdescriptions", labels)
+        self.assertNotIn("textencoder", labels)
+        self.assertNotIn("contrastivelearning", labels)
+        self.assertEqual(len(spec["relations"]), 8)
+        self.assertIn("Emergent Cross-modal Alignment", spec["required_labels"])
+
     def test_overview_caption_and_stage_list_complete_missing_panels(self):
         caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM) that powers data annotation, and a data engine for collecting SA-1B, our dataset."
         parsed = {

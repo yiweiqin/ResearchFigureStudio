@@ -201,13 +201,21 @@ a newly rotated key through environment variables before running production.
 See [docs/paper-to-image.md](docs/paper-to-image.md) for the review schema,
 template contract, production gates, and failure behavior.
 
-Automatic selection includes dedicated `feedback` and `branch` templates.
+Automatic selection includes dedicated `multimodal`, `feedback`, and `branch`
+templates. Multiple modality inputs converging into one shared representation
+use `multimodal`;
 Compact generation → feedback → refinement loops use `feedback`; shared-trunk
 systems with parallel prediction heads use `branch`; true search-tree systems
 use `arbor`; simple sequential systems use `linear`. Feedback, branch,
 multimodal, and dense candidates also run a focused connector judge that
 verifies visible arrow endpoints and rejects shortcuts that bypass required
 modules.
+
+The general production critic and focused connector critic run concurrently.
+Each uses a 90-second default timeout with no automatic full-call retry; override
+them with `RFS_PAPER_TO_IMAGE_REVIEW_TIMEOUT` and
+`RFS_PAPER_TO_IMAGE_TOPOLOGY_TIMEOUT`. Use `--repair-source` to re-review or
+locally repair an existing candidate without regenerating correct regions.
 
 ## Offline Smoke Test
 

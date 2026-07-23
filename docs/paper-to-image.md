@@ -146,10 +146,12 @@ Available profiles:
 
 ## Template Contract
 
-Built-in templates include `branch`, `feedback`, `arbor`, `linear`, `tripanel`,
-and `dense-multimodal`. Compact iterative generation/feedback/refinement systems
-use `feedback`; shared-trunk systems with parallel output heads use `branch`;
-true search-tree systems use `arbor`. Positive references are classified into
+Built-in templates include `multimodal`, `branch`, `feedback`, `arbor`, `linear`,
+`tripanel`, and `dense-multimodal`. Multi-input systems that converge through a
+modality encoder bank into one joint space use `multimodal`; compact iterative
+generation/feedback/refinement systems use `feedback`; shared-trunk systems with
+parallel output heads use `branch`; true search-tree systems use `arbor`.
+Positive references are classified into
 the closest ratio-based reference archetype and become
 content-free profiles containing normalized panels, topology, connector rhythm,
 density, palette, and forbidden copied content. Automatic selection uses module
@@ -157,6 +159,14 @@ count, loop/tree/parallel-branch structure, multimodality, retrieval structure,
 and requested ratio.
 
 The selected profile is rendered as `layout_blueprint.png`. The blueprint contains no reference text or reference-specific objects and is the only image supplied to Image2 edit for initial candidates.
+
+The general production review and focused topology review execute concurrently.
+Their default request timeout is 90 seconds with no automatic retry, preventing
+two independent judges from creating a multi-minute sequential stall. Configure
+`RFS_PAPER_TO_IMAGE_REVIEW_TIMEOUT` and
+`RFS_PAPER_TO_IMAGE_TOPOLOGY_TIMEOUT` when a slower provider requires a larger
+budget. Existing candidates can be passed through `--repair-source` so review or
+localized repair does not regenerate the correct parts of the image.
 
 When `--aspect-ratio auto` is used, the template keeps its internal normalized
 geometry while the generation canvas uses the nearest native Image2 ratio

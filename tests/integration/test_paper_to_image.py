@@ -489,6 +489,21 @@ class PaperToImageTests(unittest.TestCase):
 
             self.assertEqual(selected["template_id"], "branch")
 
+    def test_many_modality_workflow_selects_multimodal_template(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            review = {
+                "inputs": [{"statement": value, "visible_label": value} for value in ("Image", "Text", "Audio", "Depth", "Thermal", "IMU")],
+                "modules": [{"statement": "Modality Encoders"}, {"statement": "Joint Embedding Space"}],
+                "central_claims": [{"statement": "Cross-modal inputs share one embedding space"}],
+                "relations": [],
+                "workflows": {"feedback": []},
+            }
+
+            selected = select_template(profiles, review, requested="auto", target_ratio="16:9")
+
+            self.assertEqual(selected["template_id"], "multimodal")
+
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_mock_image2_generates_three_candidates_and_safe_manifest(self, _post):
         with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_IMAGE_MODEL": "image-2"}, clear=False):
