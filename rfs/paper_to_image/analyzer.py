@@ -621,6 +621,7 @@ def _deadline_ocr_wave(
 ) -> list[tuple[int, tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], float]]:
     """Run OCR pages in killable child processes and preserve completed results."""
     cutoff = max(time.monotonic(), float(deadline_at) - 20.0)
+    worker_threads = 2 if len(page_numbers) == 1 and engine in {"auto", "rapidocr"} else 1
     creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
     with tempfile.TemporaryDirectory() as temp:
         processes: dict[int, dict[str, Any]] = {}
@@ -639,7 +640,7 @@ def _deadline_ocr_wave(
                 "--lang",
                 lang,
                 "--threads",
-                "1",
+                str(worker_threads),
                 "--out",
                 str(output),
             ]
@@ -901,7 +902,7 @@ def _read_pdf_pages(
                     return False
             return True
 
-        if ocr_worker_count > 1 and deadline_at is not None and ocr_adapter is None:
+        if deadline_at is not None and ocr_adapter is None:
             for start in range(0, len(prioritized), ocr_worker_count):
                 if not deadline_allows_wave():
                     break

@@ -475,6 +475,7 @@ class PaperAnalyzerTests(unittest.TestCase):
         class FakeProcess:
             def __init__(self, command, **_kwargs):
                 self.page = int(command[command.index("--page") + 1])
+                self.threads = int(command[command.index("--threads") + 1])
                 self.output = Path(command[command.index("--out") + 1])
                 self.returncode = None
                 self.terminated = False
@@ -523,6 +524,13 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(by_page[2][2], "OCR exceeded extraction deadline")
         self.assertTrue(by_page[2][3]["timed_out"])
         self.assertTrue(next(item for item in created if item.page == 2).terminated)
+
+        created.clear()
+        with patch("rfs.paper_to_image.analyzer.subprocess.Popen", side_effect=fake_popen):
+            single = _deadline_ocr_wave(Path("paper.pdf"), [1], "rapidocr", "en", time.monotonic() + 20.05)
+        self.assertIsNone(single[0][1][2])
+        self.assertEqual(created[0].page, 1)
+        self.assertEqual(created[0].threads, 2)
 
 
 if __name__ == "__main__":
