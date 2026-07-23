@@ -171,9 +171,11 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("typographic_heading_total", result["aggregate"])
             self.assertIn("merged_heading_line_total", result["aggregate"])
             self.assertIn("figure_caption_total", result["aggregate"])
+            self.assertIn("formula_total", result["aggregate"])
             self.assertIn("max_ocr_worker_count", result["aggregate"])
             self.assertIn("repeated_margin_noise_removed_total", result["aggregate"])
             self.assertIn("native_hyphenation_repair_total", result["aggregate"])
+            self.assertIn("mean_ocr_latin_known_word_ratio", result["aggregate"])
             self.assertIn("ocr_spacing_repair_total", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
@@ -192,13 +194,14 @@ class BenchmarkingTests(unittest.TestCase):
             result = run_pdf_extraction_stress_suite(tmp, ocr_engine="off")
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["aggregate"]["case_count"], 8)
-            self.assertEqual(result["aggregate"]["passed_case_count"], 8)
+            self.assertEqual(result["aggregate"]["case_count"], 9)
+            self.assertEqual(result["aggregate"]["passed_case_count"], 9)
             self.assertTrue((Path(tmp) / "fixtures" / "native_two_column.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "repeated_margin_noise.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "native_chinese.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "hyphenated_native.pdf").exists())
             self.assertTrue((Path(tmp) / "fixtures" / "rotated_repeated_margin.pdf").exists())
+            self.assertTrue((Path(tmp) / "fixtures" / "formula_table_dense.pdf").exists())
             self.assertTrue((Path(tmp) / "mixed_scan_fixture_adapter" / "document_model.json").exists())
             self.assertTrue((Path(tmp) / "pdf_extraction_stress_report.json").exists())
 

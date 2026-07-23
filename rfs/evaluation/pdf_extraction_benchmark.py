@@ -140,6 +140,31 @@ def _hyphenated_native_fixture(target: Path) -> Path:
     return _save_document(document, target)
 
 
+def _formula_table_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_text((45, 45), "Abstract", fontname="hebo", fontsize=12)
+    page.insert_textbox((45, 65, 555, 115), "We introduce a calibrated relation encoder and evaluate it with a dense ablation table.", fontsize=10)
+    page.insert_text((45, 145), "2 Method", fontname="hebo", fontsize=12)
+    page.insert_text((80, 185), "Q = X W_q     K = X W_k     V = X W_v", fontname="cour", fontsize=10)
+    page.insert_text((80, 215), "A = softmax(Q K^T / sqrt(d)) V", fontname="cour", fontsize=10)
+    page.insert_textbox((45, 245, 555, 295), "The relation encoder sends the calibrated representation to the prediction head.", fontsize=10)
+    page.insert_text((45, 335), "3 Experiments", fontname="hebo", fontsize=12)
+    page.insert_textbox((45, 360, 555, 390), "Table 1: Ablation results for encoder depth and relation accuracy.", fontsize=10)
+    rows = [("Model", "Depth", "Accuracy"), ("Base", "6", "81.2"), ("Large", "12", "84.7"), ("Ours", "18", "87.9")]
+    top = 420
+    for row in rows:
+        for left, value in zip((65, 260, 390), row):
+            page.insert_text((left, top), value, fontsize=10)
+        top += 28
+    page.insert_textbox((45, 555, 555, 600), "The ablation shows that calibrated relation encoding improves accuracy.", fontsize=10)
+    page.insert_text((45, 650), "4 Conclusion", fontname="hebo", fontsize=12)
+    page.insert_textbox((45, 675, 555, 720), "The method preserves directed evidence relations and calibrated outputs.", fontsize=10)
+    return _save_document(document, target)
+
+
 def _rotated_repeated_margin_fixture(target: Path) -> Path:
     import fitz
 
@@ -167,6 +192,25 @@ def _skewed_scan_fixture(source: Path, target: Path, angle: float = 2.0) -> Path
     rotated = image.rotate(float(angle), resample=Image.Resampling.BICUBIC, expand=False, fillcolor="white")
     payload = io.BytesIO()
     rotated.save(payload, format="PNG")
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_image(page.rect, stream=payload.getvalue())
+    return _save_document(document, target)
+
+
+def _degraded_scan_fixture(source: Path, target: Path) -> Path:
+    import fitz
+    from PIL import Image, ImageFilter
+
+    source_document = fitz.open(str(source))
+    try:
+        pixmap = source_document[0].get_pixmap(dpi=120, alpha=False)
+        image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
+    finally:
+        source_document.close()
+    degraded = image.resize((420, 560), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(0.3)).convert("RGB")
+    payload = io.BytesIO()
+    degraded.save(payload, format="JPEG", quality=45, optimize=True)
     document = fitz.open()
     page = document.new_page(width=600, height=800)
     page.insert_image(page.rect, stream=payload.getvalue())
@@ -268,6 +312,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     repeated_margin = _repeated_margin_fixture(fixtures / "repeated_margin_noise.pdf")
     chinese = _native_chinese_fixture(fixtures / "native_chinese.pdf")
     hyphenated = _hyphenated_native_fixture(fixtures / "hyphenated_native.pdf")
+    formula_table = _formula_table_fixture(fixtures / "formula_table_dense.pdf")
     rotated_margin = _rotated_repeated_margin_fixture(fixtures / "rotated_repeated_margin.pdf")
 
     results = [
@@ -351,6 +396,19 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             ],
         ),
         _run_case(
+            "formula_table_dense",
+            formula_table,
+            root,
+            lambda parsed: [
+                _check("formulas", parsed["extraction_report"].get("formula_count") == 2, parsed["extraction_report"].get("formula_count"), 2),
+                _check("table_caption", parsed["extraction_report"].get("table_caption_count") == 1, parsed["extraction_report"].get("table_caption_count"), 1),
+                _check("table_columns", parsed["document_index"]["tables"][0].get("columns") == ["Model", "Depth", "Accuracy"], parsed["document_index"]["tables"][0].get("columns"), ["Model", "Depth", "Accuracy"]),
+                _check("table_rows", any(row.get("values") == ["Large", "12", "84.7"] for row in parsed["document_index"]["tables"][0].get("rows", [])), parsed["document_index"]["tables"][0].get("rows"), ["Large", "12", "84.7"]),
+                _check("structured_table_evidence", any(item.get("kind") == "table" and "Row: Large | 12 | 84.7" in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", []) if item.get("kind") == "table"], "structured Large row"),
+                _check("no_orphan_cells", not any(item.get("text") == "84.7" for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no isolated table cells"),
+            ],
+        ),
+        _run_case(
             "rotated_repeated_margin",
             rotated_margin,
             root,
@@ -367,6 +425,8 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     if ocr_engine != "off":
         scanned_two_column = rasterize_pdf_as_scan(native, fixtures / "scanned_two_column.pdf", dpi=144)
         skewed_two_column = _skewed_scan_fixture(native, fixtures / "skewed_two_column.pdf")
+        degraded_two_column = _degraded_scan_fixture(native, fixtures / "degraded_two_column.pdf")
+        scanned_formula_table = rasterize_pdf_as_scan(formula_table, fixtures / "scanned_formula_table.pdf", dpi=144)
         results.append(_run_case(
             "mixed_scan_runtime_ocr",
             mixed,
@@ -402,6 +462,30 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
                 _check("reading_order", all(parsed["pages"][0]["text"].index(left) < parsed["pages"][0]["text"].index(right) for left, right in (("LEFT_TOP", "LEFT_BOTTOM"), ("LEFT_BOTTOM", "RIGHT_TOP"), ("RIGHT_TOP", "RIGHT_BOTTOM"))), parsed["pages"][0]["text"], "LEFT_TOP < LEFT_BOTTOM < RIGHT_TOP < RIGHT_BOTTOM"),
                 _check("mean_confidence", float(parsed["extraction_report"].get("mean_ocr_confidence") or 0.0) >= 0.9, parsed["extraction_report"].get("mean_ocr_confidence"), ">=0.9"),
                 _check("caption", parsed["extraction_report"].get("figure_caption_count") == 1, parsed["extraction_report"].get("figure_caption_count"), 1),
+            ],
+            ocr_engine=ocr_engine,
+        ))
+        results.append(_run_case(
+            "degraded_two_column_quality_gate",
+            degraded_two_column,
+            root,
+            lambda parsed: [
+                _check("quality_gate_applied", parsed["extraction_report"].get("ocr_latin_lexical_gate_applied") is True, parsed["extraction_report"].get("ocr_latin_lexical_gate_applied"), True),
+                _check("low_known_word_ratio", float(parsed["extraction_report"].get("ocr_latin_known_word_ratio") or 1.0) < 0.5, parsed["extraction_report"].get("ocr_latin_known_word_ratio"), "<0.5"),
+                _check("extraction_failed", parsed["extraction_report"].get("status") == "fail", parsed["extraction_report"].get("status"), "fail"),
+                _check("no_false_cache_scope", parsed["extraction_report"].get("sampled_scan_ready") is False, parsed["extraction_report"].get("sampled_scan_ready"), False),
+            ],
+            ocr_engine=ocr_engine,
+        ))
+        results.append(_run_case(
+            "scanned_formula_table_runtime_ocr",
+            scanned_formula_table,
+            root,
+            lambda parsed: [
+                _check("formula_recovered", parsed["extraction_report"].get("formula_count", 0) >= 1, parsed["extraction_report"].get("formula_count"), ">=1"),
+                _check("table_columns", parsed["document_index"]["tables"][0].get("columns") == ["Model", "Depth", "Accuracy"], parsed["document_index"]["tables"][0].get("columns"), ["Model", "Depth", "Accuracy"]),
+                _check("large_row", any(row.get("values") == ["Large", "12", "84.7"] for row in parsed["document_index"]["tables"][0].get("rows", [])), parsed["document_index"]["tables"][0].get("rows"), ["Large", "12", "84.7"]),
+                _check("structured_evidence", any(item.get("kind") == "table" and "Row: Large | 12 | 84.7" in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", []) if item.get("kind") == "table"], "structured Large row"),
             ],
             ocr_engine=ocr_engine,
         ))

@@ -1292,6 +1292,88 @@ def _document_index(pages: list[dict[str, Any]], sections: list[dict[str, Any]])
                 tables.append({"id": f"table_{len(tables) + 1:03d}", **record})
             elif block.get("kind") == "formula":
                 formulas.append({"id": f"formula_{len(formulas) + 1:03d}", "page": page["page"], "block_id": block["id"], "bbox": block.get("bbox"), "text": block.get("text", "")})
+    page_map = {int(page["page"]): page for page in pages}
+    for table in tables:
+        page = page_map.get(int(table.get("page") or 0))
+        if not page:
+            continue
+        blocks = page.get("blocks", [])
+        caption_index = next((index for index, block in enumerate(blocks) if str(block.get("id") or "") == str(table.get("block_id") or "")), None)
+        if caption_index is None:
+            continue
+        caption_bbox = table.get("bbox") or [0, 0, 0, 0]
+        candidates = []
+        for block in blocks[caption_index + 1:]:
+            bbox = block.get("bbox")
+            text = _clean(block.get("text", ""))
+            if not bbox or not text:
+                continue
+            if str(block.get("kind") or "") in {"heading", "caption", "table", "formula"}:
+                break
+            if float(bbox[1]) > float(caption_bbox[3]) + min(300.0, float(page.get("height") or 800.0) * 0.35):
+                break
+            if len(text) > 60:
+                break
+            candidates.append(block)
+        if len(candidates) < 4:
+            continue
+        heights = sorted(max(1.0, float(block["bbox"][3]) - float(block["bbox"][1])) for block in candidates)
+        tolerance = max(5.0, heights[len(heights) // 2] * 0.75)
+        row_groups: list[list[dict[str, Any]]] = []
+        for block in sorted(candidates, key=lambda item: ((float(item["bbox"][1]) + float(item["bbox"][3])) / 2.0, float(item["bbox"][0]))):
+            center = (float(block["bbox"][1]) + float(block["bbox"][3])) / 2.0
+            if not row_groups:
+                row_groups.append([block])
+                continue
+            previous_center = sum((float(item["bbox"][1]) + float(item["bbox"][3])) / 2.0 for item in row_groups[-1]) / len(row_groups[-1])
+            if abs(center - previous_center) <= tolerance:
+                row_groups[-1].append(block)
+            else:
+                row_groups.append([block])
+        if len(row_groups) < 2 or len(row_groups[0]) < 2:
+            continue
+        header = sorted(row_groups[0], key=lambda item: float(item["bbox"][0]))
+        anchors = [(float(item["bbox"][0]) + float(item["bbox"][2])) / 2.0 for item in header]
+        columns = [_clean(item.get("text", "")) for item in header]
+        rows = []
+        cell_records = []
+        for row_index, group in enumerate(row_groups):
+            values: list[str | None] = [None] * len(columns)
+            block_ids: list[str | None] = [None] * len(columns)
+            for block in sorted(group, key=lambda item: float(item["bbox"][0])):
+                center = (float(block["bbox"][0]) + float(block["bbox"][2])) / 2.0
+                column_index = min(range(len(anchors)), key=lambda index: abs(center - anchors[index]))
+                value = _clean(block.get("text", ""))
+                values[column_index] = f"{values[column_index]} {value}".strip() if values[column_index] else value
+                block_ids[column_index] = str(block.get("id") or "")
+                cell_records.append({"row": row_index, "column": column_index, "text": value, "block_id": block.get("id"), "bbox": block.get("bbox")})
+            if row_index:
+                rows.append({"values": values, "block_ids": block_ids})
+        header_signal = any(
+            _cjk_character_count(value) > 0
+            or (value and value[0].isalpha() and value[0].isupper())
+            or value.isupper()
+            or bool(re.search(r"(?:[A-Za-z].*\d|\d.*[A-Za-z])", value))
+            for value in columns
+        )
+        if len(rows) < 2 or not header_signal:
+            continue
+        cell_block_ids = {str(record.get("block_id") or "") for record in cell_records}
+        for block in candidates:
+            if str(block.get("id") or "") in cell_block_ids:
+                block["kind"] = "table_cell"
+        all_boxes = [caption_bbox] + [block.get("bbox") for block in candidates if block.get("bbox")]
+        table.update({
+            "columns": columns,
+            "rows": rows,
+            "cells": cell_records,
+            "bbox": [
+                min(float(box[0]) for box in all_boxes),
+                min(float(box[1]) for box in all_boxes),
+                max(float(box[2]) for box in all_boxes),
+                max(float(box[3]) for box in all_boxes),
+            ],
+        })
     return {"summary": "Page-aware section, formula, table-caption, and figure-caption index.", "sections": sections, "formulas": formulas[:120], "tables": tables[:80], "figures": figures[:80]}
 
 
@@ -1301,6 +1383,27 @@ def _section_coverage(pages: list[dict[str, Any]], sections: list[dict[str, Any]
     return {
         name: any(re.search(rf"\b{re.escape(alias)}\b", candidates) or (_normalized_compare_text(alias) and _normalized_compare_text(alias) in compact) for alias in aliases)
         for name, aliases in SECTION_ALIASES.items()
+    }
+
+
+def _ocr_latin_lexical_quality(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    text = " ".join(str(page.get("text") or "") for page in pages if page.get("used_ocr"))
+    anchors = re.findall(r"\b(?:abstract|introduction|method|methods|experiments|results|conclusion|discussion)\b", text, re.IGNORECASE)
+    tokens = [token for token in re.findall(r"[A-Za-z]{3,}", text) if not token.isupper()]
+    if len(tokens) < 20 or len(anchors) < 2:
+        return {"applied": False, "token_count": len(tokens), "known_word_ratio": None, "english_anchor_count": len(anchors)}
+    try:
+        import wordninja
+
+        known_words = wordninja.DEFAULT_LANGUAGE_MODEL._wordcost
+    except Exception:
+        return {"applied": False, "token_count": len(tokens), "known_word_ratio": None, "english_anchor_count": len(anchors)}
+    known = sum(token.casefold() in known_words or token.casefold() in OCR_PROTECTED_WORDS for token in tokens)
+    return {
+        "applied": True,
+        "token_count": len(tokens),
+        "known_word_ratio": round(known / max(1, len(tokens)), 4),
+        "english_anchor_count": len(anchors),
     }
 
 
@@ -1331,11 +1434,36 @@ def _build_evidence(pages: list[dict[str, Any]], sections: list[dict[str, Any]],
         })
         used += len(text)
 
+    for table in document_index.get("tables", []):
+        lines = [_clean(table.get("caption", ""))]
+        columns = [str(value or "") for value in table.get("columns", [])]
+        if columns:
+            lines.append("Columns: " + " | ".join(columns))
+        for row in table.get("rows", []):
+            values = [str(value or "") for value in row.get("values", [])]
+            lines.append("Row: " + " | ".join(values))
+        text = _clean("\n".join(value for value in lines if value))
+        if not text or used + len(text) > max_chars:
+            continue
+        evidence.append({
+            "id": _evidence_id(int(table.get("page") or 0), text, table.get("bbox"), "table"),
+            "page": table.get("page"),
+            "block_id": table.get("block_id"),
+            "bbox": table.get("bbox"),
+            "section_hint": "Table Captions",
+            "kind": "table",
+            "source": "structured-table",
+            "confidence": 1.0,
+            "text": text,
+            "char_count": len(text),
+        })
+        used += len(text)
+
     block_candidates: list[dict[str, Any]] = []
     for page in pages:
         for block in page.get("blocks", []):
             text = _clean(block.get("text", ""))
-            if not text or block.get("kind") == "caption":
+            if not text or block.get("kind") in {"caption", "table", "table_cell"}:
                 continue
             block_id = str(block.get("id") or "")
             section = next(
@@ -1474,6 +1602,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     mean_ocr_confidence = round(sum(ocr_confidences) / max(1, len(ocr_confidences)), 4) if ocr_blocks else None
     short_ocr_blocks = [block for block in ocr_blocks if len(_normalized_compare_text(str(block.get("text") or ""))) < 3]
     short_ocr_block_ratio = round(len(short_ocr_blocks) / max(1, len(ocr_blocks)), 4) if ocr_blocks else None
+    lexical_quality = _ocr_latin_lexical_quality(pages)
     sampled_scan_ready = bool(
         partial_scan
         and len(readable) >= min(3, len(pages))
@@ -1490,10 +1619,13 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         warnings.append("mean OCR confidence is below 0.50")
     if short_ocr_block_ratio is not None and short_ocr_block_ratio > 0.3:
         warnings.append("OCR output is highly fragmented")
+    if lexical_quality.get("applied") and float(lexical_quality.get("known_word_ratio") or 0.0) < 0.72:
+        warnings.append("OCR English lexical plausibility is below 0.72")
     if not coverage.get("abstract") or not coverage.get("method"):
         warnings.append("abstract or method-like section was not confidently located")
     agreements = [page["poppler_agreement"] for page in pages if isinstance(page.get("poppler_agreement"), (int, float))]
-    report_status = "fail" if (readable_ratio < 0.6 and not sampled_scan_ready) or (mean_ocr_confidence is not None and mean_ocr_confidence < 0.35) else "warning" if warnings else "pass"
+    lexical_failure = bool(lexical_quality.get("applied") and float(lexical_quality.get("known_word_ratio") or 0.0) < 0.5)
+    report_status = "fail" if (readable_ratio < 0.6 and not sampled_scan_ready) or (mean_ocr_confidence is not None and mean_ocr_confidence < 0.35) or lexical_failure else "warning" if warnings else "pass"
     return {
         "summary": "PDF extraction quality and fallback report.",
         "status": report_status,
@@ -1523,6 +1655,10 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,
         "short_ocr_block_ratio": short_ocr_block_ratio,
+        "ocr_latin_lexical_gate_applied": bool(lexical_quality.get("applied")),
+        "ocr_latin_token_count": int(lexical_quality.get("token_count") or 0),
+        "ocr_latin_known_word_ratio": lexical_quality.get("known_word_ratio"),
+        "ocr_english_anchor_count": int(lexical_quality.get("english_anchor_count") or 0),
         "replacement_character_rate": round(sum(page.get("replacement_character_rate", 0.0) for page in pages) / max(1, len(pages)), 6),
         "mojibake_rate": round(sum(page.get("mojibake_rate", 0.0) for page in pages) / max(1, len(pages)), 6),
         "cross_extractor_agreement": round(sum(agreements) / len(agreements), 4) if agreements else None,
@@ -1533,6 +1669,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "section_coverage": coverage,
         "figure_caption_count": len(index.get("figures", [])),
         "table_caption_count": len(index.get("tables", [])),
+        "formula_count": len(index.get("formulas", [])),
         "section_count": len(index.get("sections", [])),
         "typographic_heading_count": sum((int(item.get("page") or 0), str(item.get("block_id") or "")) in bold_block_ids for item in index.get("sections", [])),
         "merged_heading_line_count": sum(len(item.get("continuation_block_ids", [])) for item in index.get("sections", [])),

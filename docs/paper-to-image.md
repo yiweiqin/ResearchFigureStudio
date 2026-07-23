@@ -63,6 +63,12 @@ PDF inputs receive a lightweight container preflight before pypdf, Poppler, or P
 
 When `benchmark pdf-suite` runs with a real OCR engine, it now includes fully rasterized two-column and 2-degree skewed two-column pages in addition to the mixed native/scan fixture. These cases enforce column reconstruction, left-column-first reading order, section recovery, caption recovery, and OCR confidence using the actual runtime engine.
 
+English OCR pages with at least two explicit English section anchors also receive a lexical plausibility check backed by the bundled word-frequency model. A known-word ratio below 0.72 raises a warning and below 0.50 fails extraction even when the OCR engine reports high confidence. The gate is not applied to CJK or unrecognized non-English Latin documents, preventing an English dictionary from rejecting unrelated languages.
+
+Table captions now seed coordinate-based table regions. Header cells define column anchors, later cells are assigned by row and nearest column, and the document index stores `columns`, `rows`, `cells`, and a full table bounding box. Individual table cells are excluded from narrative evidence and replaced by one row-major structured table evidence record, preventing OCR detection order from turning `Model | Depth | Accuracy` into misleading prose.
+
+Table reconstruction is intentionally conservative: a candidate needs a plausible labeled header and at least two data rows. Pure numeric rows and lowercase prose fragments such as `are | obtained` are rejected without changing the original block kinds, avoiding false table structure on captions, equations, and surrounding sentences.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.

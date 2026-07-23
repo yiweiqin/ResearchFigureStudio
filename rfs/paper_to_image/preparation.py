@@ -997,6 +997,7 @@ def prepare_paper_figure_contract(
             "merged_heading_line_count": parsed["extraction_report"].get("merged_heading_line_count", 0),
             "figure_caption_count": parsed["extraction_report"].get("figure_caption_count", 0),
             "table_caption_count": parsed["extraction_report"].get("table_caption_count", 0),
+            "formula_count": parsed["extraction_report"].get("formula_count", 0),
             "section_coverage": parsed["extraction_report"].get("section_coverage", {}),
             "missing_priority_sections": [name for name, present in parsed["extraction_report"].get("section_coverage", {}).items() if not present],
             "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),
@@ -1011,6 +1012,8 @@ def prepare_paper_figure_contract(
             "native_hyphenation_repair_count": parsed["extraction_report"].get("native_hyphenation_repair_count", 0),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
             "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),
+            "ocr_latin_lexical_gate_applied": parsed["extraction_report"].get("ocr_latin_lexical_gate_applied", False),
+            "ocr_latin_known_word_ratio": parsed["extraction_report"].get("ocr_latin_known_word_ratio"),
         },
         "provider": provider_summary,
         "contract_completion": {

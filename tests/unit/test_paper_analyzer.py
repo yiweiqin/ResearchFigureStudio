@@ -283,6 +283,30 @@ class PaperAnalyzerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "encrypted"):
             parse_paper(target, ocr_engine="off")
 
+    def test_high_confidence_garbled_english_ocr_fails_lexical_gate(self):
+        path = self._multipage_pdf([[]])
+
+        def adapter(_image_path, _lang):
+            lines = [
+                "Abstract",
+                "2 Method",
+                "LEFT TOP encoder evidenoe begins themetiod ecndevidn letang clumn",
+                "Figur oveview TOerevl edne beong complene lett comn",
+                "RIGHT BOTTOM outputvid finihes rnading order clumn evidn",
+                "3 Conclusion",
+            ]
+            return [
+                {"text": text, "confidence": 0.92, "quad": [[40, 30 + index * 80], [900, 30 + index * 80], [900, 75 + index * 80], [40, 75 + index * 80]]}
+                for index, text in enumerate(lines)
+            ]
+
+        parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter)
+        report = parsed["extraction_report"]
+
+        self.assertTrue(report["ocr_latin_lexical_gate_applied"])
+        self.assertLess(report["ocr_latin_known_word_ratio"], 0.5)
+        self.assertEqual(report["status"], "fail")
+
     def test_low_text_page_uses_local_ocr_adapter(self):
         path = self._pdf(lambda _page: None)
 
