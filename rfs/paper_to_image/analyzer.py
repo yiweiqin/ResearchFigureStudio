@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -611,6 +612,109 @@ def _rapidocr_worker_count(engine: str, adapter: Callable | None, page_count: in
     return max(1, min(int(page_count), configured, int(os.cpu_count() or 1)))
 
 
+def _deadline_ocr_wave(
+    path: Path,
+    page_numbers: list[int],
+    engine: str,
+    lang: str,
+    deadline_at: float,
+) -> list[tuple[int, tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], float]]:
+    """Run OCR pages in killable child processes and preserve completed results."""
+    cutoff = max(time.monotonic(), float(deadline_at) - 20.0)
+    creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    with tempfile.TemporaryDirectory() as temp:
+        processes: dict[int, dict[str, Any]] = {}
+        for page_number in page_numbers:
+            output = Path(temp) / f"page_{page_number:03d}.json"
+            command = [
+                sys.executable,
+                "-m",
+                "rfs.paper_to_image.ocr_worker",
+                "--paper",
+                str(path),
+                "--page",
+                str(page_number),
+                "--engine",
+                engine,
+                "--lang",
+                lang,
+                "--threads",
+                "1",
+                "--out",
+                str(output),
+            ]
+            started = time.monotonic()
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=creation_flags,
+                )
+                processes[page_number] = {"process": process, "output": output, "started": started, "launch_error": None}
+            except Exception as exc:
+                processes[page_number] = {"process": None, "output": output, "started": started, "launch_error": str(exc)}
+
+        pending = {page for page, item in processes.items() if item["process"] is not None}
+        while pending and time.monotonic() < cutoff:
+            finished = {page for page in pending if processes[page]["process"].poll() is not None}
+            pending.difference_update(finished)
+            if pending:
+                time.sleep(0.02)
+
+        timed_out = set(pending)
+        for page_number in timed_out:
+            process = processes[page_number]["process"]
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        for page_number in timed_out:
+            process = processes[page_number]["process"]
+            try:
+                process.wait(timeout=1.0)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=1.0)
+                except Exception:
+                    pass
+
+        results = []
+        for page_number in page_numbers:
+            item = processes[page_number]
+            process = item["process"]
+            elapsed = time.monotonic() - float(item["started"])
+            stderr = ""
+            if process is not None:
+                try:
+                    _stdout, stderr = process.communicate(timeout=0.2)
+                except Exception:
+                    stderr = ""
+            if item["launch_error"]:
+                result = ([], engine, f"OCR worker launch failed: {item['launch_error']}", {"worker_process": True})
+            elif page_number in timed_out:
+                result = ([], engine, "OCR exceeded extraction deadline", {"worker_process": True, "timed_out": True})
+            elif item["output"].exists():
+                try:
+                    payload = json.loads(item["output"].read_text(encoding="utf-8"))
+                    result = (
+                        list(payload.get("blocks") or []),
+                        str(payload.get("engine") or engine),
+                        str(payload.get("error")) if payload.get("error") else None,
+                        {"worker_process": True, **dict(payload.get("diagnostics") or {})},
+                    )
+                    elapsed = float(payload.get("elapsed_seconds") or elapsed)
+                except Exception as exc:
+                    result = ([], engine, f"OCR worker returned invalid output: {exc}", {"worker_process": True})
+            else:
+                detail = stderr.strip() or f"worker exited with code {getattr(process, 'returncode', None)}"
+                result = ([], engine, f"OCR worker failed: {detail}", {"worker_process": True})
+            results.append((page_number, result, elapsed))
+        return results
+
+
 def _prioritize_ocr_candidates(
     pages: list[dict[str, Any]],
     candidates: list[int],
@@ -797,7 +901,14 @@ def _read_pdf_pages(
                     return False
             return True
 
-        if ocr_worker_count > 1:
+        if ocr_worker_count > 1 and deadline_at is not None and ocr_adapter is None:
+            for start in range(0, len(prioritized), ocr_worker_count):
+                if not deadline_allows_wave():
+                    break
+                batch = prioritized[start:start + ocr_worker_count]
+                for page_number, result, ocr_elapsed in _deadline_ocr_wave(path, batch, ocr_engine, ocr_lang, deadline_at):
+                    consume_ocr_result(page_number, result, ocr_elapsed)
+        elif ocr_worker_count > 1:
             def isolated_ocr(page_number: int) -> tuple[tuple[list[dict[str, Any]], str, str | None, dict[str, Any]], float]:
                 ocr_started = time.monotonic()
                 try:

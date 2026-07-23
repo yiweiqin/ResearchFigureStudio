@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _deadline_ocr_wave, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 from rfs.paper_to_image.document_cache import write_document_cache
 from rfs.paper_to_image.preparation import _semantic_cache_safe
@@ -469,6 +470,59 @@ class PaperAnalyzerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache, patch.dict("os.environ", {"RFS_CACHE_DIR": cache}, clear=False):
             self.assertIsNone(write_document_cache(path, parsed, ocr_engine="easyocr", ocr_lang="en_ch"))
         self.assertFalse(_semantic_cache_safe(parsed))
+
+    def test_deadline_ocr_wave_preserves_completed_pages_and_terminates_slow_workers(self):
+        class FakeProcess:
+            def __init__(self, command, **_kwargs):
+                self.page = int(command[command.index("--page") + 1])
+                self.output = Path(command[command.index("--out") + 1])
+                self.returncode = None
+                self.terminated = False
+                if self.page == 1:
+                    self.output.write_text(json.dumps({
+                        "blocks": [{"text": "Method", "bbox": [0, 0, 10, 10], "confidence": 0.9}],
+                        "engine": "rapidocr",
+                        "error": None,
+                        "diagnostics": {"recognition_seconds": 0.1},
+                        "elapsed_seconds": 0.2,
+                    }), encoding="utf-8")
+                    self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+
+            def wait(self, timeout=None):
+                del timeout
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+            def communicate(self, timeout=None):
+                del timeout
+                return "", ""
+
+        created = []
+
+        def fake_popen(command, **kwargs):
+            process = FakeProcess(command, **kwargs)
+            created.append(process)
+            return process
+
+        with patch("rfs.paper_to_image.analyzer.subprocess.Popen", side_effect=fake_popen):
+            results = _deadline_ocr_wave(Path("paper.pdf"), [1, 2], "rapidocr", "en", time.monotonic() + 20.05)
+
+        by_page = {page: result for page, result, _elapsed in results}
+        self.assertIsNone(by_page[1][2])
+        self.assertEqual(by_page[1][0][0]["text"], "Method")
+        self.assertTrue(by_page[1][3]["worker_process"])
+        self.assertEqual(by_page[2][2], "OCR exceeded extraction deadline")
+        self.assertTrue(by_page[2][3]["timed_out"])
+        self.assertTrue(next(item for item in created if item.page == 2).terminated)
 
 
 if __name__ == "__main__":
