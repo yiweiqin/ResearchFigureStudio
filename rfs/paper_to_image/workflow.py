@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
 
 from ..utils import write_json, write_text
-from .generator import generate_and_select
+from .generator import generate_and_select, native_image2_aspect_ratio
 from .planner import compile_image_prompt
 from .preparation import prepare_paper_figure_contract
 from .review import validate_review_coverage
@@ -37,12 +38,13 @@ def run_paper_to_image(
     critic_adapter=None,
 ) -> dict:
     started = time.time()
+    effective_planner_model = planner_model or os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
     prepared = prepare_paper_figure_contract(
         paper=paper,
         out=out,
-        deadline_seconds=600,
+        deadline_seconds=180,
         planner_mode=planner_mode,
-        planner_model=planner_model,
+        planner_model=effective_planner_model,
         ocr_engine=ocr_engine if ocr_engine in {"auto", "paddle", "easyocr", "off"} else "auto",
         ocr_lang=ocr_lang,
         preferences_path=preferences_path,
@@ -52,6 +54,7 @@ def run_paper_to_image(
         language=language,
         domain_profile=domain_profile,
         ocr_adapter=ocr_adapter,
+        fast_mode=True,
     )
     if not prepared.get("ok"):
         raise ValueError(f"Paper contract preparation failed: {prepared.get('errors') or prepared.get('planning_validation', {}).get('errors')}")
@@ -70,12 +73,27 @@ def run_paper_to_image(
     production_mode = asset_mode == "image2"
     if production_mode and not parsed.get("extraction_report", {}).get("scientific_scope_complete", True):
         raise RuntimeError("Production Image2 generation requires full-document scientific scope; sampled scanned-paper contracts are engineering-only")
-    coverage = validate_review_coverage(paper_review, parsed, selected_domain, strict=production_mode)
+    review_is_fast_vlm_derivative = review_metadata.get("mode") == "derived_from_vlm_plan"
+    coverage = validate_review_coverage(paper_review, parsed, selected_domain, strict=production_mode and not review_is_fast_vlm_derivative)
     write_json(root / "review_coverage_report.json", coverage)
-    if production_mode and review_metadata.get("mode") != "vlm":
+    semantic_vlm_ready = bool(
+        review_metadata.get("mode") in {"vlm", "derived_from_vlm_plan"}
+        or planner_metadata.get("mode") in {"vlm", "review_grounded_vlm"}
+    )
+    if production_mode and not semantic_vlm_ready:
         raise RuntimeError("Production Image2 generation requires successful VLM paper review")
     if not coverage["ok"]:
         raise ValueError(f"Paper review failed coverage validation: {coverage['errors']}")
+
+    if production_mode:
+        requested_ratio = str(preferences.get("aspect_ratio") or "auto")
+        if requested_ratio != "auto":
+            native_ratio = native_image2_aspect_ratio(requested_ratio)
+            if native_ratio != requested_ratio:
+                preferences["requested_aspect_ratio"] = requested_ratio
+                preferences["aspect_ratio"] = native_ratio
+                preferences["generation_ratio_policy"] = "nearest_native_image2_canvas; preserve_internal_geometry; no_semantic_crop"
+                write_json(root / "preferences.json", preferences)
 
     template_profiles = build_template_profiles(archived_positive, root / "template_profiles", mode=planner_mode, model=planner_model)
     selected_template = select_template(template_profiles, paper_review, requested=template, target_ratio=str(preferences.get("aspect_ratio") or "auto"))

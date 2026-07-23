@@ -90,7 +90,8 @@ CONCEPT_RULES = (
     ConceptRule("refined_output", "Refined Output", "outputs", "output", r"\brefined output\b|\brefines? (?:the )?(?:previously generated )?output\b|\bquality of the output improves\b"),
     ConceptRule("emergent_alignment", "Emergent Cross-modal Alignment", "outputs", "output", r"\bemergent (?:cross-modal )?alignments?\b|\bbinding (?:agent|property)\b", ("emergent alignment", "binding agent", "binding property")),
     ConceptRule("valid_mask", "Valid Segmentation Mask", "outputs", "output", r"\bvalid masks?\b|\bobject masks?\b", ("valid masks", "valid mask"), True),
-    ConceptRule("zero_shot_classifier", "Zero-Shot Classifier", "outputs", "inference output", r"\bzero[ -]?shot (?:linear )?classifier\b|\bzero[ -]?shot prediction\b", ("zero-shot linear classifier", "zero-shot prediction")),
+    ConceptRule("zero_shot_classifier", "Zero-Shot Classifier", "outputs", "inference output", r"\bzero[ -]?shot (?:linear )?classifier\b", ("zero-shot linear classifier",)),
+    ConceptRule("zero_shot_prediction", "Zero-shot Prediction", "outputs", "inference output", r"\bzero[ -]?shot prediction\b", ("zero-shot prediction",)),
     ConceptRule("rendered_image", "Rendered Image", "outputs", "output", r"\b(?:rendered|synthesi[sz]ed) (?:images?|views?)\b|\bsynthesi[sz]e images?\b|\bnovel views?\b", ("synthesized image", "synthesized view", "novel view")),
     ConceptRule("source_tokens", "Inputs", "inputs", "source sequence", r"\bencoder maps an input sequence(?: of symbol representations)?\b|\blearned embeddings to convert the input\s+tokens\b", ("input sequence", "source tokens")),
     ConceptRule("input_embedding", "Input Embedding", "modules", "embedding", r"\blearned embeddings to convert the input\s+tokens\b|\binput embeddings?\b", ("input embeddings",), context_pattern=r"\bencoder\b.*\bdecoder\b|\bencoder and decoder stacks\b"),
@@ -431,6 +432,62 @@ def _ground_declared_entities(spec: dict[str, Any], relevant: list[dict[str, Any
     return grounded
 
 
+def _correct_unsupported_entity_names(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in parsed.get("evidence", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    corrected: list[str] = []
+    for item in spec.get("outputs", []) if isinstance(spec.get("outputs"), list) else []:
+        if not isinstance(item, dict) or _normalized(_label(item)) != "zeroshotclassifier":
+            continue
+        evidence_text = " ".join(
+            str(evidence_by_id[evidence_id].get("text") or "")
+            for evidence_id in item.get("evidence_ids", [])
+            if evidence_id in evidence_by_id
+        )
+        if re.search(r"\bzero[ -]?shot (?:linear )?classifier\b", evidence_text, re.IGNORECASE):
+            continue
+        if re.search(r"\bzero[ -]?shot prediction\b", evidence_text, re.IGNORECASE):
+            item["name"] = "Zero-shot Prediction"
+            corrected.append(str(item.get("id") or "zero_shot_prediction"))
+    return corrected
+
+
+def _deduplicate_entities(spec: dict[str, Any]) -> list[str]:
+    id_remap: dict[str, str] = {}
+    removed: list[str] = []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        items = spec.get(field, []) if isinstance(spec.get(field), list) else []
+        seen: dict[str, dict[str, Any]] = {}
+        unique: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = _normalized(_label(item))
+            if not key or key not in seen:
+                if key:
+                    seen[key] = item
+                unique.append(item)
+                continue
+            kept = seen[key]
+            kept["evidence_ids"] = list(dict.fromkeys([*kept.get("evidence_ids", []), *item.get("evidence_ids", [])]))
+            duplicate_id = str(item.get("id") or "")
+            kept_id = str(kept.get("id") or "")
+            if duplicate_id and kept_id and duplicate_id != kept_id:
+                id_remap[duplicate_id] = kept_id
+            removed.append(duplicate_id or _label(item))
+        spec[field] = unique
+    if id_remap:
+        for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+            if not isinstance(relation, dict):
+                continue
+            relation["source"] = id_remap.get(str(relation.get("source")), relation.get("source"))
+            relation["target"] = id_remap.get(str(relation.get("target")), relation.get("target"))
+    return removed
+
+
 def _heuristic_rule_scope(
     selected: list[dict[str, Any]],
     relevant: list[dict[str, Any]],
@@ -521,6 +578,8 @@ def _heuristic_rule_scope(
 
 def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     selected, relevant = _relevant_evidence(parsed)
+    corrected_entities = _correct_unsupported_entity_names(spec, parsed)
+    deduplicated_entities = _deduplicate_entities(spec)
     declared_entities = [
         item
         for field in ("inputs", "modules", "outputs", "innovations")
@@ -694,6 +753,8 @@ def augment_contract_from_evidence(spec: dict[str, Any], parsed: dict[str, Any])
         "repaired_relations": repaired_relations,
         "grounded_statements": {field: ids for field, ids in grounded_statements.items() if ids},
         "grounded_entities": grounded_entities,
+        "corrected_entities": corrected_entities,
+        "deduplicated_entities": deduplicated_entities,
         "conservative_expansion": conservative_expansion,
         "expansion_page_scope": sorted(selected_pages),
         "new_entities_require_declared_neighbor": conservative_expansion,

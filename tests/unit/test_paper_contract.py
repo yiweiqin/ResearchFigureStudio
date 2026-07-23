@@ -560,6 +560,38 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn((class_token["id"], "encoder"), pairs)
         self.assertIn(("head", "prediction"), pairs)
 
+    def test_zero_shot_prediction_is_not_upgraded_to_classifier(self):
+        caption = "Fig. 1: The model offers zero-shot prediction of reporter assay readout."
+        parsed = {
+            "page_count": 2,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "modules": [{"id": "head", "name": "Prediction Head", "evidence_ids": ["E0001"]}],
+                "inputs": [],
+                "outputs": [
+                    {"id": "output_zero_shot_classifier", "name": "Zero-Shot Classifier", "evidence_ids": ["E0001"]},
+                    {"id": "output_zero_shot_prediction", "name": "Zero-shot Prediction", "evidence_ids": ["E0001"]},
+                ],
+                "relations": [],
+                "innovations": [],
+                "must_show": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        output_names = {item["name"] for item in spec["outputs"]}
+
+        self.assertIn("Zero-shot Prediction", output_names)
+        self.assertNotIn("Zero-Shot Classifier", output_names)
+        self.assertEqual(sum(item["name"] == "Zero-shot Prediction" for item in spec["outputs"]), 1)
+
     def test_overview_caption_and_stage_list_complete_missing_panels(self):
         caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM) that powers data annotation, and a data engine for collecting SA-1B, our dataset."
         parsed = {

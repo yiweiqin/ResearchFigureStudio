@@ -14,7 +14,7 @@ from PIL import Image
 from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import review_candidate
-from rfs.paper_to_image.generator import generate_and_select
+from rfs.paper_to_image.generator import generate_and_select, native_image2_aspect_ratio
 from rfs.paper_to_image.review import detect_domain_profile, validate_review_coverage
 from rfs.paper_to_image.templates import build_template_profiles, render_layout_blueprint, select_template
 
@@ -120,6 +120,33 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.domain_profile, "auto")
         self.assertEqual(args.template, "auto")
         self.assertEqual(args.repair_rounds, 1)
+
+    def test_image2_native_canvas_ratio_normalization(self):
+        self.assertEqual(native_image2_aspect_ratio("16:9"), "3:2")
+        self.assertEqual(native_image2_aspect_ratio("9:16"), "2:3")
+        self.assertEqual(native_image2_aspect_ratio("1:1"), "1:1")
+
+    def test_candidate_review_accepts_requested_ratio_when_image2_ignores_blueprint_ratio(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1600, 900), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+
+            review = review_candidate(
+                candidate,
+                blueprint,
+                _plan(),
+                {"template_id": "linear", "forbidden_copy_terms": []},
+                mode="vlm",
+                ocr_engine="off",
+                critic_adapter=_passing_critic,
+                acceptable_aspect_ratios=["16:9", "3:2"],
+            )
+
+            self.assertTrue(review["basic"]["passed"])
+            self.assertEqual(review["basic"]["matched_aspect_ratio"], "16:9")
 
     def test_inspect_pdf_cli_defaults(self):
         parser = build_parser()
@@ -286,6 +313,20 @@ class PaperToImageTests(unittest.TestCase):
             self.assertFalse(report["contains_reference_text"])
             self.assertTrue((root / "blueprint.png").exists())
 
+    def test_three_stage_non_loop_workflow_selects_linear_template(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            review = {
+                "modules": [{"statement": value} for value in ("SSL", "RETFound", "supervised learning")],
+                "inputs": [{"statement": "CFP"}, {"statement": "OCT"}],
+                "relations": [],
+                "workflows": {"feedback": []},
+            }
+
+            selected = select_template(profiles, review, requested="auto", target_ratio="16:9")
+
+            self.assertEqual(selected["template_id"], "linear")
+
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_mock_image2_generates_three_candidates_and_safe_manifest(self, _post):
         with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_IMAGE_MODEL": "image-2"}, clear=False):
@@ -325,33 +366,19 @@ class PaperToImageTests(unittest.TestCase):
             self.assertEqual(result["selected_candidate_id"], "repair_01")
 
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
+    @patch("rfs.paper_to_image.workflow.validate_review_coverage", return_value={"ok": True, "errors": [], "warnings": []})
     @patch("rfs.paper_to_image.planner.call_vlm_json")
-    @patch("rfs.paper_to_image.review.call_vlm_json")
-    def test_mock_full_production_workflow(self, review_call, planner_call, _post):
+    def test_mock_full_production_workflow(self, planner_call, _coverage, _post):
         fact = {"id": "fact_01", "statement": "Evidence-grounded reasoning", "status": "required", "importance": "critical", "confidence": 1.0, "evidence_ids": ["E0001"], "must_appear_in_figure": True, "visual_role": "module"}
-        review_call.return_value = {
-            "summary": "Universal structured paper review.",
-            "paper_identity": {"title": "ModularTrace", "paper_type": "method", "field": "AI"},
-            "research_questions": [fact],
-            "central_claims": [{**fact, "id": "claim_01"}],
-            "inputs": [], "outputs": [], "research_objects": [], "concepts": [],
-            "modules": [{**fact, "id": "parser", "statement": "Document Parser"}, {**fact, "id": "graph", "statement": "Evidence Graph Builder"}],
-            "relations": [{**fact, "id": "relation_01", "source_id": "parser", "target_id": "graph", "relation_type": "data_flow", "visual_role": "relation"}],
-            "workflows": {"training": [], "inference": [], "offline": [], "online": [], "feedback": []},
-            "contributions": [{**fact, "id": "contribution_01"}], "innovations": [], "assumptions": [], "limitations": [{**fact, "id": "limitation_01"}],
-            "experiments": {"datasets": [], "settings": [], "metrics": [], "baselines": [], "ablations": []}, "results": [],
-            "terminology": [{**fact, "id": "term_01", "statement": "Document Parser", "visible_label": "Document Parser"}, {**fact, "id": "term_02", "statement": "Evidence Graph Builder", "visible_label": "Evidence Graph Builder"}],
-            "forbidden_inventions": [], "unknowns": [], "contradictions": [], "ambiguities": [], "human_review_required": [], "figure_candidates": [],
-        }
         planner_call.return_value = {"summary": "Planning result.", **_plan()}
-        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "known-test-secret", "RFS_IMAGE_MODEL": "image-2"}, clear=False):
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "known-test-secret", "RFS_IMAGE_MODEL": "image-2", "RFS_CACHE_DIR": temp}, clear=False):
             root = Path(temp)
             paper = root / "paper.md"
             paper.write_text(PAPER_TEXT, encoding="utf-8")
             out = root / "run"
             result = run_paper_to_image(paper=paper, out=out, planner_mode="vlm", domain_profile="general", template="linear", asset_mode="image2", candidates=3, aspect_ratio="1.5:1", review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=_passing_critic)
             self.assertTrue(result["ok"])
-            self.assertEqual(result["paper_review_mode"], "vlm")
+            self.assertEqual(result["paper_review_mode"], "derived_from_vlm_plan")
             self.assertEqual(result["template_id"], "linear")
             self.assertTrue((out / "selected_image.png").exists())
             self.assertFalse(any(out.glob("*.pptx")))

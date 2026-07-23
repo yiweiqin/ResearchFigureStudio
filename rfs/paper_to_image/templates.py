@@ -210,7 +210,7 @@ def select_template(profiles: list[dict], review: dict, requested: str = "auto",
         reasons = [f"module_fit={module_fit:.2f}"]
         if template_id == "arbor" and (features["has_loop"] or features["has_tree"]):
             topology += 1.0; reasons.append("loop/tree topology")
-        if template_id == "linear" and not features["has_loop"] and 4 <= features["module_count"] <= 8:
+        if template_id == "linear" and not features["has_loop"] and not features["has_tree"] and not features["has_retrieval"] and 2 <= features["module_count"] <= 8:
             topology += 0.9; reasons.append("sequential stage count")
         if template_id == "tripanel" and features["has_retrieval"]:
             topology += 0.9; reasons.append("index/retrieval topology")

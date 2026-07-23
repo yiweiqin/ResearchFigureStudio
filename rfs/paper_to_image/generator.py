@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -34,6 +35,15 @@ def _image_size(aspect_ratio: str) -> str:
     if ratio <= 0.80:
         return "1024x1536"
     return "1024x1024"
+
+
+def native_image2_aspect_ratio(aspect_ratio: str) -> str:
+    ratio = _parse_ratio(aspect_ratio)
+    if ratio >= 1.25:
+        return "3:2"
+    if ratio <= 0.80:
+        return "2:3"
+    return "1:1"
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -192,22 +202,66 @@ def generate_and_select(
     records: list[dict] = []
     failures: list[dict] = []
     requests_manifest: list[dict] = []
-    for index in range(1, count + 1):
+    worker_default = min(2, count)
+    try:
+        candidate_workers = max(1, min(count, int(os.getenv("RFS_PAPER_IMAGE_WORKERS", str(worker_default)))))
+    except ValueError:
+        candidate_workers = worker_default
+    acceptable_aspect_ratios = [
+        str(value)
+        for value in (preferences.get("requested_aspect_ratio"), preferences.get("aspect_ratio"))
+        if value and str(value) != "auto"
+    ]
+
+    def generate_candidate(index: int) -> dict[str, Any]:
         candidate_id = f"candidate_{index:02d}"
         path = candidate_dir / f"{candidate_id}.png"
         prompt = compile_image_prompt(plan, preferences, candidate_variant=index, selected_template=selected_template)
         prompt_path = prompt_dir / f"{candidate_id}_prompt.txt"
         write_text(prompt_path, prompt)
+        started = time.monotonic()
         try:
+            generation_started = time.monotonic()
             generation = _generate_one(prompt, plan, blueprint, path, aspect_ratio, asset_mode, image_model, image_retries)
-            requests_manifest.append({"candidate_id": candidate_id, **generation})
-            review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter)
-            records.append({"candidate_id": candidate_id, "path": str(path), "prompt_path": str(prompt_path), "generation": generation, "review": review, "production_pass": bool(asset_mode == "image2" and review["production_pass"]), "score": review["overall_score"]})
+            generation_seconds = round(time.monotonic() - generation_started, 3)
+            review_started = time.monotonic()
+            review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
+            review_seconds = round(time.monotonic() - review_started, 3)
+            return {
+                "record": {
+                    "candidate_id": candidate_id,
+                    "path": str(path),
+                    "prompt_path": str(prompt_path),
+                    "generation": generation,
+                    "review": review,
+                    "production_pass": bool(asset_mode == "image2" and review["production_pass"]),
+                    "score": review["overall_score"],
+                    "timings": {
+                        "generation_seconds": generation_seconds,
+                        "review_seconds": review_seconds,
+                        "total_seconds": round(time.monotonic() - started, 3),
+                    },
+                },
+                "request": {"candidate_id": candidate_id, "generation_seconds": generation_seconds, **generation},
+            }
         except Exception as exc:
-            failures.append({"candidate_id": candidate_id, "error": str(exc), "prompt_path": str(prompt_path)})
+            return {"failure": {"candidate_id": candidate_id, "error": str(exc), "prompt_path": str(prompt_path), "elapsed_seconds": round(time.monotonic() - started, 3)}}
+
+    with ThreadPoolExecutor(max_workers=candidate_workers) as executor:
+        futures = [executor.submit(generate_candidate, index) for index in range(1, count + 1)]
+        for future in as_completed(futures):
+            result = future.result()
+            if result.get("record"):
+                records.append(result["record"])
+                requests_manifest.append(result["request"])
+            elif result.get("failure"):
+                failures.append(result["failure"])
+    records.sort(key=lambda item: item["candidate_id"])
+    requests_manifest.sort(key=lambda item: item["candidate_id"])
+    failures.sort(key=lambda item: item["candidate_id"])
 
     if not records:
-        manifest = {"summary": "Image2 request manifest with no successful candidate.", "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")), "model": _image2_model_name(image_model) if asset_mode == "image2" else image_model, "edit_endpoint": _image2_edit_url() if asset_mode == "image2" and os.getenv("API_BASE") else None, "requests": requests_manifest, "failures": failures}
+        manifest = {"summary": "Image2 request manifest with no successful candidate.", "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")), "model": _image2_model_name(image_model) if asset_mode == "image2" else image_model, "edit_endpoint": _image2_edit_url() if asset_mode == "image2" and os.getenv("API_BASE") else None, "candidate_workers": candidate_workers, "requests": requests_manifest, "failures": failures}
         write_json(root / "image2_request_manifest.json", manifest)
         raise RuntimeError(f"All image candidates failed: {failures}")
 
@@ -226,7 +280,7 @@ def generate_and_select(
         try:
             generation = _call_image2_edit(Path(source["path"]), prompt, repaired_path, aspect_ratio, image_model, image_retries)
             requests_manifest.append({"candidate_id": repaired_id, "repair_source": source["candidate_id"], **generation})
-            review = review_candidate(repaired_path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter)
+            review = review_candidate(repaired_path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
             repaired = {"candidate_id": repaired_id, "path": str(repaired_path), "prompt_path": str(prompt_path), "generation": generation, "review": review, "production_pass": review["production_pass"], "score": review["overall_score"], "repair_source": source["candidate_id"]}
             repair_records.append(repaired)
             records.append(repaired)
@@ -238,7 +292,7 @@ def generate_and_select(
     aggregates = aggregate_reviews(records)
     for name, data in aggregates.items():
         write_json(root / f"{name}.json", data)
-    request_manifest = {"summary": "Safe Image2 request manifest; secrets are never recorded.", "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")), "model": _image2_model_name(image_model) if asset_mode == "image2" else image_model, "edit_endpoint": _safe_endpoint(_image2_edit_url()) if asset_mode == "image2" and (os.getenv("API_BASE") or os.getenv("RFS_IMAGE_EDIT_URL")) else None, "blueprint": str(blueprint), "requests": requests_manifest, "failures": failures}
+    request_manifest = {"summary": "Safe Image2 request manifest; secrets are never recorded.", "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY")), "model": _image2_model_name(image_model) if asset_mode == "image2" else image_model, "edit_endpoint": _safe_endpoint(_image2_edit_url()) if asset_mode == "image2" and (os.getenv("API_BASE") or os.getenv("RFS_IMAGE_EDIT_URL")) else None, "blueprint": str(blueprint), "candidate_workers": candidate_workers, "requests": requests_manifest, "failures": failures}
     write_json(root / "image2_request_manifest.json", request_manifest)
 
     selected_path = None
@@ -253,7 +307,7 @@ def generate_and_select(
         engineering_preview = root / "engineering_preview.png"
         shutil.copyfile(selected["path"], engineering_preview)
 
-    report = {"summary": "Generated and reviewed paper-to-image candidates.", "asset_mode": asset_mode, "review_mode": review_mode, "production_eligible": asset_mode == "image2", "requested_candidates": count, "successful_candidates": len(records), "repair_candidates": len(repair_records), "failures": failures, "candidates": records, "selected_candidate_id": selected["candidate_id"] if selected_path and selected else None, "selected_image": str(selected_path) if selected_path else None, "engineering_preview": str(engineering_preview) if engineering_preview else None, "selected_passed_all_checks": bool(selected_path), "delivery_blocked": asset_mode == "image2" and not selected_path}
+    report = {"summary": "Generated and reviewed paper-to-image candidates.", "asset_mode": asset_mode, "review_mode": review_mode, "production_eligible": asset_mode == "image2", "requested_candidates": count, "candidate_workers": candidate_workers, "successful_candidates": len(records), "repair_candidates": len(repair_records), "failures": failures, "candidates": records, "selected_candidate_id": selected["candidate_id"] if selected_path and selected else None, "selected_image": str(selected_path) if selected_path else None, "engineering_preview": str(engineering_preview) if engineering_preview else None, "selected_passed_all_checks": bool(selected_path), "delivery_blocked": asset_mode == "image2" and not selected_path}
     write_json(root / "candidate_review.json", report)
     if report["delivery_blocked"]:
         raise RuntimeError("No Image2 candidate passed scientific, OCR, template, and aesthetic production gates")

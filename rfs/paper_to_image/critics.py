@@ -117,6 +117,7 @@ def review_candidate(
     ocr_lang: str = "en_ch",
     ocr_adapter: Callable | None = None,
     critic_adapter: Callable | None = None,
+    acceptable_aspect_ratios: list[str] | None = None,
 ) -> dict:
     candidate = Path(path)
     blueprint_path = Path(blueprint)
@@ -126,8 +127,36 @@ def review_candidate(
         width, height = image.size
     with Image.open(blueprint_path) as image:
         bw, bh = image.size
-    ratio_error = abs((width / max(height, 1)) - (bw / max(bh, 1))) / max(bw / max(bh, 1), 0.01)
-    basic = {"summary": "Deterministic candidate checks.", "valid_image": width > 0 and height > 0, "width": width, "height": height, "blueprint_width": bw, "blueprint_height": bh, "aspect_ratio_error": round(ratio_error, 5), "passed": ratio_error <= 0.08 and min(width, height) >= 512}
+    candidate_ratio = width / max(height, 1)
+    ratio_targets: list[tuple[str, float]] = [("blueprint", bw / max(bh, 1))]
+    for value in acceptable_aspect_ratios or []:
+        try:
+            left, right = str(value).split(":", 1)
+            parsed = float(left) / float(right)
+        except Exception:
+            continue
+        if parsed <= 0 or any(abs(parsed - target) <= 0.001 for _, target in ratio_targets):
+            continue
+        ratio_targets.append((str(value), parsed))
+    ratio_errors = {
+        label: round(abs(candidate_ratio - target) / max(target, 0.01), 5)
+        for label, target in ratio_targets
+    }
+    matched_ratio, ratio_error = min(ratio_errors.items(), key=lambda item: item[1])
+    basic = {
+        "summary": "Deterministic candidate checks.",
+        "valid_image": width > 0 and height > 0,
+        "width": width,
+        "height": height,
+        "blueprint_width": bw,
+        "blueprint_height": bh,
+        "candidate_aspect_ratio": round(candidate_ratio, 5),
+        "acceptable_aspect_ratios": [label for label, _ in ratio_targets],
+        "aspect_ratio_errors": ratio_errors,
+        "matched_aspect_ratio": matched_ratio,
+        "aspect_ratio_error": ratio_error,
+        "passed": ratio_error <= 0.08 and min(width, height) >= 512,
+    }
 
     local_records: list[dict] = []
     local_engine = "not_run"
