@@ -52,6 +52,26 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertIn("Introduction", parsed["headings"])
         self.assertTrue(all(item.get("block_id") for item in parsed["evidence"]))
 
+    def test_bold_unnumbered_headings_create_section_boundaries(self):
+        def draw(page):
+            page.insert_text((50, 55), "Abstract", fontname="hebo", fontsize=12)
+            page.insert_textbox((50, 75, 550, 145), "This paper introduces a reliable architecture with enough text for extraction quality checks.", fontsize=10)
+            page.insert_text((50, 185), "Model Architecture", fontname="hebo", fontsize=11)
+            page.insert_textbox((50, 205, 550, 285), "The encoder maps the input sequence into a representation used by the decoder and output layer.", fontsize=10)
+            page.insert_text((50, 325), "Encoder and Decoder Stacks", fontname="hebo", fontsize=10)
+            page.insert_textbox((50, 345, 550, 425), "Each stack contains attention and feed-forward modules with residual connections.", fontsize=10)
+
+        parsed = parse_paper(self._pdf(draw))
+        evidence_by_text = {item["text"]: item for item in parsed["evidence"]}
+        architecture_text = next(text for text in evidence_by_text if text.startswith("The encoder maps"))
+        stack_text = next(text for text in evidence_by_text if text.startswith("Each stack contains"))
+
+        self.assertIn("Model Architecture", parsed["headings"])
+        self.assertIn("Encoder and Decoder Stacks", parsed["headings"])
+        self.assertEqual(evidence_by_text[architecture_text]["section_hint"], "Model Architecture")
+        self.assertEqual(evidence_by_text[stack_text]["section_hint"], "Encoder and Decoder Stacks")
+        self.assertGreaterEqual(parsed["extraction_report"]["typographic_heading_count"], 3)
+
     def test_multiline_figure_caption_is_combined_into_priority_evidence(self):
         def draw(page):
             page.insert_textbox((50, 80, 550, 150), "Figure 1: Three interconnected components: a promptable task,\na model, and a data engine for collecting a large dataset.", fontsize=10)

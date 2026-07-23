@@ -75,6 +75,24 @@ def _mojibake_rate(text: str) -> float:
     return round(sum(value.count(marker) for marker in MOJIBAKE_MARKERS) / max(1, len(value)), 6)
 
 
+def _looks_like_typographic_heading(text: str) -> bool:
+    value = _clean(text)
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+&/-]*", value)
+    first_alpha = next((char for char in value if char.isalpha()), "")
+    first_char = value[0] if value else ""
+    if not 2 <= len(value) <= 100 or not 1 <= len(words) <= 10:
+        return False
+    if not first_char.isalpha() or (first_char.isascii() and not re.search(r"[a-z]", value)):
+        return False
+    if re.match(r"^(?:figure|fig\.|table)\b", value, re.IGNORECASE) or re.search(r"[=<>]{1,2}|\bdoi\b|https?://", value, re.IGNORECASE):
+        return False
+    if value.endswith((",", ";", "?", "!")) or (value.endswith(".") and len(words) > 5):
+        return False
+    if first_alpha and first_alpha.lower() != first_alpha.upper() and not first_alpha.isupper():
+        return False
+    return True
+
+
 def _block_kind(text: str, width_ratio: float = 0.0) -> str:
     value = _clean(text)
     if re.match(r"^(figure|fig\.|table|图|圖|表)\s*[a-z0-9一二三四五六七八九十]+", value, re.IGNORECASE):
@@ -232,7 +250,18 @@ def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
                 round(max(float(value[2]) for value in bbox_values), 3),
                 round(max(float(value[3]) for value in bbox_values), 3),
             ]
-            records.append({"bbox": bbox, "text": text, "source": "pymupdf", "confidence": 1.0, "parent_block": parent_index})
+            sizes = [float(span.get("size") or 0.0) for span in spans if float(span.get("size") or 0.0) > 0]
+            fonts = [str(span.get("font") or "") for span in spans]
+            font_bold = any(int(span.get("flags") or 0) & 16 for span in spans) or any(re.search(r"(?:bold|demi|semi|medi)", font, re.IGNORECASE) for font in fonts)
+            records.append({
+                "bbox": bbox,
+                "text": text,
+                "source": "pymupdf",
+                "confidence": 1.0,
+                "parent_block": parent_index,
+                "font_size": round(max(sizes), 3) if sizes else None,
+                "font_bold": font_bold,
+            })
     return records
 
 
@@ -771,6 +800,7 @@ def _read_non_pdf_pages(path: Path, max_chars: int) -> tuple[list[dict[str, Any]
 def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     headings = []
     seen = set()
+    body_started = False
     for page in pages:
         for block in page.get("blocks", []):
             lines = [_clean(value) for value in str(block.get("text", "")).splitlines() if _clean(value)]
@@ -786,19 +816,23 @@ def _heading_candidates(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     for alias in aliases
                     for compact_alias in [_normalized_compare_text(alias)]
                 )
+                typographic = body_started and bool(block.get("font_bold")) and _looks_like_typographic_heading(line)
                 if numbered:
                     title_candidate = numbered.group(2).strip()
                     first_alpha = next((char for char in title_candidate if char.isalpha()), "")
+                    if not title_candidate or not title_candidate[0].isalpha():
+                        first_alpha = ""
                     has_case = bool(first_alpha and first_alpha.lower() != first_alpha.upper())
                     if not first_alpha or (has_case and not first_alpha.isupper()) or re.search(r"[=±∑∫]", title_candidate) or title_candidate.endswith(".") or len(title_candidate) > 80 or len(title_candidate.split()) > 10:
                         numbered = None
-                if not (explicit or numbered or known):
+                if not (explicit or numbered or known or typographic):
                     continue
-                normalized = numbered.group(2).strip() if numbered else line.strip()
+                normalized = numbered.group(2).strip() if numbered else line.strip().rstrip(".:")
                 key = normalized.casefold()
                 if normalized and key not in seen:
                     seen.add(key)
                     headings.append({"id": f"section_{len(headings) + 1:03d}", "title": normalized, "page": page["page"], "block_id": block["id"], "line_index": line_index})
+                body_started = body_started or bool(explicit or numbered or known)
     return headings[:80]
 
 
@@ -999,6 +1033,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
     partial_scan = bool(fully_scanned_source and 0 < ocr_count < len(pages))
     pdf_type = "scanned" if fully_scanned_source else "mixed" if ocr_count and ocr_count < len(pages) else "scanned" if ocr_count else "born_digital"
     coverage = _section_coverage(pages, index.get("sections", []))
+    indexed_section_blocks = {(int(item.get("page") or 0), str(item.get("block_id") or "")) for item in index.get("sections", [])}
     warnings = list(details.get("warnings", []))
     ocr_blocks = [block for page in pages if page.get("used_ocr") for block in page.get("blocks", []) if isinstance(block, dict)]
     ocr_confidences = [float(block.get("confidence") or 0.0) for block in ocr_blocks]
@@ -1056,6 +1091,8 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "section_coverage": coverage,
         "figure_caption_count": len(index.get("figures", [])),
         "table_caption_count": len(index.get("tables", [])),
+        "section_count": len(index.get("sections", [])),
+        "typographic_heading_count": sum(bool(block.get("font_bold")) and (int(page["page"]), str(block.get("id") or "")) in indexed_section_blocks for page in pages for block in page.get("blocks", [])),
         "poppler_available": details.get("poppler_available", False),
         "warnings": warnings,
         "elapsed_seconds": details.get("elapsed_seconds", 0.0),
@@ -1082,6 +1119,11 @@ def parse_paper(
         pages, loader = _read_non_pdf_pages(source, max_chars)
         details = {"warnings": [], "ocr_candidate_pages": [], "ocr_pages": [], "poppler_available": False, "elapsed_seconds": 0.0}
     sections = _heading_candidates(pages)
+    section_blocks = {(int(item.get("page") or 0), str(item.get("block_id") or "")) for item in sections}
+    for page in pages:
+        for block in page.get("blocks", []):
+            if (int(page["page"]), str(block.get("id") or "")) in section_blocks:
+                block["kind"] = "heading"
     document_index = _document_index(pages, sections)
     evidence = _build_evidence(pages, sections, document_index, max_chars)
     all_text = "\n\n".join(page.get("text", "") for page in pages)

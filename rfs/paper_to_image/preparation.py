@@ -12,7 +12,7 @@ from typing import Any, Callable
 from ..utils import ensure_dir, read_json, write_json, write_text
 from .analyzer import paper_markdown, parse_paper
 from .contract_completion import augment_contract_from_evidence
-from .document_cache import read_document_cache, write_document_cache
+from .document_cache import DOCUMENT_CACHE_VERSION, read_document_cache, write_document_cache
 from .planner import build_review_grounded_plan, compile_image_prompt, merge_preferences, plan_fast_paper_contract, plan_paper_image, validate_plan_grounding
 from .review import build_paper_review, detect_domain_profile, validate_review_coverage
 
@@ -703,7 +703,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 25, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 26, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -915,6 +915,10 @@ def prepare_paper_figure_contract(
             "max_column_count": parsed["extraction_report"].get("max_column_count"),
             "multi_column_page_count": parsed["extraction_report"].get("multi_column_page_count"),
             "rotated_pages": parsed["extraction_report"].get("rotated_pages", []),
+            "section_count": parsed["extraction_report"].get("section_count", 0),
+            "typographic_heading_count": parsed["extraction_report"].get("typographic_heading_count", 0),
+            "figure_caption_count": parsed["extraction_report"].get("figure_caption_count", 0),
+            "table_caption_count": parsed["extraction_report"].get("table_caption_count", 0),
             "section_coverage": parsed["extraction_report"].get("section_coverage", {}),
             "missing_priority_sections": [name for name, present in parsed["extraction_report"].get("section_coverage", {}).items() if not present],
             "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),

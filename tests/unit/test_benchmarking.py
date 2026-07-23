@@ -137,6 +137,9 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("mean_evidence_page_coverage_ratio", result["aggregate"])
             self.assertIn("ocr_scheduled_page_total", result["aggregate"])
             self.assertIn("max_detected_column_count", result["aggregate"])
+            self.assertIn("mean_section_count", result["aggregate"])
+            self.assertIn("typographic_heading_total", result["aggregate"])
+            self.assertIn("figure_caption_total", result["aggregate"])
             self.assertIn("max_ocr_worker_count", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
