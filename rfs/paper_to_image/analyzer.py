@@ -760,9 +760,9 @@ def _prioritize_ocr_candidates(
     anchors = [
         1,
         min(2, page_count),
-        max(1, round(page_count * 0.25)),
+        min(3, page_count),
+        min(4, page_count),
         max(1, round(page_count * 0.50)),
-        max(1, round(page_count * 0.75)),
         max(1, round(page_count * 0.85)),
     ]
     for anchor in anchors:

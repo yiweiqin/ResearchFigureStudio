@@ -30,6 +30,9 @@ class ConceptRule:
     context_pattern: str | None = None
 
 
+EMBEDDING_SUM_CONTEXT = r"\btoken(?: embeddings?)?\s*,\s*(?:the\s+)?(?:segment|segmentation)(?: embeddings?)?\s*,?\s+and\s+(?:the\s+)?position embeddings?\b"
+
+
 CONCEPT_RULES = (
     ConceptRule("input_image", "Input Image", "inputs", "input", r"\binput images?\b|\bsplit an image\b|\braw image\b|\btest images?\b|\bimages? are shown\b", ("image", "2d image")),
     ConceptRule("images", "Images", "inputs", "input modality", r"\b(?:batch of\s+)?\(?images?\s*[,)]", ("training images", "image batch"), True),
@@ -98,11 +101,11 @@ CONCEPT_RULES = (
     ConceptRule("output_linear", "Linear", "modules", "output projection", r"\blearned linear transfor(?:mation|\-\s*mation) and softmax function to convert the decoder output\b", ("linear layer", "output projection")),
     ConceptRule("output_softmax", "Softmax", "modules", "output normalization", r"\blinear transfor(?:mation|\-\s*mation) and softmax function to convert the decoder output\b", ("softmax layer",)),
     ConceptRule("output_probabilities", "Output Probabilities", "outputs", "output", r"\bpredicted next-token probabilities\b", ("predicted next-token probabilities", "next-token probabilities", "outputs")),
-    ConceptRule("input_tokens", "Input Sequence", "inputs", "input sequence", r"\brepresent the input\s+sequence\b|\bfor a given token, its input representation\b", ("input tokens", "token sequence"), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
-    ConceptRule("token_embeddings", "Token Embeddings", "modules", "embedding", r"\btoken embeddings?\b", (), context_pattern=r"\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
-    ConceptRule("segment_embeddings", "Segment Embeddings", "modules", "embedding", r"\b(?:segment|segmentation) embeddings?\b", ("segmentation embeddings",), context_pattern=r"\btoken embeddings?\b.*\bposition embeddings?\b"),
-    ConceptRule("bert_position_embeddings", "Position Embeddings", "modules", "embedding", r"\bposition embeddings?\b", (), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b"),
-    ConceptRule("input_representation", "Input Representation", "modules", "representation", r"\binput representation\b|\binput embeddings are the sum of\b", ("bert input representation",), context_pattern=r"\btoken embeddings?\b.*\b(?:segment|segmentation) embeddings?\b.*\bposition embeddings?\b"),
+    ConceptRule("input_tokens", "Input Sequence", "inputs", "input sequence", r"\brepresent the input\s+sequence\b|\bfor a given token, its input representation\b", ("input tokens", "token sequence"), context_pattern=EMBEDDING_SUM_CONTEXT),
+    ConceptRule("token_embeddings", "Token Embeddings", "modules", "embedding", rf"\btoken embeddings?\b|{EMBEDDING_SUM_CONTEXT}", (), context_pattern=EMBEDDING_SUM_CONTEXT),
+    ConceptRule("segment_embeddings", "Segment Embeddings", "modules", "embedding", rf"\b(?:segment|segmentation) embeddings?\b|{EMBEDDING_SUM_CONTEXT}", ("segmentation embeddings",), context_pattern=EMBEDDING_SUM_CONTEXT),
+    ConceptRule("bert_position_embeddings", "Position Embeddings", "modules", "embedding", r"\bposition embeddings?\b", (), context_pattern=EMBEDDING_SUM_CONTEXT),
+    ConceptRule("input_representation", "Input Representation", "modules", "representation", r"\binput representation\b|\binput embeddings are the sum of\b", ("bert input representation",), context_pattern=EMBEDDING_SUM_CONTEXT),
     ConceptRule("bidirectional_encoder", "Bidirectional Transformer Encoder", "modules", "encoder", r"\bmulti-layer bidirectional transformer en-?\s*coder\b|\bbidirectional transformer encoder\b", ("bert", "bert encoder")),
     ConceptRule("masked_lm", "Masked LM", "modules", "training objective", r"\bmasked (?:language model(?:ing)?|lm)\b", ("masked language model", "masked language modeling", "mlm objective"), context_pattern=r"\bnext sentence prediction\b|\bNSP\b"),
     ConceptRule("next_sentence", "Next Sentence Prediction", "modules", "training objective", r"\bnext sentence prediction\b|\bNSP\b", ("nsp",), context_pattern=r"\bmasked (?:language model(?:ing)?|lm)\b"),

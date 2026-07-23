@@ -378,7 +378,7 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         selected, details = _prioritize_ocr_candidates(pages, list(range(1, 13)), 6)
 
-        self.assertEqual(selected, [1, 2, 3, 6, 9, 10])
+        self.assertEqual(selected, [1, 2, 3, 4, 6, 10])
         self.assertEqual([item["rank"] for item in details], [1, 2, 3, 4, 5, 6])
 
     def test_rapidocr_worker_count_is_bounded_and_adapter_safe(self):
@@ -440,9 +440,9 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         parsed = parse_paper(path, ocr_engine="easyocr", ocr_adapter=adapter, max_ocr_pages=6)
 
-        self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 6, 9, 10])
-        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 6, 9, 10])
-        self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 6, 9, 10])
+        self.assertEqual(parsed["extraction_report"]["ocr_priority_pages"], [1, 2, 3, 4, 6, 10])
+        self.assertEqual(parsed["extraction_report"]["ocr_pages"], [1, 2, 3, 4, 6, 10])
+        self.assertEqual([item["page"] for item in parsed["extraction_report"]["ocr_priority"]], [1, 2, 3, 4, 6, 10])
         self.assertEqual(parsed["extraction_report"]["status"], "warning")
         self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
         self.assertEqual(parsed["extraction_report"]["semantic_scope"], "sampled_pages_only")

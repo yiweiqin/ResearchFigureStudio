@@ -596,6 +596,32 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn((ids["Token Embeddings"], ids["Input Representation"]), pairs)
         self.assertIn((ids["Bidirectional Transformer Encoder"], ids["Fine-tuning"]), pairs)
 
+    def test_generic_completion_recovers_elided_embedding_list_across_ocr_blocks(self):
+        caption = "Figure 1: Overall pre-training and fine-tuning procedures."
+        parsed = {
+            "page_count": 16,
+            "document_index": {"figures": [{"page": 3, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 3, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 0.99},
+                {"id": "E0002", "page": 4, "kind": "paragraph", "text": "For a given token, its input representation is", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0003", "page": 4, "kind": "paragraph", "text": "constructed by summing the corresponding token,", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0004", "page": 4, "kind": "paragraph", "text": "segment, and position embeddings.", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0005", "page": 4, "kind": "paragraph", "text": "The architecture is a multi-layer bidirectional Transformer encoder.", "section_hint": "Method", "confidence": 0.98},
+                {"id": "E0006", "page": 4, "kind": "paragraph", "text": "We pre-train with Masked LM and Next Sentence Prediction before fine-tuning on downstream tasks.", "section_hint": "Method", "confidence": 0.98},
+            ],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Input Sequence", "Token Embeddings", "Segment Embeddings", "Position Embeddings", "Input Representation", "Bidirectional Transformer Encoder"):
+            self.assertIn(label, ids)
+        self.assertIn((ids["Token Embeddings"], ids["Input Representation"]), pairs)
+        self.assertIn((ids["Segment Embeddings"], ids["Input Representation"]), pairs)
+        self.assertIn((ids["Position Embeddings"], ids["Input Representation"]), pairs)
+
     def test_generic_completion_recovers_retrieval_conditioned_generation(self):
         caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."
         result_caption = "Figure 2: Posterior for each generated token with five retrieved documents."
