@@ -53,7 +53,7 @@ CONCEPT_RULES = (
     ConceptRule("image_encoder", "Image Encoder", "modules", "encoder", r"\bimage encoder\b"),
     ConceptRule("text_encoder", "Text Encoder", "modules", "encoder", r"\btext encoder\b"),
     ConceptRule("transformer_encoder", "Transformer Encoder", "modules", "encoder", r"\btransformer encoder\b|^encoder$", (), True),
-    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b|^decoder$", (), True),
+    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b|\b(?:the\s+)?decoder receives\b|^decoder$", (), True),
     ConceptRule("position_embedding", "Position Embedding", "modules", "conditioning", r"\bposition embeddings?\b", ("positional embedding",), True),
     ConceptRule("positional_encoding", "Positional Encoding", "modules", "conditioning", r"\bposition(?:al)? encod(?:ing|ings)\b"),
     ConceptRule("image_patches", "Image Patches", "modules", "intermediate", r"\bimage patches?\b|\bfixed-size patches\b", ("patches",), True),

@@ -128,6 +128,11 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(args.deadline, 180)
         self.assertEqual(args.ocr_engine, "auto")
 
+    def test_scan_benchmark_cli_accepts_rasterize_dpi(self):
+        parser = build_parser()
+        args = parser.parse_args(["benchmark", "fast-suite", "--out", "output/scan", "--rasterize-dpi", "144"])
+        self.assertEqual(args.rasterize_dpi, 144)
+
     def test_doctor_reports_easyocr_model_readiness(self):
         report = _doctor()
         models = report["pdf_tools"]["easyocr"]["models"]

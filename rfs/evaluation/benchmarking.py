@@ -707,6 +707,7 @@ def run_fast_benchmark_case(
     planner_mode: str = "vlm",
     planner_model: str | None = None,
     ocr_engine: str = "off",
+    rasterize_pdf_dpi: int | None = None,
 ) -> dict[str, Any]:
     case_root = Path(case_dir).resolve()
     case = _load(case_root / "case.json")
@@ -721,10 +722,16 @@ def run_fast_benchmark_case(
     if not validation.get("ok"):
         return {**validation, "passed": False}
     from ..paper_to_image import run_fast_framework_prompt
+    from .scanned_pdf import rasterize_pdf_as_scan
 
     preferences = case_root / str(case.get("preferences")) if case.get("preferences") else None
+    active_paper = paper_path
+    rasterized_input = None
+    if rasterize_pdf_dpi is not None and paper_path.suffix.casefold() == ".pdf":
+        rasterized_input = rasterize_pdf_as_scan(paper_path, Path(out) / "benchmark_inputs" / "paper_scanned.pdf", dpi=rasterize_pdf_dpi)
+        active_paper = rasterized_input
     run = run_fast_framework_prompt(
-        paper=paper_path,
+        paper=active_paper,
         out=out,
         deadline_seconds=deadline_seconds,
         planner_mode=planner_mode,
@@ -738,6 +745,8 @@ def run_fast_benchmark_case(
         "summary": "Fast paper framework benchmark completed.",
         "ok": bool(run.get("ok")),
         "case_id": case.get("case_id"),
+        "rasterized_input": str(rasterized_input) if rasterized_input else None,
+        "rasterize_pdf_dpi": int(rasterize_pdf_dpi) if rasterized_input else None,
         "run": run,
         "benchmark": score,
         "passed_planning_thresholds": not any("plan_" in value for value in score.get("threshold_failures", [])),
@@ -754,6 +763,7 @@ def run_fast_benchmark_suite(
     planner_mode: str = "vlm",
     planner_model: str | None = None,
     ocr_engine: str = "off",
+    rasterize_pdf_dpi: int | None = None,
 ) -> dict[str, Any]:
     root = Path(benchmarks_root).resolve()
     target = ensure_dir(out).resolve()
@@ -772,6 +782,7 @@ def run_fast_benchmark_suite(
                 planner_mode=planner_mode,
                 planner_model=planner_model,
                 ocr_engine=ocr_engine,
+                rasterize_pdf_dpi=rasterize_pdf_dpi,
             )
         except Exception as exc:
             result = {"summary": "Fast benchmark case raised an exception.", "ok": False, "case_id": case_id, "error": str(exc)}
@@ -788,6 +799,7 @@ def run_fast_benchmark_suite(
             "contract_source": run.get("contract_source"),
             "cache_hit": bool(run.get("cache_hit")),
             "document_cache_hit": bool(run.get("document_cache_hit")),
+            "rasterized_input": result.get("rasterized_input"),
             "elapsed_seconds": run.get("elapsed_seconds"),
             "stage_timings": run.get("stage_timings", {}),
             "extraction_quality": extraction_quality,
@@ -839,6 +851,7 @@ def run_fast_benchmark_suite(
         "cache_hit_rate": round(sum(bool(item.get("cache_hit")) for item in results) / max(1, len(results)), 4),
         "document_cache_hit_count": sum(bool(item.get("document_cache_hit")) for item in results),
         "document_cache_hit_rate": round(sum(bool(item.get("document_cache_hit")) for item in results) / max(1, len(results)), 4),
+        "rasterized_case_count": sum(bool(item.get("rasterized_input")) for item in results),
         "mean_plan_entity_recall": _mean(entity_scores),
         "mean_plan_relation_recall": _mean(relation_scores),
         "forbidden_content_total": sum(int(item.get("plan_forbidden_content_count") or 0) for item in results),
@@ -881,6 +894,7 @@ def run_fast_benchmark_suite(
         "planner_model": planner_model,
         "deadline_seconds": deadline_seconds,
         "ocr_engine": ocr_engine,
+        "rasterize_pdf_dpi": rasterize_pdf_dpi,
         "selected_case_ids": [item.get("case_id") for item in cases],
         "aggregate": aggregate,
         "cases": results,

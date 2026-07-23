@@ -655,7 +655,7 @@ class PaperContractTests(unittest.TestCase):
                 {"id": "E0005", "page": 20, "kind": "paragraph", "bbox": [40, 150, 500, 170], "text": "The decoder receives object queries and encoder memory.", "section_hint": "Detailed Architecture", "confidence": 0.98},
                 {"id": "E0006", "page": 20, "kind": "paragraph", "bbox": [340, 280, 380, 300], "text": "FFN", "section_hint": "Detailed Architecture", "confidence": 0.98},
                 {"id": "E0007", "page": 20, "kind": "paragraph", "bbox": [140, 390, 190, 410], "text": "Encoder", "section_hint": "Detailed Architecture", "confidence": 0.98},
-                {"id": "E0008", "page": 20, "kind": "paragraph", "bbox": [310, 310, 360, 330], "text": "Decoder", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0008", "page": 20, "kind": "paragraph", "bbox": [310, 310, 360, 330], "text": "Add & Norm", "section_hint": "Detailed Architecture", "confidence": 0.98},
                 {"id": "E0009", "page": 20, "kind": "paragraph", "bbox": [40, 180, 500, 200], "text": "The final class labels and bounding boxes are predicted in parallel.", "section_hint": "Detailed Architecture", "confidence": 0.98},
                 {"id": "E0010", "page": 20, "kind": "paragraph", "bbox": [40, 710, 500, 730], "text": "For example, a separate text encoder uses class descriptions and contrastive learning to create text embeddings.", "section_hint": "Related Work", "confidence": 0.98},
             ],

@@ -43,6 +43,23 @@ Real-paper cases commit `source.json` and human-authored Ground Truth, while `be
 
 The committed unseen-generalization set spans vision, multimodal learning, and NLP: ViT, Mask R-CNN, Self-Refine, ImageBind, SAM, DETR, CLIP, NeRF, Transformer, BERT, and retrieval-augmented generation. The NLP cases specifically exercise short overview captions, method-text recovery, embedding summation, pre-training/fine-tuning separation, and retrieval-conditioned generation. Local image-only scan regressions remain under ignored `tmp/pdfs/` and `output/pdf/`; do not commit publisher PDFs or generated OCR artifacts.
 
+Any locally available PDF benchmark can also be tested as an image-only degradation without committing a publisher scan:
+
+```powershell
+rfs benchmark fast-suite `
+  --root benchmarks `
+  --out output/benchmarks/scanned `
+  --case-id 106_detr_set_prediction `
+  --case-id 110_bert_pretrain_finetune `
+  --rasterize-dpi 144 `
+  --ocr-engine rapidocr `
+  --planner-mode heuristic `
+  --deadline 180 `
+  --json
+```
+
+The generated image-only PDFs stay under the benchmark output directory. Score them with the same human-authored entity, relation, and forbidden-content contracts as the native PDFs.
+
 `benchmark fast-suite` writes `fast_suite_report.json` with per-case results and aggregate entity/relation recall, forbidden content, cache hit rates, provider success/retry counts, failure categories, and stage timings.
 
 ## Evaluation tiers

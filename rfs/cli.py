@@ -320,6 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--planner-mode", choices=["vlm", "heuristic"], default="vlm", help="Planner mode for benchmark fast.")
     benchmark.add_argument("--planner-model", help="Optional model for benchmark fast.")
     benchmark.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="off", help="Paper OCR mode for fast or pdf-suite benchmarks.")
+    benchmark.add_argument("--rasterize-dpi", type=int, help="For benchmark fast/fast-suite, convert local PDF inputs to image-only scanned PDFs at this DPI before extraction.")
     benchmark.add_argument("--json", action="store_true", help="Emit JSON.")
 
     validate = sub.add_parser("validate", help="Validate an existing ResearchFigureStudio output directory.")
@@ -576,11 +577,11 @@ def main(argv: list[str] | None = None) -> int:
             elif args.benchmark_action == "fast":
                 if not args.case or not args.out:
                     parser.error("benchmark fast requires --case and --out")
-                result = run_fast_benchmark_case(args.case, args.out, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
+                result = run_fast_benchmark_case(args.case, args.out, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine, rasterize_pdf_dpi=args.rasterize_dpi)
             elif args.benchmark_action == "fast-suite":
                 if not args.out:
                     parser.error("benchmark fast-suite requires --out")
-                result = run_fast_benchmark_suite(args.root, args.out, case_ids=args.case_id, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine)
+                result = run_fast_benchmark_suite(args.root, args.out, case_ids=args.case_id, deadline_seconds=args.deadline, planner_mode=args.planner_mode, planner_model=args.planner_model, ocr_engine=args.ocr_engine, rasterize_pdf_dpi=args.rasterize_dpi)
             elif args.benchmark_action == "pdf-suite":
                 if not args.out:
                     parser.error("benchmark pdf-suite requires --out")

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -16,12 +17,38 @@ from rfs.evaluation.benchmarking import (
     validate_benchmark_case,
 )
 from rfs.evaluation.pdf_extraction_benchmark import run_pdf_extraction_stress_suite
+from rfs.evaluation.scanned_pdf import rasterize_pdf_as_scan
+from rfs.paper_to_image.analyzer import parse_paper
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class BenchmarkingTests(unittest.TestCase):
+    def test_rasterized_scan_fixture_preserves_pages_and_removes_native_text(self):
+        import fitz
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source.pdf"
+            target = Path(temp) / "scanned.pdf"
+            second_target = Path(temp) / "scanned_again.pdf"
+            document = fitz.open()
+            for text in ("Abstract native text", "Method native text"):
+                page = document.new_page(width=600, height=800)
+                page.insert_text((50, 80), text, fontsize=14)
+            document.save(source)
+            document.close()
+
+            rasterize_pdf_as_scan(source, target, dpi=110)
+            rasterize_pdf_as_scan(source, second_target, dpi=110)
+            parsed = parse_paper(target, ocr_engine="off")
+            first_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            second_hash = hashlib.sha256(second_target.read_bytes()).hexdigest()
+
+        self.assertEqual(parsed["page_count"], 2)
+        self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
+        self.assertTrue(all(page["char_count"] == 0 for page in parsed["pages"]))
+        self.assertEqual(first_hash, second_hash)
     def test_planning_contract_treats_relation_labels_as_intermediate_artifacts(self):
         expected = {
             "entities": [
