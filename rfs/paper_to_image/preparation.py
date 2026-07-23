@@ -120,6 +120,36 @@ def _normalized_label(value: str) -> str:
     return "".join(char for char in value.casefold() if char.isalnum())
 
 
+def _script_counts(value: str) -> tuple[int, int]:
+    cjk = sum(
+        "\u3400" <= char <= "\u9fff"
+        or "\u3040" <= char <= "\u30ff"
+        or "\uac00" <= char <= "\ud7af"
+        for char in str(value or "")
+    )
+    latin = sum(("a" <= char.casefold() <= "z") for char in str(value or ""))
+    return cjk, latin
+
+
+def _repair_cross_script_terminology(spec: dict[str, Any], parsed: dict[str, Any]) -> None:
+    terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
+    if not terminology:
+        return
+    corpus = " ".join(str(item.get("text") or "") for item in parsed.get("evidence", []) if isinstance(item, dict))
+    normalized_corpus = re.sub(r"\s+", " ", corpus.casefold())
+    repaired: dict[str, str] = {}
+    for source_term, visible_label in terminology.items():
+        source = str(source_term or "").strip()
+        visible = str(visible_label or "").strip()
+        source_present = bool(source and re.sub(r"\s+", " ", source.casefold()) in normalized_corpus)
+        visible_present = bool(visible and re.sub(r"\s+", " ", visible.casefold()) in normalized_corpus)
+        source_cjk, source_latin = _script_counts(source)
+        visible_cjk, visible_latin = _script_counts(visible)
+        changed_script = (source_cjk >= 2 and visible_cjk == 0 and visible_latin >= 2) or (source_latin >= 4 and source_cjk == 0 and visible_cjk >= 2 and visible_latin == 0)
+        repaired[source] = source if source_present and not visible_present and changed_script else visible
+    spec["terminology"] = repaired
+
+
 def _stable_id(prefix: str, value: str, index: int) -> str:
     slug = "_".join(part for part in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split() if part)[:48]
     return f"{prefix}_{slug or index}"
@@ -538,6 +568,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     allowed_topologies = {"linear", "branch", "feedback", "multimodal", "dense_multiframe", "unknown"}
     if str(spec.get("topology") or "") not in allowed_topologies:
         spec["topology"] = _infer_topology(spec)
+    _repair_cross_script_terminology(spec, parsed)
     labels = []
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
     labels.extend(str(value).strip() for value in terminology.values() if str(value).strip())
@@ -703,7 +734,7 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 27, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 28, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -942,6 +973,7 @@ def prepare_paper_figure_contract(
             "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
             "ocr_rescue_min_remaining_seconds": parsed["extraction_report"].get("ocr_rescue_min_remaining_seconds", 45.0),
             "repeated_margin_noise_removed_count": parsed["extraction_report"].get("repeated_margin_noise_removed_count", 0),
+            "native_hyphenation_repair_count": parsed["extraction_report"].get("native_hyphenation_repair_count", 0),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
             "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),
         },

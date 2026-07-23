@@ -47,6 +47,10 @@ Born-digital and OCR-recovered pages also pass through a conservative repeated-m
 
 For pages carrying a PDF rotation flag, native blocks are ordered in the unrotated media-box coordinate system and only then transformed into displayed page coordinates. This preserves Abstract-to-Method-to-Figure reading order on 90/180/270-degree pages while keeping overlay coordinates aligned with rendered output.
 
+Fast VLM planning preserves the paper's original writing system for every visible scientific label. Entity names and relation labels must either occur verbatim in their cited evidence or remain in the same source script; cross-script translations such as `文档编码器` to `Document encoder` fail planning validation and cannot be marked production-ready. Explanatory prose may follow the requested output language, but editable overlay labels do not.
+
+Native PDF lines split by publisher hyphenation are joined inside the same source text block before evidence IDs are created. Known scientific words such as `trans-` + `former` and `de-` + `coder` lose the layout-only hyphen, while unknown long compound parts retain a literal hyphen. The extraction report records `native_hyphenation_repair_count`.
+
 If a deadline ends after at least three high-confidence scan pages have recovered both Abstract and Method-like evidence, the workflow continues with an engineering-grade partial contract instead of returning `extraction_failed`. It remains explicitly marked `sampled_pages_only` and `scientific_scope_complete=false`, is not eligible for production status, and cannot enter the semantic cache.
 
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.

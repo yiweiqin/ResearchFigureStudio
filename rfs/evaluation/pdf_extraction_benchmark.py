@@ -107,6 +107,37 @@ def _repeated_margin_fixture(target: Path) -> Path:
     return _save_document(document, target)
 
 
+def _native_chinese_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    font = fitz.Font(fontname="china-s")
+    page.insert_font(fontname="CJK", fontbuffer=font.buffer)
+    page.insert_text((45, 50), "\u6458\u8981", fontname="CJK", fontsize=13)
+    page.insert_textbox((45, 75, 555, 145), "\u672c\u6587\u63d0\u51fa\u8bba\u6587\u7f16\u7801\u5668\u548c\u5173\u7cfb\u89e3\u7801\u5668,\u751f\u6210\u53ef\u7f16\u8f91\u6846\u67b6\u56fe\u3002", fontname="CJK", fontsize=10)
+    page.insert_text((45, 185), "2 \u65b9\u6cd5", fontname="CJK", fontsize=13)
+    page.insert_textbox((45, 210, 555, 300), "\u8f93\u5165\u8bba\u6587\u9996\u5148\u8fdb\u5165\u6587\u6863\u7f16\u7801\u5668\u3002\u5173\u7cfb\u89e3\u7801\u5668\u8fde\u63a5\u5b9e\u4f53,\u6700\u540e\u8f93\u51fa\u53ef\u7f16\u8f91\u7684\u6f14\u793a\u6587\u7a3f\u56fe\u3002", fontname="CJK", fontsize=10)
+    page.insert_textbox((45, 340, 555, 400), "\u56fe 1:\u8bba\u6587\u7f16\u7801\u5668\u3001\u5173\u7cfb\u89e3\u7801\u5668\u4e0e\u53ef\u7f16\u8f91\u8f93\u51fa\u7684\u7cfb\u7edf\u6846\u67b6\u3002", fontname="CJK", fontsize=10)
+    page.insert_text((45, 455), "3 \u5b9e\u9a8c", fontname="CJK", fontsize=13)
+    page.insert_textbox((45, 480, 555, 545), "\u5b9e\u9a8c\u8bc4\u4f30\u5b9e\u4f53\u53ec\u56de\u7387\u3001\u5173\u7cfb\u53ec\u56de\u7387\u548c\u5904\u7406\u65f6\u95f4\u3002", fontname="CJK", fontsize=10)
+    page.insert_text((45, 600), "4 \u7ed3\u8bba", fontname="CJK", fontsize=13)
+    page.insert_textbox((45, 625, 555, 690), "\u8be5\u65b9\u6cd5\u80fd\u591f\u4fdd\u6301\u8bba\u6587\u672f\u8bed\u3001\u8bc1\u636e\u9875\u7801\u548c\u6a21\u5757\u5173\u7cfb\u3002", fontname="CJK", fontsize=10)
+    return _save_document(document, target)
+
+
+def _hyphenated_native_fixture(target: Path) -> Path:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_text((45, 50), "Abstract", fontname="hebo", fontsize=12)
+    page.insert_textbox((45, 75, 555, 145), "We introduce a trans-\nformer encoder for evidence-grounded figure generation.", fontsize=10)
+    page.insert_text((45, 185), "2 Method", fontname="hebo", fontsize=12)
+    page.insert_textbox((45, 210, 555, 300), "The trans-\nformer encoder passes the input representation to a relation de-\ncoder and produces an editable output.", fontsize=10)
+    return _save_document(document, target)
+
+
 def _fixture_ocr_adapter(image_path: Path, _lang: str) -> list[dict[str, Any]]:
     if "page_002" not in image_path.name:
         return []
@@ -200,6 +231,8 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
     rotated = _rotated_fixture(fixtures / "rotated_native_page.pdf")
     mixed = _mixed_scan_fixture(fixtures / "mixed_scan.pdf")
     repeated_margin = _repeated_margin_fixture(fixtures / "repeated_margin_noise.pdf")
+    chinese = _native_chinese_fixture(fixtures / "native_chinese.pdf")
+    hyphenated = _hyphenated_native_fixture(fixtures / "hyphenated_native.pdf")
 
     results = [
         _run_case(
@@ -258,6 +291,27 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
                 _check("header_absent", all("Proceedings of the Example Conference" not in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no repeated header evidence"),
                 _check("footer_absent", all("Anonymous Paper 1234" not in item.get("text", "") for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "no repeated footer evidence"),
                 _check("scientific_content_preserved", any("relation decoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "relation decoder evidence"),
+            ],
+        ),
+        _run_case(
+            "native_chinese",
+            chinese,
+            root,
+            lambda parsed: [
+                _check("unicode_preserved", "\u6587\u6863\u7f16\u7801\u5668" in parsed["pages"][0]["text"], parsed["pages"][0]["text"], "contains document encoder in Chinese"),
+                _check("priority_sections", all(parsed["extraction_report"].get("section_coverage", {}).get(name) for name in ("abstract", "method", "experiments", "conclusion")), parsed["extraction_report"].get("section_coverage"), "Chinese abstract/method/experiments/conclusion"),
+                _check("figure_caption", any("\u8bba\u6587\u7f16\u7801\u5668" in str(item.get("caption") or "") for item in parsed.get("document_index", {}).get("figures", [])), parsed.get("document_index", {}).get("figures", []), "Chinese Figure 1 caption"),
+                _check("no_mojibake", parsed["extraction_report"].get("mojibake_rate") == 0.0, parsed["extraction_report"].get("mojibake_rate"), 0.0),
+            ],
+        ),
+        _run_case(
+            "hyphenated_native",
+            hyphenated,
+            root,
+            lambda parsed: [
+                _check("transformer_repaired", sum("transformer encoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])) >= 2, [item.get("text") for item in parsed.get("evidence", [])], "two transformer encoder mentions"),
+                _check("decoder_repaired", any("relation decoder" in item.get("text", "").casefold() for item in parsed.get("evidence", [])), [item.get("text") for item in parsed.get("evidence", [])], "relation decoder"),
+                _check("repair_count", parsed["extraction_report"].get("native_hyphenation_repair_count") == 3, parsed["extraction_report"].get("native_hyphenation_repair_count"), 3),
             ],
         ),
     ]

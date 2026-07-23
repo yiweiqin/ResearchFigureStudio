@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
@@ -172,6 +173,7 @@ Primary task:
 1. Select the most information-rich method/architecture/framework figure caption from the candidates below. Figure 1 is not automatically best; prefer a caption that explicitly names components and directed operations.
 2. Extract every separately named input, component, intermediate representation, conditioning signal, training-only objective, inference-only step, and output needed to reproduce that overview.
 3. Use exact short paper terms as visible names. Do not replace "image encoder" with a prose description such as "network that extracts image features".
+   A visible name must be copied verbatim from one of its cited evidence blocks. Preserve the paper's original language and writing system; never translate a Chinese, Japanese, Korean, or other non-English term because the user preference says English. If no concise source phrase exists, use the shortest verbatim source-language phrase. Relation labels must follow the same rule or be left blank.
 4. Split compound outputs and branches into separate entities. If a component predicts class and box, create separate class and box outputs. If two encoders produce two embeddings, create both embeddings.
 5. Preserve direction. Every relation endpoint must be a declared entity id. Include input boundary edges and final output edges.
 6. Separate training and inference. Matching, losses, supervision, optimization, and feedback belong in training_flow or training-only entities; test-time classification, decoding, retrieval, rendering, or deployment belong in inference_flow.
@@ -225,7 +227,7 @@ Candidate overview captions:
 Extraction scope (do not claim coverage beyond this scope):
 {json.dumps({key: parsed.get('extraction_report', {}).get(key) for key in ('pdf_type', 'semantic_scope', 'readable_page_ratio', 'ocr_pages', 'warnings')}, ensure_ascii=False, indent=2)}
 
-User preferences relevant to wording only:
+User preferences relevant to explanatory wording only (never translate scientific labels away from the paper's source language):
 {json.dumps({key: preferences.get(key) for key in ('language', 'must_show', 'must_not_show')}, ensure_ascii=False, indent=2)}
 
 Prioritized paper evidence:
@@ -570,10 +572,40 @@ Hard requirements:
 
 
 def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
-    valid_evidence = {item["id"] for item in parsed.get("evidence", [])}
+    evidence_items = [item for item in parsed.get("evidence", []) if isinstance(item, dict) and item.get("id")]
+    valid_evidence = {item["id"] for item in evidence_items}
+    evidence_text = {str(item["id"]): str(item.get("text") or "") for item in evidence_items}
     errors: list[str] = []
     warnings: list[str] = []
     spec = plan.get("figure_specification", {})
+
+    def normalized_term(value: str) -> str:
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).casefold()).strip()
+
+    def script_counts(value: str) -> tuple[int, int]:
+        cjk = sum(
+            "\u3400" <= char <= "\u9fff"
+            or "\u3040" <= char <= "\u30ff"
+            or "\uac00" <= char <= "\ud7af"
+            for char in value
+        )
+        latin = sum(("a" <= char.casefold() <= "z") for char in value)
+        return cjk, latin
+
+    def validate_visible_label(location: str, label: str, evidence_ids: list[str], *, fallback_text: str = "") -> None:
+        value = str(label or "").strip()
+        if not value:
+            return
+        source = " ".join(evidence_text.get(str(evidence_id), "") for evidence_id in evidence_ids).strip() or fallback_text
+        if not source or normalized_term(value) in normalized_term(source):
+            return
+        label_cjk, label_latin = script_counts(value)
+        source_cjk, source_latin = script_counts(source)
+        changed_from_cjk = source_cjk >= 2 and label_cjk == 0 and label_latin >= 2
+        changed_from_latin = source_latin >= 4 and source_cjk == 0 and label_cjk >= 2 and label_latin == 0
+        if changed_from_cjk or changed_from_latin:
+            errors.append(f"{location} visible label changes the source writing system and is not verbatim evidence: {value}")
+
     modules = spec.get("modules") if isinstance(spec.get("modules"), list) else []
     if not modules:
         errors.append("figure_specification.modules is empty")
@@ -595,6 +627,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         invalid = [item for item in evidence_ids if item not in valid_evidence]
         if invalid:
             errors.append(f"module {module_id or index + 1} references unknown evidence ids: {invalid}")
+        validate_visible_label(f"module {module_id or index + 1}", str(module.get("name") or module.get("visible_label") or ""), evidence_ids)
 
     endpoint_ids = set(module_ids)
     for field in ("inputs", "outputs", "innovations"):
@@ -610,6 +643,7 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
             invalid = [value for value in evidence_ids if value not in valid_evidence]
             if invalid:
                 errors.append(f"{field}[{index}] references unknown evidence ids: {invalid}")
+            validate_visible_label(f"{field}[{index}]", str(item.get("name") or item.get("visible_label") or item.get("text") or ""), evidence_ids)
 
     relations = spec.get("relations") if isinstance(spec.get("relations"), list) else []
     for index, relation in enumerate(relations):
@@ -626,6 +660,12 @@ def validate_plan_grounding(plan: dict, parsed: dict) -> dict:
         invalid = [item for item in evidence_ids if item not in valid_evidence]
         if invalid:
             errors.append(f"relation {source} -> {target} references unknown evidence ids: {invalid}")
+        validate_visible_label(f"relation {source} -> {target}", str(relation.get("label") or ""), evidence_ids)
+
+    terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
+    all_evidence_text = " ".join(evidence_text.values())
+    for source_term, visible_label in terminology.items():
+        validate_visible_label(f"terminology[{source_term}]", str(visible_label or ""), [], fallback_text=all_evidence_text)
 
     for field in ("must_show", "innovations"):
         items = spec.get(field) if isinstance(spec.get(field), list) else []

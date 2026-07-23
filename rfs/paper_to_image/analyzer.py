@@ -107,6 +107,15 @@ def _lexical_units(text: str) -> list[str]:
     return units
 
 
+def _cjk_character_count(text: str) -> int:
+    return sum(
+        "\u3400" <= char <= "\u9fff"
+        or "\u3040" <= char <= "\u30ff"
+        or "\uac00" <= char <= "\ud7af"
+        for char in str(text or "")
+    )
+
+
 def _token_overlap_agreement(left: str, right: str) -> float | None:
     left_tokens = _lexical_units(left)
     right_tokens = _lexical_units(right)
@@ -324,6 +333,45 @@ def _pymupdf_line_blocks(page: Any) -> list[dict[str, Any]]:
                 "font_bold_ratio": font_bold_ratio,
             })
     return records
+
+
+def _merge_native_hyphenated_lines(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    merged: list[dict[str, Any]] = []
+    repairs = 0
+    for record in records:
+        current = dict(record)
+        if not merged:
+            merged.append(current)
+            continue
+        previous = merged[-1]
+        previous_text = str(previous.get("text") or "")
+        current_text = str(current.get("text") or "")
+        match_left = re.search(r"([A-Za-z]{2,})-$", previous_text)
+        match_right = re.match(r"([A-Za-z]{2,})", current_text)
+        same_parent = previous.get("parent_block") is not None and previous.get("parent_block") == current.get("parent_block")
+        if not same_parent or not match_left or not match_right:
+            merged.append(current)
+            continue
+        combined_word = f"{match_left.group(1)}{match_right.group(1)}".casefold()
+        separator = "" if combined_word in OCR_PROTECTED_WORDS or len(match_left.group(1)) <= 3 else "-"
+        joined_text = f"{previous_text[:-1]}{separator}{current_text.lstrip()}"
+        previous_bbox = previous.get("bbox") or [0, 0, 0, 0]
+        current_bbox = current.get("bbox") or previous_bbox
+        previous.update({
+            "text": _clean(joined_text),
+            "bbox": [
+                round(min(float(previous_bbox[0]), float(current_bbox[0])), 3),
+                round(min(float(previous_bbox[1]), float(current_bbox[1])), 3),
+                round(max(float(previous_bbox[2]), float(current_bbox[2])), 3),
+                round(max(float(previous_bbox[3]), float(current_bbox[3])), 3),
+            ],
+            "confidence": min(float(previous.get("confidence") or 1.0), float(current.get("confidence") or 1.0)),
+            "font_size": max(float(previous.get("font_size") or 0.0), float(current.get("font_size") or 0.0)) or None,
+            "font_bold": bool(previous.get("font_bold")) and bool(current.get("font_bold")),
+            "native_hyphenation_repairs": int(previous.get("native_hyphenation_repairs") or 0) + 1,
+        })
+        repairs += 1
+    return merged, repairs
 
 
 def _poppler_pages(path: Path, timeout: int = 30) -> tuple[list[str], str | None]:
@@ -563,7 +611,7 @@ def _remove_repeated_margin_noise(pages: list[dict[str, Any]]) -> int:
         for block in page.get("blocks", []):
             bbox = block.get("bbox")
             text = str(block.get("text") or "").strip()
-            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or not text or len(text) > 140 or len(_lexical_units(text)) > 12:
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or not text or len(text) > 140 or len(_lexical_units(text)) > 12 or _cjk_character_count(text) > 36:
                 continue
             top_region = float(bbox[3]) <= height * 0.12
             bottom_region = float(bbox[1]) >= height * 0.88
@@ -886,13 +934,14 @@ def _read_pdf_pages(
     try:
         for index, page in enumerate(document, 1):
             native_width = float(page.mediabox.width) if int(page.rotation or 0) else float(page.rect.width)
-            raw_blocks = _pymupdf_line_blocks(page)
+            raw_blocks, hyphenation_repairs = _merge_native_hyphenated_lines(_pymupdf_line_blocks(page))
             ordered, order_confidence = _reading_order(raw_blocks, native_width)
             if len(_normalized_compare_text(" ".join(item["text"] for item in ordered))) < 80:
-                fallback_blocks = _pdfplumber_blocks(path, index)
+                fallback_blocks, fallback_hyphenation_repairs = _merge_native_hyphenated_lines(_pdfplumber_blocks(path, index))
                 fallback_ordered, fallback_confidence = _reading_order(fallback_blocks, native_width)
                 if len(_normalized_compare_text(" ".join(item["text"] for item in fallback_ordered))) > len(_normalized_compare_text(" ".join(item["text"] for item in ordered))):
                     ordered, order_confidence = fallback_ordered, min(fallback_confidence, 0.9)
+                    hyphenation_repairs = fallback_hyphenation_repairs
             ordered = _rotate_blocks_to_page(ordered, page)
             for block_index, block in enumerate(ordered, 1):
                 block["id"] = f"P{index:03d}_B{block_index:03d}"
@@ -920,6 +969,7 @@ def _read_pdf_pages(
                 "poppler_agreement": agreement,
                 "poppler_order_agreement": order_agreement,
                 "reading_order_confidence": order_confidence,
+                "native_hyphenation_repair_count": hyphenation_repairs,
                 "used_ocr": False,
             })
             used_chars += len(page_text)
@@ -961,6 +1011,7 @@ def _read_pdf_pages(
                     "used_ocr": True,
                     "ocr_engine": used_engine,
                     "ocr_margin_noise_removed": int(ocr_diagnostics.get("margin_noise_removed") or 0),
+                    "native_hyphenation_repair_count": 0,
                 })
                 ocr_pages.append(page_number)
 
@@ -1043,6 +1094,7 @@ def _read_pdf_pages(
         "ocr_worker_count": ocr_worker_count,
         "ocr_rescue_min_remaining_seconds": float(ocr_rescue_min_remaining),
         "repeated_margin_noise_removed_count": repeated_margin_noise_removed,
+        "native_hyphenation_repair_count": sum(int(page.get("native_hyphenation_repair_count") or 0) for page in pages),
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
         "elapsed_seconds": elapsed,
@@ -1422,6 +1474,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
         "ocr_rescue_min_remaining_seconds": float(details.get("ocr_rescue_min_remaining_seconds") or 45.0),
         "repeated_margin_noise_removed_count": int(details.get("repeated_margin_noise_removed_count") or 0),
+        "native_hyphenation_repair_count": int(details.get("native_hyphenation_repair_count") or 0),
         "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
         "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,

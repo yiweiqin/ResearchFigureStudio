@@ -74,6 +74,85 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(spec["research_problem"]["evidence_ids"], ["E0001"])
         self.assertTrue(validation["ok"])
 
+    def test_validation_rejects_cross_script_translation_of_visible_labels(self):
+        parsed = {
+            "evidence": [
+                {"id": "E0001", "text": "输入论文首先进入文档编码器,关系解码器连接实体,最后输出可编辑框架图。", "confidence": 1.0},
+            ]
+        }
+        plan = {
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "Input document", "evidence_ids": ["E0001"]}],
+                "modules": [{"id": "encoder", "name": "Document encoder", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "可编辑框架图", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [
+                    {"source": "input", "target": "encoder", "type": "data_flow", "label": "进入", "evidence_ids": ["E0001"]},
+                    {"source": "encoder", "target": "output", "type": "prediction", "label": "produces", "evidence_ids": ["E0001"]},
+                ],
+                "terminology": {},
+            }
+        }
+
+        validation = validate_plan_grounding(plan, parsed)
+
+        self.assertFalse(validation["ok"])
+        self.assertTrue(any("Input document" in item for item in validation["errors"]))
+        self.assertTrue(any("Document encoder" in item for item in validation["errors"]))
+        self.assertTrue(any("produces" in item for item in validation["errors"]))
+
+    def test_validation_accepts_verbatim_non_english_visible_labels(self):
+        parsed = {
+            "evidence": [
+                {"id": "E0001", "text": "输入论文首先进入文档编码器,关系解码器连接实体,最后输出可编辑框架图。", "confidence": 1.0},
+            ]
+        }
+        plan = {
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "输入论文", "evidence_ids": ["E0001"]}],
+                "modules": [{"id": "encoder", "name": "文档编码器", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "可编辑框架图", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [
+                    {"source": "input", "target": "encoder", "type": "data_flow", "label": "进入", "evidence_ids": ["E0001"]},
+                    {"source": "encoder", "target": "output", "type": "prediction", "label": "", "evidence_ids": ["E0001"]},
+                ],
+                "terminology": {"文档编码器": "文档编码器"},
+            }
+        }
+
+        self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
+
+    def test_contract_repairs_cross_script_terminology_to_verbatim_source_key(self):
+        parsed = {
+            "evidence": [
+                {"id": "E0001", "text": "输入论文首先进入文档编码器,关系解码器连接实体,最后输出可编辑框架图。", "confidence": 1.0},
+            ]
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "input", "name": "输入论文", "evidence_ids": ["E0001"]}],
+                "modules": [{"id": "encoder", "name": "文档编码器", "evidence_ids": ["E0001"]}],
+                "outputs": [{"id": "output", "name": "可编辑框架图", "evidence_ids": ["E0001"]}],
+                "innovations": [],
+                "relations": [{"source": "input", "target": "encoder", "type": "data_flow", "label": "进入", "evidence_ids": ["E0001"]}],
+                "terminology": {"文档编码器": "Document encoder"},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["terminology"]["文档编码器"], "文档编码器")
+        self.assertIn("文档编码器", spec["required_labels"])
+        self.assertTrue(validate_plan_grounding(plan, parsed)["ok"])
+
     def test_contract_grounds_declared_multword_entity_by_exact_paper_term(self):
         parsed = {
             "page_count": 6,
