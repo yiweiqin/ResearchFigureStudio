@@ -52,8 +52,8 @@ CONCEPT_RULES = (
     ConceptRule("backbone", "Backbone", "modules", "feature extractor", r"\bbackbones?\b", ("backbone architecture",), True),
     ConceptRule("image_encoder", "Image Encoder", "modules", "encoder", r"\bimage encoder\b"),
     ConceptRule("text_encoder", "Text Encoder", "modules", "encoder", r"\btext encoder\b"),
-    ConceptRule("transformer_encoder", "Transformer Encoder", "modules", "encoder", r"\btransformer encoder\b", (), True),
-    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b", (), True),
+    ConceptRule("transformer_encoder", "Transformer Encoder", "modules", "encoder", r"\btransformer encoder\b|^encoder$", (), True),
+    ConceptRule("transformer_decoder", "Transformer Decoder", "modules", "decoder", r"\btransformer decoder\b|^decoder$", (), True),
     ConceptRule("position_embedding", "Position Embedding", "modules", "conditioning", r"\bposition embeddings?\b", ("positional embedding",), True),
     ConceptRule("positional_encoding", "Positional Encoding", "modules", "conditioning", r"\bposition(?:al)? encod(?:ing|ings)\b"),
     ConceptRule("image_patches", "Image Patches", "modules", "intermediate", r"\bimage patches?\b|\bfixed-size patches\b", ("patches",), True),
@@ -87,7 +87,7 @@ CONCEPT_RULES = (
     ConceptRule("classification", "Classification", "outputs", "output head", r"\bclassification head\b|\bpredicts? the class label\b", ("class label",)),
     ConceptRule("box_regression", "Bounding-box Regression", "outputs", "output head", r"\bbounding[ -]?box regression\b|\bbox regression\b", ("bounding box", "box branch")),
     ConceptRule("mask_branch", "Mask Branch", "outputs", "output head", r"\bmask branch\b"),
-    ConceptRule("refined_output", "Refined Output", "outputs", "output", r"\brefined output\b|\bquality of the output improves\b"),
+    ConceptRule("refined_output", "Refined Output", "outputs", "output", r"\brefined output\b|\brefines? (?:the )?(?:previously generated )?output\b|\bquality of the output improves\b"),
     ConceptRule("emergent_alignment", "Emergent Cross-modal Alignment", "outputs", "output", r"\bemergent (?:cross-modal )?alignments?\b|\bbinding (?:agent|property)\b", ("emergent alignment", "binding agent", "binding property")),
     ConceptRule("valid_mask", "Valid Segmentation Mask", "outputs", "output", r"\bvalid masks?\b|\bobject masks?\b", ("valid masks", "valid mask"), True),
     ConceptRule("zero_shot_classifier", "Zero-Shot Classifier", "outputs", "inference output", r"\bzero[ -]?shot (?:linear )?classifier\b|\bzero[ -]?shot prediction\b", ("zero-shot linear classifier", "zero-shot prediction")),
@@ -249,7 +249,28 @@ def _evidence_for_figure(parsed: dict[str, Any], figure: dict[str, Any]) -> dict
 
 def _relevant_evidence(parsed: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     candidates = _overview_candidates(parsed)
-    selected = [item for item in (_evidence_for_figure(parsed, figure) for figure in candidates) if item]
+    caption_evidence = [item for item in (_evidence_for_figure(parsed, figure) for figure in candidates) if item]
+    selected_pages = {int(item.get("page") or 0) for item in caption_evidence if item.get("page")}
+    selected = list(caption_evidence)
+    for item in parsed.get("evidence", []):
+        if int(item.get("page") or 0) not in selected_pages or item in selected:
+            continue
+        section = str(item.get("section_hint") or "").casefold()
+        if any(term in section for term in ("reference", "acknowledg")):
+            continue
+        item_bbox = item.get("bbox") if isinstance(item.get("bbox"), list) and len(item.get("bbox")) == 4 else None
+        captions = [value for value in caption_evidence if value.get("page") == item.get("page")]
+        near_caption = False
+        for caption in captions:
+            caption_bbox = caption.get("bbox") if isinstance(caption.get("bbox"), list) and len(caption.get("bbox")) == 4 else None
+            if item_bbox is None or caption_bbox is None:
+                near_caption = True
+                break
+            if float(item_bbox[1]) <= float(caption_bbox[3]) + 72.0 and float(item_bbox[3]) >= float(caption_bbox[1]) - 540.0:
+                near_caption = True
+                break
+        if near_caption:
+            selected.append(item)
     selected_ids = {item["id"] for item in selected}
     page_count = max(1, int(parsed.get("page_count") or 1))
     early_page_limit = max(8, int(page_count * 0.45))
@@ -294,9 +315,12 @@ def _find_matches(rule: ConceptRule, selected: list[dict[str, Any]], relevant: l
     if rule.requires_overview:
         return []
     secondary = [item for item in relevant if pattern.search(str(item.get("text") or ""))]
+    secondary_window = _window_matches(pattern, relevant)
+    if rule.context_pattern and secondary_window:
+        return secondary_window
     if secondary:
         return secondary[:2]
-    return _window_matches(pattern, relevant)
+    return secondary_window
 
 
 def _find_existing(spec: dict[str, Any], rule: ConceptRule) -> tuple[str, dict[str, Any]] | None:
@@ -412,10 +436,11 @@ def _heuristic_rule_scope(
     relevant: list[dict[str, Any]],
     declared_rule_keys: set[str],
 ) -> tuple[set[str], dict[str, list[dict[str, Any]]]]:
+    scoped_relevant = relevant
     matches = {
         rule.key: found
         for rule in CONCEPT_RULES
-        if (found := _find_matches(rule, selected, relevant))
+        if (found := _find_matches(rule, selected, scoped_relevant))
     }
     candidates = set(matches)
     if not candidates:
@@ -426,8 +451,32 @@ def _heuristic_rule_scope(
         if rule.key in candidates and _find_matches(rule, selected, [])
     }
     adjacency = {key: set() for key in candidates}
+
+    def locally_connected(left: str, right: str) -> bool:
+        left_items, right_items = matches.get(left, []), matches.get(right, [])
+        if not left_items or not right_items:
+            return True
+        for left_item in left_items:
+            for right_item in right_items:
+                left_page, right_page = int(left_item.get("page") or 0), int(right_item.get("page") or 0)
+                if not left_page or not right_page:
+                    return True
+                page_gap = abs(left_page - right_page)
+                if 0 < page_gap <= 3:
+                    return True
+                if page_gap != 0:
+                    continue
+                left_bbox, right_bbox = left_item.get("bbox"), right_item.get("bbox")
+                if not (isinstance(left_bbox, list) and len(left_bbox) == 4 and isinstance(right_bbox, list) and len(right_bbox) == 4):
+                    return True
+                left_center = (float(left_bbox[1]) + float(left_bbox[3])) / 2.0
+                right_center = (float(right_bbox[1]) + float(right_bbox[3])) / 2.0
+                if abs(left_center - right_center) <= 360.0:
+                    return True
+        return False
+
     for source_key, target_key, _ in RELATION_RULES:
-        if source_key in candidates and target_key in candidates:
+        if source_key in candidates and target_key in candidates and locally_connected(source_key, target_key):
             adjacency[source_key].add(target_key)
             adjacency[target_key].add(source_key)
 

@@ -568,6 +568,23 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn((ids["Encoder Stack"], ids["Decoder Stack"]), pairs)
         self.assertIn((ids["Linear"], ids["Softmax"]), pairs)
 
+    def test_generic_completion_treats_refinement_action_as_refined_output(self):
+        caption = "Figure 1: Given an input, the system starts by generating an output, gets feedback, and then refines the previously generated output."
+        parsed = {
+            "page_count": 8,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertIn("Refine", ids)
+        self.assertIn("Refined Output", ids)
+        self.assertIn((ids["Refine"], ids["Refined Output"]), pairs)
+
     def test_generic_completion_recovers_embedding_pretraining_and_finetuning(self):
         captions = [
             "Figure 1: Overall pre-training and fine-tuning procedures. The same pre-trained model parameters are used to initialize models for different down-stream tasks.",
@@ -621,6 +638,41 @@ class PaperContractTests(unittest.TestCase):
         self.assertIn((ids["Token Embeddings"], ids["Input Representation"]), pairs)
         self.assertIn((ids["Segment Embeddings"], ids["Input Representation"]), pairs)
         self.assertIn((ids["Position Embeddings"], ids["Input Representation"]), pairs)
+
+    def test_generic_completion_uses_selected_architecture_page_context_and_diagram_labels(self):
+        captions = [
+            "Figure 1: Model overview directly predicts a set by combining a CNN with a transformer and bipartite matching.",
+            "Figure 10: Architecture of the proposed transformer's subsystem. See the detailed description on this page.",
+        ]
+        parsed = {
+            "page_count": 24,
+            "document_index": {"figures": [{"page": 2, "caption": captions[0]}, {"page": 20, "caption": captions[1]}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "bbox": [40, 300, 500, 320], "text": captions[0], "section_hint": "Figure Captions", "confidence": 0.98},
+                {"id": "E0002", "page": 2, "kind": "paragraph", "bbox": [40, 220, 500, 240], "text": "The input image is processed for direct prediction with bipartite matching.", "section_hint": "Introduction", "confidence": 0.98},
+                {"id": "E0003", "page": 20, "kind": "caption", "bbox": [40, 600, 500, 620], "text": captions[1], "section_hint": "Figure Captions", "confidence": 0.98},
+                {"id": "E0004", "page": 20, "kind": "paragraph", "bbox": [40, 100, 500, 120], "text": "Image features from the CNN backbone are passed through the transformer encoder.", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0005", "page": 20, "kind": "paragraph", "bbox": [40, 150, 500, 170], "text": "The decoder receives object queries and encoder memory.", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0006", "page": 20, "kind": "paragraph", "bbox": [340, 280, 380, 300], "text": "FFN", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0007", "page": 20, "kind": "paragraph", "bbox": [140, 390, 190, 410], "text": "Encoder", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0008", "page": 20, "kind": "paragraph", "bbox": [310, 310, 360, 330], "text": "Decoder", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0009", "page": 20, "kind": "paragraph", "bbox": [40, 180, 500, 200], "text": "The final class labels and bounding boxes are predicted in parallel.", "section_hint": "Detailed Architecture", "confidence": 0.98},
+                {"id": "E0010", "page": 20, "kind": "paragraph", "bbox": [40, 710, 500, 730], "text": "For example, a separate text encoder uses class descriptions and contrastive learning to create text embeddings.", "section_hint": "Related Work", "confidence": 0.98},
+            ],
+        }
+        plan = {"paper_summary": {"unknowns": []}, "figure_specification": {"modules": [], "inputs": [], "outputs": [], "relations": [], "innovations": [], "must_show": [], "terminology": {}}}
+
+        spec = normalize_figure_contract(plan, parsed)
+        ids = {_item.get("name"): _item.get("id") for field in ("inputs", "modules", "outputs") for _item in spec[field]}
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        for label in ("Input Image", "CNN Backbone", "Transformer Encoder", "Object Queries", "Transformer Decoder", "Feed Forward Network", "Class Predictions", "Bounding Box Predictions", "Bipartite Matching"):
+            self.assertIn(label, ids)
+        self.assertIn((ids["CNN Backbone"], ids["Transformer Encoder"]), pairs)
+        self.assertIn((ids["Object Queries"], ids["Transformer Decoder"]), pairs)
+        self.assertIn((ids["Feed Forward Network"], ids["Class Predictions"]), pairs)
+        self.assertNotIn("Text Encoder", ids)
+        self.assertNotIn("Contrastive Learning", ids)
 
     def test_generic_completion_recovers_retrieval_conditioned_generation(self):
         caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."
