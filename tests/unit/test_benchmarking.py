@@ -137,6 +137,8 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("provider_success_rate", result["aggregate"])
             self.assertIn("mean_evidence_page_coverage_ratio", result["aggregate"])
             self.assertIn("ocr_scheduled_page_total", result["aggregate"])
+            self.assertIn("ocr_attempted_page_total", result["aggregate"])
+            self.assertIn("ocr_incomplete_run_count", result["aggregate"])
             self.assertIn("max_detected_column_count", result["aggregate"])
             self.assertIn("mean_section_count", result["aggregate"])
             self.assertIn("typographic_heading_total", result["aggregate"])

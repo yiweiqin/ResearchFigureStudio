@@ -829,6 +829,12 @@ def _read_pdf_pages(
                 consume_ocr_result(page_number, result, time.monotonic() - ocr_started)
     document.close()
     elapsed = round(time.monotonic() - started, 3)
+    attempted_pages = [int(item["page"]) for item in ocr_page_durations if item.get("page")]
+    successful_attempt_pages = [int(item["page"]) for item in ocr_page_durations if item.get("page") and item.get("success")]
+    schedule_complete = set(prioritized).issubset(attempted_pages)
+    run_complete = schedule_complete and set(attempted_pages).issubset(successful_attempt_pages)
+    if not schedule_complete and "OCR schedule was not completed before the extraction deadline" not in warnings:
+        warnings.append("OCR schedule was not completed before the extraction deadline")
     return pages, {
         "metadata": metadata,
         "ocr_candidate_pages": ocr_candidates,
@@ -836,6 +842,10 @@ def _read_pdf_pages(
         "ocr_priority": ocr_priority,
         "ocr_pages": ocr_pages,
         "ocr_page_durations": ocr_page_durations,
+        "ocr_attempted_pages": attempted_pages,
+        "ocr_successful_attempt_pages": successful_attempt_pages,
+        "ocr_schedule_complete": schedule_complete,
+        "ocr_run_complete": run_complete,
         "ocr_worker_count": ocr_worker_count,
         "warnings": warnings,
         "poppler_available": bool(poppler_text),
@@ -1209,6 +1219,10 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_priority": details.get("ocr_priority", []),
         "ocr_pages": details.get("ocr_pages", []),
         "ocr_page_durations": details.get("ocr_page_durations", []),
+        "ocr_attempted_pages": details.get("ocr_attempted_pages", []),
+        "ocr_successful_attempt_pages": details.get("ocr_successful_attempt_pages", []),
+        "ocr_schedule_complete": bool(details.get("ocr_schedule_complete", True)),
+        "ocr_run_complete": bool(details.get("ocr_run_complete", True)),
         "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
         "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
         "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),

@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +8,8 @@ import fitz
 
 from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
+from rfs.paper_to_image.document_cache import write_document_cache
+from rfs.paper_to_image.preparation import _semantic_cache_safe
 from rfs.reference_text_extractor import _positive_ocr_setting, _rapidocr_detector_limit, run_rapidocr_detailed
 
 
@@ -443,6 +446,29 @@ class PaperAnalyzerTests(unittest.TestCase):
         self.assertEqual(parsed["extraction_report"]["pdf_type"], "scanned")
         self.assertEqual(parsed["extraction_report"]["semantic_scope"], "sampled_pages_only")
         self.assertFalse(parsed["extraction_report"]["scientific_scope_complete"])
+        self.assertTrue(parsed["extraction_report"]["ocr_schedule_complete"])
+        self.assertTrue(parsed["extraction_report"]["ocr_run_complete"])
+
+    def test_deadline_limited_ocr_is_not_cached_as_complete(self):
+        path = self._multipage_pdf([[] for _ in range(3)])
+
+        def adapter(_image_path, _lang):
+            return [{
+                "text": "Abstract Method architecture evidence recovered by OCR.",
+                "confidence": 0.97,
+                "quad": [[20, 20], [560, 20], [560, 70], [20, 70]],
+            }]
+
+        parsed = parse_paper(path, deadline_at=time.monotonic() - 1, ocr_engine="easyocr", ocr_adapter=adapter, max_ocr_pages=3)
+        report = parsed["extraction_report"]
+
+        self.assertFalse(report["ocr_schedule_complete"])
+        self.assertFalse(report["ocr_run_complete"])
+        self.assertEqual(report["ocr_attempted_pages"], [])
+        self.assertTrue(any("schedule was not completed" in warning for warning in report["warnings"]))
+        with tempfile.TemporaryDirectory() as cache, patch.dict("os.environ", {"RFS_CACHE_DIR": cache}, clear=False):
+            self.assertIsNone(write_document_cache(path, parsed, ocr_engine="easyocr", ocr_lang="en_ch"))
+        self.assertFalse(_semantic_cache_safe(parsed))
 
 
 if __name__ == "__main__":

@@ -703,10 +703,15 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
 
 
 def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 26, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+    signature = json.dumps({"version": 27, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
+
+
+def _semantic_cache_safe(parsed: dict[str, Any]) -> bool:
+    report = parsed.get("extraction_report", {})
+    return bool(report.get("scientific_scope_complete", True) and report.get("ocr_run_complete", True))
 
 
 def prepare_paper_figure_contract(
@@ -784,7 +789,7 @@ def prepare_paper_figure_contract(
         remaining = max(10, int(deadline_at - time.monotonic() - 15))
         effective_mode = planner_mode if remaining >= 25 else "heuristic"
         cache_path = _fast_cache_path(parsed, str(planner_model or ""), preferences)
-        if cache_path.exists() and effective_mode == "vlm":
+        if cache_path.exists() and effective_mode == "vlm" and _semantic_cache_safe(parsed):
             plan = read_json(cache_path)
             planner_metadata = {"requested_mode": "vlm", "mode": "vlm", "model": planner_model, "warning": None, "prompt": "", "cached": True}
         else:
@@ -850,7 +855,7 @@ def prepare_paper_figure_contract(
         write_json(root / f"{name}.json", plan[name])
     planning_validation = validate_plan_grounding(plan, parsed)
     write_json(root / "planning_validation_report.json", planning_validation)
-    if fast_mode and planning_validation.get("ok") and planner_metadata.get("mode") in {"vlm", "review_grounded_vlm"}:
+    if fast_mode and planning_validation.get("ok") and planner_metadata.get("mode") in {"vlm", "review_grounded_vlm"} and _semantic_cache_safe(parsed):
         write_json(cache_path, plan)
     overlay = build_overlay_spec(plan)
     write_json(root / "overlay_spec.json", overlay)
@@ -925,6 +930,9 @@ def prepare_paper_figure_contract(
             "ocr_candidate_count": len(parsed["extraction_report"].get("ocr_candidate_pages", [])),
             "ocr_scheduled_count": len(parsed["extraction_report"].get("ocr_priority_pages", [])),
             "ocr_completed_count": len(parsed["extraction_report"].get("ocr_pages", [])),
+            "ocr_attempted_count": len(parsed["extraction_report"].get("ocr_attempted_pages", [])),
+            "ocr_schedule_complete": parsed["extraction_report"].get("ocr_schedule_complete", True),
+            "ocr_run_complete": parsed["extraction_report"].get("ocr_run_complete", True),
             "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
             "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),

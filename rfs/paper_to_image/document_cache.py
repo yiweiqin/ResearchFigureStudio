@@ -9,7 +9,12 @@ from typing import Any
 from ..utils import read_json, write_json
 
 
-DOCUMENT_CACHE_VERSION = 20
+DOCUMENT_CACHE_VERSION = 21
+
+
+def document_model_cacheable(parsed: dict[str, Any]) -> bool:
+    report = parsed.get("extraction_report", {})
+    return bool(report.get("status") != "fail" and report.get("ocr_run_complete", True))
 
 
 def _cache_root() -> Path:
@@ -50,7 +55,7 @@ def read_document_cache(
     if not path.exists():
         return None
     cached = read_json(path)
-    if not isinstance(cached, dict) or cached.get("extraction_report", {}).get("status") == "fail":
+    if not isinstance(cached, dict) or not document_model_cacheable(cached):
         return None
     active = Path(source).resolve()
     cached["source_path"] = str(active)
@@ -69,7 +74,7 @@ def write_document_cache(
     max_chars: int = 90000,
     max_ocr_pages: int = 6,
 ) -> Path | None:
-    if parsed.get("extraction_report", {}).get("status") == "fail":
+    if not document_model_cacheable(parsed):
         return None
     path = document_cache_path(source, ocr_engine=ocr_engine, ocr_lang=ocr_lang, max_chars=max_chars, max_ocr_pages=max_ocr_pages)
     write_json(path, parsed)

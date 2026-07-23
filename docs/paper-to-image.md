@@ -33,6 +33,8 @@ rfs benchmark pdf-suite --out output/benchmarks/pdf_profile --ocr-engine rapidoc
 
 Lower detector limits are not assumed to be faster. On dense two-column scans, recognition usually dominates and smaller detector settings can have unstable latency; accept a change only after text agreement, section recovery, caption recovery, confidence, and wall-clock gates all pass.
 
+Deadline-limited or failed OCR schedules are explicitly marked with `ocr_schedule_complete=false` / `ocr_run_complete=false`. Such document models are never written to the global document cache, and scientifically partial scan results are never written to the semantic contract cache; a transient slow or failed OCR run therefore cannot poison later fast runs.
+
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
 The deterministic compiler can recover relations across adjacent PDF blocks, canonicalize evidence-backed VLM aliases, repair missing relation evidence, and ground or downgrade unsupported scalar claims. It also normalizes string entities plus `source_id`/`target_id`/`relation_type` variants, resolves a missing endpoint only when the relation label exactly identifies one declared entity, grounds short uppercase acronyms through exact token matches, and removes unresolved relations into explicit uncertainties. These repairs are paper-name agnostic and are covered by the NLP suite.
 
