@@ -475,6 +475,20 @@ class PaperToImageTests(unittest.TestCase):
 
             self.assertEqual(selected["template_id"], "feedback")
 
+    def test_parallel_head_workflow_selects_branch_template(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            review = {
+                "modules": [{"statement": value} for value in ("Backbone", "RPN", "RoIAlign", "classification branch", "box branch", "mask branch")],
+                "inputs": [{"statement": "Input Image"}],
+                "relations": [{"relation_type": "branch", "statement": "RoIAlign feeds three parallel heads"}],
+                "workflows": {"feedback": []},
+            }
+
+            selected = select_template(profiles, review, requested="auto", target_ratio="16:9")
+
+            self.assertEqual(selected["template_id"], "branch")
+
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_mock_image2_generates_three_candidates_and_safe_manifest(self, _post):
         with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value", "RFS_IMAGE_MODEL": "image-2"}, clear=False):

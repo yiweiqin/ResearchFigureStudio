@@ -352,6 +352,100 @@ def _deduplicate_contract_entities(spec: dict[str, Any]) -> dict[str, list[str]]
     return {"removed": removed, "replacements": [f"{source}->{target}" for source, target in replacements.items() if source and target]}
 
 
+def _simplify_branch_contract(spec: dict[str, Any]) -> dict[str, list[str]]:
+    if str(spec.get("topology") or "") != "branch":
+        return {"merged_entities": [], "removed_cross_branch_relations": []}
+
+    def group_for(item: dict[str, Any]) -> str | None:
+        label = _normalized_label(_item_label(item))
+        if label in {"rpn", "regionproposals", "regionproposalnetwork", "regionproposalnetworkrpn", "proposals"}:
+            return "proposals"
+        if any(value in label for value in ("classificationbranch", "classificationhead", "classprediction", "classpredictions")) or label == "classification":
+            return "classification"
+        if any(value in label for value in ("boundingboxregression", "boxregression", "boxbranch", "boundingboxoffset", "boundingboxpredictions")):
+            return "box"
+        if label in {"maskbranch", "binarymask", "validsegmentationmask", "maskprediction"}:
+            return "mask"
+        return None
+
+    preference = {
+        "proposals": ("rpn", "regionproposals"),
+        "classification": ("classification", "classificationbranch", "classprediction"),
+        "box": ("boundingboxregression", "boxbranch", "boundingboxpredictions", "boundingboxoffset"),
+        "mask": ("maskbranch", "validsegmentationmask", "binarymask"),
+    }
+    records: list[tuple[str, dict[str, Any], str]] = []
+    for field in ("inputs", "modules", "outputs"):
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            if isinstance(item, dict) and (group := group_for(item)):
+                records.append((field, item, group))
+
+    replacements: dict[str, str] = {}
+    removed_ids: set[str] = set()
+    merged_entities: list[str] = []
+    for group in ("proposals", "classification", "box", "mask"):
+        members = [(field, item) for field, item, item_group in records if item_group == group]
+        if len(members) <= 1:
+            continue
+
+        def rank(record: tuple[str, dict[str, Any]]) -> tuple[int, int]:
+            field, item = record
+            label = _normalized_label(_item_label(item))
+            preferred = preference[group]
+            label_rank = next((index for index, value in enumerate(preferred) if label == value), len(preferred))
+            field_rank = 0 if (group == "classification" and field == "outputs") or (group != "classification" and field == "modules") else 1
+            return label_rank, field_rank
+
+        canonical_field, canonical = min(members, key=rank)
+        canonical_id = str(canonical.get("id") or "")
+        for field, item in members:
+            item_id = str(item.get("id") or "")
+            if item is canonical:
+                continue
+            canonical["evidence_ids"] = list(dict.fromkeys([*canonical.get("evidence_ids", []), *item.get("evidence_ids", [])]))
+            if item_id and canonical_id:
+                replacements[item_id] = canonical_id
+                removed_ids.add(item_id)
+                merged_entities.append(f"{item_id}->{canonical_id}")
+
+    if removed_ids:
+        for field in ("inputs", "modules", "outputs"):
+            spec[field] = [item for item in spec.get(field, []) if not (isinstance(item, dict) and str(item.get("id") or "") in removed_ids)]
+
+    removed_cross_branch_relations: list[str] = []
+    deduplicated: list[dict[str, Any]] = []
+    seen_relations: dict[tuple[str, str, str], dict[str, Any]] = {}
+    endpoints = {
+        str(item.get("id")): item
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if not isinstance(relation, dict):
+            continue
+        source = replacements.get(str(relation.get("source") or ""), str(relation.get("source") or ""))
+        target = replacements.get(str(relation.get("target") or ""), str(relation.get("target") or ""))
+        if not source or not target or source == target or source not in endpoints or target not in endpoints:
+            continue
+        source_group = group_for(endpoints[source])
+        target_group = group_for(endpoints[target])
+        branch_groups = {"classification", "box", "mask"}
+        if source_group in branch_groups and target_group in branch_groups and source_group != target_group:
+            removed_cross_branch_relations.append(f"{source}->{target}")
+            continue
+        relation["source"], relation["target"] = source, target
+        key = (source, target, str(relation.get("type") or "data_flow"))
+        if key in seen_relations:
+            existing = seen_relations[key]
+            existing["evidence_ids"] = list(dict.fromkeys([*existing.get("evidence_ids", []), *relation.get("evidence_ids", [])]))
+            continue
+        seen_relations[key] = relation
+        deduplicated.append(relation)
+    spec["relations"] = deduplicated
+    return {"merged_entities": merged_entities, "removed_cross_branch_relations": removed_cross_branch_relations}
+
+
 def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
     aliases: dict[str, set[str]] = {}
     endpoint_ids: set[str] = set()
@@ -657,6 +751,9 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
                 existing_pairs.add(pair)
                 incoming.add(target_id)
     spec["relations"] = relations
+    branch_report = _simplify_branch_contract(spec)
+    completion_report["branch_merged_entities"] = branch_report["merged_entities"]
+    completion_report["removed_cross_branch_relations"] = branch_report["removed_cross_branch_relations"]
     spec.setdefault("training_flow", summary.get("training_flow") if isinstance(summary.get("training_flow"), list) else [])
     spec.setdefault("inference_flow", summary.get("inference_flow") if isinstance(summary.get("inference_flow"), list) else [])
     spec.setdefault("feedback_loops", [item for item in spec.get("relations", []) if isinstance(item, dict) and "feedback" in str(item.get("type") or "").casefold()])

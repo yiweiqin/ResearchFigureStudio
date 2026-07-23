@@ -201,11 +201,13 @@ a newly rotated key through environment variables before running production.
 See [docs/paper-to-image.md](docs/paper-to-image.md) for the review schema,
 template contract, production gates, and failure behavior.
 
-Automatic selection includes a dedicated `feedback` template for compact
-generation → feedback → refinement loops. Tree/branch systems continue to use
-`arbor`; simple sequential systems use `linear`. Feedback, branch, multimodal,
-and dense candidates also run a focused connector judge that verifies visible
-arrow endpoints and rejects shortcuts that bypass required modules.
+Automatic selection includes dedicated `feedback` and `branch` templates.
+Compact generation → feedback → refinement loops use `feedback`; shared-trunk
+systems with parallel prediction heads use `branch`; true search-tree systems
+use `arbor`; simple sequential systems use `linear`. Feedback, branch,
+multimodal, and dense candidates also run a focused connector judge that
+verifies visible arrow endpoints and rejects shortcuts that bypass required
+modules.
 
 ## Offline Smoke Test
 

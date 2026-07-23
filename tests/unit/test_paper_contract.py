@@ -642,6 +642,59 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(all(item["source"] in endpoint_ids and item["target"] in endpoint_ids for item in spec["relations"]))
         self.assertEqual(len(spec["required_labels"]), len({_normalized.casefold() for _normalized in spec["required_labels"]}))
 
+    def test_branch_contract_merges_head_output_aliases_and_removes_cross_branch_edges(self):
+        caption = "Figure 1: An Input Image passes through a Backbone and RPN to RoIAlign, followed by parallel classification, bounding-box regression, and mask branches."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "branch",
+                "inputs": [{"id": "image", "name": "Input Image", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "backbone", "name": "Backbone", "evidence_ids": ["E0001"]},
+                    {"id": "rpn", "name": "RPN", "evidence_ids": ["E0001"]},
+                    {"id": "proposals", "name": "Region Proposals", "evidence_ids": ["E0001"]},
+                    {"id": "roi", "name": "RoIAlign", "evidence_ids": ["E0001"]},
+                    {"id": "class_branch", "name": "classification branch", "evidence_ids": ["E0001"]},
+                    {"id": "box_branch", "name": "bounding-box regression", "evidence_ids": ["E0001"]},
+                    {"id": "mask_branch", "name": "mask branch", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [
+                    {"id": "class_output", "name": "Classification", "evidence_ids": ["E0001"]},
+                    {"id": "box_output", "name": "bounding-box offset", "evidence_ids": ["E0001"]},
+                    {"id": "mask_output", "name": "binary mask", "evidence_ids": ["E0001"]},
+                ],
+                "relations": [
+                    {"source": "image", "target": "backbone", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "backbone", "target": "rpn", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "proposals", "target": "roi", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "roi", "target": "class_branch", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "roi", "target": "box_branch", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "roi", "target": "mask_branch", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "mask_branch", "target": "box_output", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "mask_branch", "target": "mask_output", "type": "data_flow", "evidence_ids": ["E0001"]},
+                ],
+                "innovations": [],
+                "must_show": [],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        names = [re.sub(r"[^a-z0-9]+", "", item["name"].casefold()) for field in ("inputs", "modules", "outputs") for item in spec[field]]
+        branch_names = [name for name in names if name in {"classification", "classificationbranch", "boundingboxregression", "boxbranch", "maskbranch"}]
+        endpoint_by_name = {re.sub(r"[^a-z0-9]+", "", item["name"].casefold()): item["id"] for field in ("inputs", "modules", "outputs") for item in spec[field]}
+        branch_ids = {endpoint_by_name[name] for name in branch_names}
+
+        self.assertEqual(len(spec["inputs"]), 1)
+        self.assertEqual(sum(name in {"rpn", "regionproposals"} for name in names), 1)
+        self.assertEqual(len(branch_names), 3)
+        self.assertFalse(any(item["source"] in branch_ids and item["target"] in branch_ids and item["source"] != item["target"] for item in spec["relations"]))
+
     def test_overview_caption_and_stage_list_complete_missing_panels(self):
         caption = "Figure 1: Three interconnected components: a promptable segmentation task, a segmentation model (SAM) that powers data annotation, and a data engine for collecting SA-1B, our dataset."
         parsed = {

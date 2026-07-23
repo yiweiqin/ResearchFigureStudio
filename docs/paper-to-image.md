@@ -146,14 +146,15 @@ Available profiles:
 
 ## Template Contract
 
-Built-in templates include `feedback`, `arbor`, `linear`, `tripanel`, and
-`dense-multimodal`. Compact iterative generation/feedback/refinement systems use
-`feedback`; tree or branching systems use `arbor`. Positive references are
-classified into the closest ratio-based reference archetype and become
+Built-in templates include `branch`, `feedback`, `arbor`, `linear`, `tripanel`,
+and `dense-multimodal`. Compact iterative generation/feedback/refinement systems
+use `feedback`; shared-trunk systems with parallel output heads use `branch`;
+true search-tree systems use `arbor`. Positive references are classified into
+the closest ratio-based reference archetype and become
 content-free profiles containing normalized panels, topology, connector rhythm,
 density, palette, and forbidden copied content. Automatic selection uses module
-count, loops/tree structure, multimodality, retrieval structure, and requested
-ratio.
+count, loop/tree/parallel-branch structure, multimodality, retrieval structure,
+and requested ratio.
 
 The selected profile is rendered as `layout_blueprint.png`. The blueprint contains no reference text or reference-specific objects and is the only image supplied to Image2 edit for initial candidates.
 

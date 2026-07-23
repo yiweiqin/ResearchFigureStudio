@@ -12,6 +12,24 @@ from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_avail
 
 
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
+    "branch": {
+        "summary": "Shared-trunk architecture with proposal convergence and parallel output heads.",
+        "template_id": "branch",
+        "name": "Shared trunk with parallel heads",
+        "aspect_ratio": 1.78,
+        "topology": ["left_to_right", "shared_backbone", "convergence", "three_way_branch"],
+        "ideal_module_range": [4, 10],
+        "visual_density": "high",
+        "panels": [
+            {"id": "input", "role": "input", "bbox_percent": {"x": 0.02, "y": 0.28, "w": 0.13, "h": 0.44}},
+            {"id": "backbone", "role": "shared_backbone", "bbox_percent": {"x": 0.19, "y": 0.22, "w": 0.18, "h": 0.56}},
+            {"id": "proposals", "role": "proposal_path", "bbox_percent": {"x": 0.40, "y": 0.10, "w": 0.16, "h": 0.28}},
+            {"id": "alignment", "role": "feature_proposal_convergence", "bbox_percent": {"x": 0.43, "y": 0.48, "w": 0.17, "h": 0.25}},
+            {"id": "heads", "role": "parallel_output_heads", "bbox_percent": {"x": 0.68, "y": 0.14, "w": 0.28, "h": 0.72}},
+        ],
+        "connectors": ["input_to_backbone", "backbone_to_proposals", "backbone_features_to_alignment", "proposals_to_alignment", "alignment_three_way_split"],
+        "style": {"background": "white", "panel_fill": "near_white", "stroke": "muted_blue", "accent": ["blue", "orange", "green"], "corners": "rounded", "shadow": "soft_cards"},
+    },
     "feedback": {
         "summary": "Compact two-row iterative generation, feedback, and refinement template.",
         "template_id": "feedback",
@@ -195,7 +213,8 @@ def _paper_features(review: dict) -> dict:
         "module_count": len(review.get("modules", [])),
         "input_count": len(review.get("inputs", [])),
         "has_loop": bool(workflow.get("feedback")) or "feedback" in relation_types or any(token in statements for token in ["iterative", "loop", "tree search", "backpropagate"]),
-        "has_tree": any(token in statements for token in ["tree", "branch", "prune", "search"]),
+        "has_tree": any(token in statements for token in ["tree", "prune", "tree search", "search tree"]),
+        "has_branch": any(token in statements for token in ["branch", "parallel head", "parallel output", "multi-head", "multihead"]),
         "has_multimodal": any(token in statements for token in ["multimodal", "multi-modal", "image", "video", "audio", "document"]),
         "has_retrieval": any(token in statements for token in ["retrieval", "retrieve", "index", "rag", "knowledge graph"]),
     }
@@ -229,9 +248,11 @@ def select_template(profiles: list[dict], review: dict, requested: str = "auto",
         reasons = [f"module_fit={module_fit:.2f}"]
         if template_id == "feedback" and features["has_loop"] and not features["has_tree"]:
             topology += 1.0; reasons.append("explicit feedback-loop topology")
+        if template_id == "branch" and features["has_branch"] and not features["has_loop"] and not features["has_tree"] and not features["has_multimodal"] and not features["has_retrieval"]:
+            topology += 1.0; reasons.append("shared-trunk parallel-branch topology")
         if template_id == "arbor" and features["has_tree"]:
             topology += 1.0; reasons.append("tree/branch topology")
-        if template_id == "linear" and not features["has_loop"] and not features["has_tree"] and not features["has_retrieval"] and 2 <= features["module_count"] <= 8:
+        if template_id == "linear" and not features["has_loop"] and not features["has_tree"] and not features["has_branch"] and not features["has_retrieval"] and 2 <= features["module_count"] <= 8:
             topology += 0.9; reasons.append("sequential stage count")
         if template_id == "tripanel" and features["has_retrieval"]:
             topology += 0.9; reasons.append("index/retrieval topology")
