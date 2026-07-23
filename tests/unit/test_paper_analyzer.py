@@ -7,7 +7,7 @@ import fitz
 
 from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
-from rfs.reference_text_extractor import _positive_ocr_setting
+from rfs.reference_text_extractor import _positive_ocr_setting, _rapidocr_detector_limit, run_rapidocr_detailed
 
 
 class PaperAnalyzerTests(unittest.TestCase):
@@ -386,6 +386,31 @@ class PaperAnalyzerTests(unittest.TestCase):
     def test_invalid_rapidocr_environment_setting_falls_back(self):
         with patch.dict("os.environ", {"RFS_RAPIDOCR_THREADS": "invalid"}, clear=False):
             self.assertEqual(_positive_ocr_setting(None, "RFS_RAPIDOCR_THREADS", 1), 1)
+
+    def test_rapidocr_detector_limit_is_bounded_and_overridable(self):
+        with patch.dict("os.environ", {"RFS_RAPIDOCR_DET_LIMIT": "384"}, clear=False):
+            self.assertEqual(_rapidocr_detector_limit(), 384)
+            self.assertEqual(_rapidocr_detector_limit(128), 256)
+            self.assertEqual(_rapidocr_detector_limit(4096), 2048)
+
+    def test_rapidocr_detailed_exposes_stage_timings(self):
+        fake_engine = lambda _path: ([([[0, 0], [10, 0], [10, 10], [0, 10]], "Method", 0.95)], [0.2, 0.0, 0.3])
+        local = __import__("rfs.reference_text_extractor", fromlist=["_RAPIDOCR_LOCAL"])._RAPIDOCR_LOCAL
+        prior = getattr(local, "engines", None)
+        local.engines = {(1, 6, 384): fake_engine}
+        try:
+            records, diagnostics = run_rapidocr_detailed("unused.png", "en", detector_limit=384)
+        finally:
+            if prior is None:
+                delattr(local, "engines")
+            else:
+                local.engines = prior
+
+        self.assertEqual(records[0]["text"], "Method")
+        self.assertEqual(diagnostics["detector_limit"], 384)
+        self.assertEqual(diagnostics["detection_seconds"], 0.2)
+        self.assertEqual(diagnostics["recognition_seconds"], 0.3)
+        self.assertEqual(diagnostics["inference_seconds"], 0.5)
 
     def test_ocr_priority_prefers_semantic_pages_before_coverage_anchors(self):
         pages = [{"page": index, "text": ""} for index in range(1, 11)]

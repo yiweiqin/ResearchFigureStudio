@@ -21,6 +21,12 @@ def _positive_ocr_setting(explicit: int | None, env_name: str, default: int) -> 
         return max(1, int(default))
 
 
+def _rapidocr_detector_limit(explicit: int | None = None) -> int:
+    """Return a bounded detector resize limit suitable for RapidOCR."""
+    value = _positive_ocr_setting(explicit, "RFS_RAPIDOCR_DET_LIMIT", 512)
+    return max(256, min(2048, value))
+
+
 def _round4(value: float) -> float:
     return round(float(value), 4)
 
@@ -189,25 +195,33 @@ def run_easyocr(image_path: str | Path, lang: str) -> list[dict[str, Any]]:
     return records
 
 
-def run_rapidocr(image_path: str | Path, lang: str, *, threads: int | None = None, batch_size: int | None = None) -> list[dict[str, Any]]:
+def run_rapidocr_detailed(
+    image_path: str | Path,
+    lang: str,
+    *,
+    threads: int | None = None,
+    batch_size: int | None = None,
+    detector_limit: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     del lang
     thread_count = _positive_ocr_setting(threads, "RFS_RAPIDOCR_THREADS", 1)
     recognition_batch = _positive_ocr_setting(batch_size, "RFS_RAPIDOCR_BATCH", 6)
+    detector_side_limit = _rapidocr_detector_limit(detector_limit)
     engines = getattr(_RAPIDOCR_LOCAL, "engines", None)
     if engines is None:
         engines = {}
         _RAPIDOCR_LOCAL.engines = engines
-    engine_key = (thread_count, recognition_batch)
+    engine_key = (thread_count, recognition_batch, detector_side_limit)
     if engine_key not in engines:
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
 
         engines[engine_key] = RapidOCR(
             intra_op_num_threads=thread_count,
             inter_op_num_threads=1,
-            det_limit_side_len=512,
+            det_limit_side_len=detector_side_limit,
             rec_batch_num=recognition_batch,
         )
-    result, _timings = engines[engine_key](str(image_path))
+    result, timings = engines[engine_key](str(image_path))
     records = []
     for item in result or []:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
@@ -216,6 +230,30 @@ def run_rapidocr(image_path: str | Path, lang: str, *, threads: int | None = Non
         text = str(item[1] or "").strip()
         if quad and text:
             records.append({"text": text, "confidence": float(item[2] or 0.0), "quad": quad})
+    timing_values = [float(value or 0.0) for value in (timings or [])]
+    while len(timing_values) < 3:
+        timing_values.append(0.0)
+    diagnostics = {
+        "detector_limit": detector_side_limit,
+        "thread_count": thread_count,
+        "recognition_batch": recognition_batch,
+        "detection_seconds": round(timing_values[0], 4),
+        "classification_seconds": round(timing_values[1], 4),
+        "recognition_seconds": round(timing_values[2], 4),
+        "inference_seconds": round(sum(timing_values[:3]), 4),
+        "region_count": len(records),
+    }
+    return records, diagnostics
+
+
+def run_rapidocr(image_path: str | Path, lang: str, *, threads: int | None = None, batch_size: int | None = None, detector_limit: int | None = None) -> list[dict[str, Any]]:
+    records, _diagnostics = run_rapidocr_detailed(
+        image_path,
+        lang,
+        threads=threads,
+        batch_size=batch_size,
+        detector_limit=detector_limit,
+    )
     return records
 
 

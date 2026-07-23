@@ -19,6 +19,7 @@ from .professional_repair import vlm_professional_repair_adapter
 from .presentations_qa import run_presentations_qa
 from .rebuild_vlm_adapters import build_rebuild_vlm_adapters
 from .rebuild_eval import evaluate_rebuild_vlm
+from .reference_text_extractor import _rapidocr_detector_limit
 from .utils import env_present, mask_secret
 from .validator import validate_output
 from .workflow import make_framework
@@ -84,6 +85,8 @@ def _doctor() -> dict:
             "worker_policy": "up to 3 page workers; 2 intra-op threads for a single page",
             "worker_override": os.getenv("RFS_OCR_WORKERS"),
             "thread_override": os.getenv("RFS_RAPIDOCR_THREADS"),
+            "detector_limit_override": os.getenv("RFS_RAPIDOCR_DET_LIMIT"),
+            "effective_detector_limit": _rapidocr_detector_limit(),
         },
         "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
         "wordninja": {"available": importlib.util.find_spec("wordninja") is not None, "purpose": "conservative English spacing repair for OCR lines"},

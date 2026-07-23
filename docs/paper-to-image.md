@@ -22,6 +22,17 @@ rfs benchmark fast-suite --root benchmarks --out output/benchmarks/unseen --case
 rfs benchmark fast-suite --root benchmarks --out output/benchmarks/nlp --case-id 109_transformer_encoder_decoder --case-id 110_bert_pretrain_finetune --case-id 111_rag_retrieval_generation --planner-mode vlm --json
 ```
 
+For OCR performance diagnosis, `extraction_report.json` and `benchmark pdf-suite` now record page rendering, text detection, orientation classification, text recognition, and post-processing time separately. RapidOCR defaults are deliberately conservative: detector limit `512`, recognition batch `6`, and up to three page workers. Advanced local experiments can override these without changing repository defaults:
+
+```powershell
+$env:RFS_RAPIDOCR_DET_LIMIT = "512"
+$env:RFS_RAPIDOCR_BATCH = "6"
+$env:RFS_OCR_WORKERS = "3"
+rfs benchmark pdf-suite --out output/benchmarks/pdf_profile --ocr-engine rapidocr --json
+```
+
+Lower detector limits are not assumed to be faster. On dense two-column scans, recognition usually dominates and smaller detector settings can have unstable latency; accept a change only after text agreement, section recovery, caption recovery, confidence, and wall-clock gates all pass.
+
 `fast_suite_report.json` records planning recall, forbidden content, document/contract cache hits, provider attempts and retries, failure categories, parser/semantic/total timings, readable-page ratio, evidence-page coverage, evidence character counts, maximum detected column count, multi-column page totals, OCR candidate/scheduled/completed totals, maximum OCR concurrency, and removed OCR margin-noise totals.
 The deterministic compiler can recover relations across adjacent PDF blocks, canonicalize evidence-backed VLM aliases, repair missing relation evidence, and ground or downgrade unsupported scalar claims. It also normalizes string entities plus `source_id`/`target_id`/`relation_type` variants, resolves a missing endpoint only when the relation label exactly identifies one declared entity, grounds short uppercase acronyms through exact token matches, and removes unresolved relations into explicit uncertainties. These repairs are paper-name agnostic and are covered by the NLP suite.
 

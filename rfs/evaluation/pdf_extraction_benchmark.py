@@ -141,6 +141,7 @@ def _run_case(
     write_json(case_dir / "extraction_report.json", parsed.get("extraction_report", {}))
     preview = _render_preview(fixture, case_dir / f"preview_page_{preview_page + 1}.png", preview_page)
     assertions = checks(parsed)
+    ocr_page_durations = parsed.get("extraction_report", {}).get("ocr_page_durations", [])
     result = {
         "case_id": case_id,
         "ok": all(item.get("passed") for item in assertions),
@@ -153,6 +154,11 @@ def _run_case(
         "figure_caption_count": parsed.get("extraction_report", {}).get("figure_caption_count"),
         "ocr_pages": parsed.get("extraction_report", {}).get("ocr_pages", []),
         "ocr_spacing_repair_count": parsed.get("extraction_report", {}).get("ocr_spacing_repair_count", 0),
+        "ocr_page_durations": ocr_page_durations,
+        "ocr_stage_seconds": {
+            name: round(sum(float(item.get(name) or 0.0) for item in ocr_page_durations), 4)
+            for name in ("render_seconds", "detection_seconds", "classification_seconds", "recognition_seconds", "postprocess_seconds", "inference_seconds")
+        },
         "assertions": assertions,
     }
     write_json(case_dir / "benchmark_result.json", result)
@@ -241,6 +247,10 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
         ))
 
     elapsed = [float(item.get("elapsed_seconds") or 0.0) for item in results]
+    ocr_stage_totals = {
+        name: round(sum(float(item.get("ocr_stage_seconds", {}).get(name) or 0.0) for item in results), 4)
+        for name in ("render_seconds", "detection_seconds", "classification_seconds", "recognition_seconds", "postprocess_seconds", "inference_seconds")
+    }
     report = {
         "summary": "Deterministic multi-layout PDF extraction stress suite completed.",
         "ok": all(item.get("ok") for item in results),
@@ -252,6 +262,7 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             "mean_elapsed_seconds": round(sum(elapsed) / max(1, len(elapsed)), 4),
             "p95_elapsed_seconds": _percentile(elapsed, 0.95),
             "ocr_case_count": sum(bool(item.get("ocr_pages")) for item in results),
+            "ocr_stage_seconds": ocr_stage_totals,
         },
         "cases": results,
     }

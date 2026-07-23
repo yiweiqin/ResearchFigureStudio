@@ -134,6 +134,7 @@ class PaperToImageTests(unittest.TestCase):
         self.assertIn("en_ready", models)
         self.assertIn("en_ch_ready", models)
         self.assertIn("allow_download", models)
+        self.assertIn("effective_detector_limit", report["pdf_tools"]["rapidocr"])
 
     def test_fast_framework_prompt_writes_contract_without_generation(self):
         with tempfile.TemporaryDirectory() as temp:

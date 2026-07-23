@@ -146,6 +146,16 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("ocr_spacing_repair_total", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
+    def test_pdf_stress_suite_reports_ocr_stage_timings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            result = run_pdf_extraction_stress_suite(Path(temp) / "pdf", ocr_engine="off")
+
+        self.assertIn("ocr_stage_seconds", result["aggregate"])
+        self.assertIn("recognition_seconds", result["aggregate"]["ocr_stage_seconds"])
+        adapter_case = next(item for item in result["cases"] if item["case_id"] == "mixed_scan_fixture_adapter")
+        self.assertIn("ocr_page_durations", adapter_case)
+        self.assertIn("render_seconds", adapter_case["ocr_stage_seconds"])
+
     def test_pdf_extraction_stress_suite_runs_deterministically_without_runtime_ocr(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_pdf_extraction_stress_suite(tmp, ocr_engine="off")

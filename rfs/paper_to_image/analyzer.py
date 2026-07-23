@@ -385,10 +385,10 @@ def _pdf_metadata(path: Path) -> dict[str, Any]:
         return {"page_count": None, "encrypted": None, "metadata": {}, "warning": "pypdf unavailable"}
 
 
-def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str]:
+def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | None, rapidocr_threads: int = 1) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     if adapter:
-        return list(adapter(image_path, lang) or []), "adapter"
-    from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
+        return list(adapter(image_path, lang) or []), "adapter", {}
+    from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr_detailed
 
     requested = engine
     if requested == "auto":
@@ -402,12 +402,13 @@ def _ocr_records(image_path: Path, engine: str, lang: str, adapter: Callable | N
             except Exception:
                 requested = "paddle"
     if requested == "rapidocr":
-        return run_rapidocr(image_path, lang, threads=rapidocr_threads), "rapidocr"
+        records, diagnostics = run_rapidocr_detailed(image_path, lang, threads=rapidocr_threads)
+        return records, "rapidocr", diagnostics
     if requested == "easyocr":
-        return run_easyocr(image_path, lang), "easyocr"
+        return run_easyocr(image_path, lang), "easyocr", {}
     if requested == "paddle":
-        return run_paddle_ocr(image_path, lang), "paddle"
-    return [], "off"
+        return run_paddle_ocr(image_path, lang), "paddle", {}
+    return [], "off", {}
 
 
 def _group_ocr_words(records: list[dict[str, Any]], image_width: float) -> list[dict[str, Any]]:
@@ -546,9 +547,12 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / f"page_{page_number:03d}.png"
             dpi = 72 if adapter is None and engine in {"auto", "easyocr", "rapidocr"} else 160
+            render_started = time.monotonic()
             pixmap = page.get_pixmap(dpi=dpi, alpha=False)
             pixmap.save(str(target))
-            records, used_engine = _ocr_records(target, engine, lang, adapter, rapidocr_threads=rapidocr_threads)
+            render_seconds = time.monotonic() - render_started
+            records, used_engine, engine_diagnostics = _ocr_records(target, engine, lang, adapter, rapidocr_threads=rapidocr_threads)
+            postprocess_started = time.monotonic()
             spacing_repairs = 0
             for record in records:
                 repaired, count = _repair_ocr_spacing(record.get("text", ""))
@@ -581,7 +585,13 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
                     "confidence": round(float(record.get("confidence") or 0.0), 4),
                     "parent_block": record.get("parent_block"),
                 })
-            return blocks, used_engine, None, {"margin_noise_removed": margin_noise_removed, "spacing_repairs": spacing_repairs}
+            return blocks, used_engine, None, {
+                "margin_noise_removed": margin_noise_removed,
+                "spacing_repairs": spacing_repairs,
+                "render_seconds": round(render_seconds, 4),
+                "postprocess_seconds": round(time.monotonic() - postprocess_started, 4),
+                **engine_diagnostics,
+            }
     except Exception as exc:
         return [], engine, str(exc), {"margin_noise_removed": 0, "spacing_repairs": 0}
 
