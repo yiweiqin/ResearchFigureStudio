@@ -18,7 +18,7 @@ A full-slide copy of the reference image is a hard failure even if pixel similar
 
 ### Generated PDF extraction stress suite
 
-`benchmark pdf-suite` creates deterministic native two-column, unnumbered-bold-section, rotated-page, and mixed native/scanned PDFs at runtime. It validates section boundaries, cross-column reading order, displayed coordinates, caption recovery, local OCR scheduling, and elapsed time. `--ocr-engine auto` adds a real installed-OCR probe after the deterministic adapter-backed tier.
+`benchmark pdf-suite` creates deterministic native two-column, unnumbered-bold-section, rotated-page, and mixed native/scanned PDFs at runtime. It validates section boundaries, cross-column reading order, displayed coordinates, caption recovery, local OCR scheduling, English OCR spacing recovery, and elapsed time. `--ocr-engine auto` adds a real installed-OCR probe after the deterministic adapter-backed tier.
 
 ## Commands
 

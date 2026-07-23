@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import fitz
 
-from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _section_coverage, _token_overlap_agreement, parse_paper
+from rfs.paper_to_image.analyzer import _assign_ocr_parent_blocks, _block_kind, _column_groups, _filter_ocr_margin_noise, _normalized_compare_text, _prioritize_ocr_candidates, _rapidocr_worker_count, _repair_ocr_spacing, _section_coverage, _token_overlap_agreement, parse_paper
 from rfs.paper_to_image.inspection import inspect_paper
 from rfs.reference_text_extractor import _positive_ocr_setting
 
@@ -191,6 +191,29 @@ class PaperAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(parsed["extraction_report"]["replacement_character_rate"], 0.0)
         self.assertEqual(parsed["extraction_report"]["mojibake_rate"], 0.0)
+
+    def test_ocr_spacing_repair_restores_scientific_english_boundaries(self):
+        mapping = {
+            "Thescannedencoderpassesevidencetothescanned": ["The", "scanned", "encoder", "passes", "evidence", "to", "the", "scanned"],
+            "architectureoverviewwithencoder": ["architecture", "overview", "with", "encoder"],
+            "decoderandoutput": ["decoder", "and", "output"],
+        }
+
+        repaired, count = _repair_ocr_spacing(
+            "2Method Thescannedencoderpassesevidencetothescanned decoderandoutput. Figure1:Scanned architectureoverviewwithencoder.",
+            splitter=lambda token: mapping.get(token, [token]),
+        )
+
+        self.assertIn("2 Method", repaired)
+        self.assertIn("The scanned encoder passes evidence to the scanned decoder and output", repaired)
+        self.assertIn("Figure 1: Scanned architecture overview with encoder", repaired)
+        self.assertGreaterEqual(count, 10)
+
+    def test_ocr_spacing_repair_preserves_cjk_acronyms_and_known_compounds(self):
+        source = "多模态 ImageBind BIDIRECTIONALTRANSFORMER multimodal representation"
+        repaired, _ = _repair_ocr_spacing(source, splitter=lambda token: ["multi", "modal"])
+
+        self.assertEqual(repaired, source)
 
     def test_low_text_page_uses_local_ocr_adapter(self):
         path = self._pdf(lambda _page: None)

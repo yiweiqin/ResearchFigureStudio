@@ -152,6 +152,7 @@ def _run_case(
         "section_count": parsed.get("extraction_report", {}).get("section_count"),
         "figure_caption_count": parsed.get("extraction_report", {}).get("figure_caption_count"),
         "ocr_pages": parsed.get("extraction_report", {}).get("ocr_pages", []),
+        "ocr_spacing_repair_count": parsed.get("extraction_report", {}).get("ocr_spacing_repair_count", 0),
         "assertions": assertions,
     }
     write_json(case_dir / "benchmark_result.json", result)
@@ -230,8 +231,10 @@ def run_pdf_extraction_stress_suite(out: str | Path, ocr_engine: str = "off") ->
             root,
             lambda parsed: [
                 _check("ocr_completed", 2 in parsed["extraction_report"].get("ocr_pages", []), parsed["extraction_report"].get("ocr_pages", []), "contains page 2"),
-                _check("method_token", "method" in parsed["pages"][1].get("text", "").casefold(), parsed["pages"][1].get("text", ""), "contains method"),
-                _check("encoder_token", "encoder" in parsed["pages"][1].get("text", "").casefold(), parsed["pages"][1].get("text", ""), "contains encoder"),
+                _check("method_spacing", "2 method" in parsed["pages"][1].get("text", "").casefold(), parsed["pages"][1].get("text", ""), "contains '2 Method'"),
+                _check("sentence_spacing", "scanned encoder passes evidence to the scanned decoder and output" in parsed["pages"][1].get("text", "").casefold(), parsed["pages"][1].get("text", ""), "spaced scientific sentence"),
+                _check("caption_spacing", "scanned architecture overview with encoder decoder and output" in parsed["pages"][1].get("text", "").casefold(), parsed["pages"][1].get("text", ""), "spaced caption"),
+                _check("repairs_recorded", parsed["extraction_report"].get("ocr_spacing_repair_count", 0) > 0, parsed["extraction_report"].get("ocr_spacing_repair_count", 0), ">0"),
             ],
             ocr_engine=ocr_engine,
             preview_page=1,

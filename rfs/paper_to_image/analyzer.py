@@ -25,6 +25,19 @@ SECTION_ALIASES = {
     "conclusion": ("conclusion", "conclusions", "discussion", "结论", "讨论", "总结", "結論", "考察", "まとめ", "결론", "논의", "요약"),
 }
 
+OCR_PROTECTED_WORDS = {
+    "acknowledgements", "architecture", "autoregressive", "bidirectional", "classification", "configuration",
+    "convolutional", "deterministic", "differentiable", "downstream", "embedding", "embeddings", "evaluation",
+    "experimental", "experiments", "finetuning", "implementation", "information", "initialization", "introduction",
+    "methodology", "multiframe", "multimodal", "optimization", "performance", "positional", "pretraining",
+    "probabilities", "representation", "representations", "retrieval", "scientific", "segmentation", "transformer",
+    "visualization",
+}
+OCR_SPLIT_ANCHORS = OCR_PROTECTED_WORDS | {
+    "and", "decoder", "encoder", "evidence", "for", "from", "generation", "into", "method", "model", "of",
+    "output", "retriever", "the", "to", "with",
+}
+
 
 def _clean(text: str) -> str:
     value = unicodedata.normalize("NFKC", str(text or "")).replace("\u00ad", "")
@@ -39,6 +52,43 @@ def _clean(text: str) -> str:
     value = re.sub(r"(?<=\w)-\s+(?=\w)", "", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()
+
+
+def _repair_ocr_spacing(text: str, splitter: Callable[[str], list[str]] | None = None) -> tuple[str, int]:
+    value = _clean(text)
+    repairs = 0
+    value, count = re.subn(r"\b(figure|fig\.|table)(?=\d)", r"\1 ", value, flags=re.IGNORECASE)
+    repairs += count
+    section_terms = "abstract|introduction|background|method|methods|approach|experiments|results|conclusion|discussion|references|appendix"
+    value, count = re.subn(rf"(?<!\w)(\d+(?:\.\d+)*)(?=(?:{section_terms})\b)", r"\1 ", value, flags=re.IGNORECASE)
+    repairs += count
+    value, count = re.subn(r"(?<=[,:;])(?=[A-Z])", " ", value)
+    repairs += count
+    if splitter is None:
+        try:
+            import wordninja
+
+            splitter = wordninja.split
+        except Exception:
+            splitter = None
+    if splitter is None:
+        return value, repairs
+
+    def split_token(match: re.Match[str]) -> str:
+        nonlocal repairs
+        token = match.group(0)
+        normalized = token.casefold()
+        if normalized in OCR_PROTECTED_WORDS or token.isupper() or (token[1:] != token[1:].lower() and token[1:] != token[1:].upper()):
+            return token
+        pieces = [str(piece) for piece in splitter(token) if str(piece)]
+        lowered = [piece.casefold() for piece in pieces]
+        if len(pieces) < 2 or any(len(piece) < 2 for piece in pieces) or not any(piece in OCR_SPLIT_ANCHORS for piece in lowered):
+            return token
+        repairs += len(pieces) - 1
+        return " ".join(pieces)
+
+    value = re.sub(r"[A-Za-z]{8,160}", split_token, value)
+    return _clean(value), repairs
 
 
 def _normalized_compare_text(text: str) -> str:
@@ -499,6 +549,11 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
             pixmap = page.get_pixmap(dpi=dpi, alpha=False)
             pixmap.save(str(target))
             records, used_engine = _ocr_records(target, engine, lang, adapter, rapidocr_threads=rapidocr_threads)
+            spacing_repairs = 0
+            for record in records:
+                repaired, count = _repair_ocr_spacing(record.get("text", ""))
+                record["text"] = repaired
+                spacing_repairs += count
             if used_engine != "rapidocr":
                 records = _group_ocr_words(records, float(pixmap.width))
             else:
@@ -526,9 +581,9 @@ def _ocr_page(page: Any, page_number: int, engine: str, lang: str, adapter: Call
                     "confidence": round(float(record.get("confidence") or 0.0), 4),
                     "parent_block": record.get("parent_block"),
                 })
-            return blocks, used_engine, None, {"margin_noise_removed": margin_noise_removed}
+            return blocks, used_engine, None, {"margin_noise_removed": margin_noise_removed, "spacing_repairs": spacing_repairs}
     except Exception as exc:
-        return [], engine, str(exc), {"margin_noise_removed": 0}
+        return [], engine, str(exc), {"margin_noise_removed": 0, "spacing_repairs": 0}
 
 
 def _rapidocr_worker_count(engine: str, adapter: Callable | None, page_count: int) -> int:
@@ -1146,6 +1201,7 @@ def _extraction_report(source: Path, pages: list[dict[str, Any]], index: dict[st
         "ocr_page_durations": details.get("ocr_page_durations", []),
         "ocr_worker_count": int(details.get("ocr_worker_count") or 1),
         "ocr_margin_noise_removed_count": sum(int(item.get("margin_noise_removed") or 0) for item in details.get("ocr_page_durations", [])),
+        "ocr_spacing_repair_count": sum(int(item.get("spacing_repairs") or 0) for item in details.get("ocr_page_durations", [])),
         "mean_ocr_confidence": mean_ocr_confidence,
         "short_ocr_block_ratio": short_ocr_block_ratio,
         "replacement_character_rate": round(sum(page.get("replacement_character_rate", 0.0) for page in pages) / max(1, len(pages)), 6),

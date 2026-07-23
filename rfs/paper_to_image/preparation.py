@@ -927,6 +927,7 @@ def prepare_paper_figure_contract(
             "ocr_completed_count": len(parsed["extraction_report"].get("ocr_pages", [])),
             "ocr_worker_count": parsed["extraction_report"].get("ocr_worker_count", 1),
             "ocr_margin_noise_removed_count": parsed["extraction_report"].get("ocr_margin_noise_removed_count", 0),
+            "ocr_spacing_repair_count": parsed["extraction_report"].get("ocr_spacing_repair_count", 0),
         },
         "provider": provider_summary,
         "contract_completion": {

@@ -22,7 +22,8 @@ dependencies = [
 ocr = [
   "rapidocr-onnxruntime",
   "paddleocr",
-  "easyocr"
+  "easyocr",
+  "wordninja"
 ]
 
 [project.scripts]

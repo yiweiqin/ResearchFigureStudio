@@ -86,6 +86,7 @@ def _doctor() -> dict:
             "thread_override": os.getenv("RFS_RAPIDOCR_THREADS"),
         },
         "paddleocr": {"available": importlib.util.find_spec("paddleocr") is not None},
+        "wordninja": {"available": importlib.util.find_spec("wordninja") is not None, "purpose": "conservative English spacing repair for OCR lines"},
         "fast_contract_cache": {"available": True, "path": str(Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio")))},
     }
     ok = all(item["available"] for item in deps.values())

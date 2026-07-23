@@ -143,6 +143,7 @@ class BenchmarkingTests(unittest.TestCase):
             self.assertIn("merged_heading_line_total", result["aggregate"])
             self.assertIn("figure_caption_total", result["aggregate"])
             self.assertIn("max_ocr_worker_count", result["aggregate"])
+            self.assertIn("ocr_spacing_repair_total", result["aggregate"])
             self.assertTrue((Path(tmp) / "fast_suite_report.json").exists())
 
     def test_pdf_extraction_stress_suite_runs_deterministically_without_runtime_ocr(self):
