@@ -32,6 +32,7 @@ def run_paper_to_image(
     domain_profile: str = "auto",
     template: str = "auto",
     repair_rounds: int = 1,
+    repair_source: str | Path | None = None,
     ocr_engine: str = "auto",
     ocr_lang: str = "en_ch",
     ocr_adapter=None,
@@ -130,6 +131,7 @@ def run_paper_to_image(
         "domain_profile": selected_domain["id"],
         "template": selected_template["template_id"],
         "repair_rounds": max(0, min(1, int(repair_rounds))),
+        "repair_source": str(Path(repair_source).resolve()) if repair_source else None,
         "ocr_engine": ocr_engine,
         "ocr_lang": ocr_lang,
     }
@@ -148,6 +150,7 @@ def run_paper_to_image(
         review_mode=review_mode,
         review_model=review_model,
         repair_rounds=repair_rounds,
+        repair_source=repair_source,
         ocr_engine=ocr_engine,
         ocr_lang=ocr_lang,
         ocr_adapter=ocr_adapter,
@@ -172,6 +175,7 @@ def run_paper_to_image(
         "engineering_preview": generation.get("engineering_preview"),
         "selected_candidate_id": generation["selected_candidate_id"],
         "selected_passed_all_checks": generation["selected_passed_all_checks"],
+        "repair_source": str(Path(repair_source).resolve()) if repair_source else None,
         "elapsed_seconds": elapsed,
         "pptx_generated": False,
         "artifacts": [

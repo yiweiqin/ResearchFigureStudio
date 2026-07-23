@@ -669,7 +669,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     labels = []
     terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
     labels.extend(str(value).strip() for value in terminology.values() if str(value).strip())
-    for field in ("inputs", "modules", "outputs", "innovations"):
+    for field in ("inputs", "modules", "outputs"):
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             if isinstance(item, dict) and _item_label(item):
                 labels.append(_item_label(item))

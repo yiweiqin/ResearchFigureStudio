@@ -9,6 +9,7 @@ from PIL import Image
 
 from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
+from .planner import collect_visible_labels
 
 
 def _normalize_text(value: str) -> str:
@@ -16,22 +17,7 @@ def _normalize_text(value: str) -> str:
 
 
 def required_labels(plan: dict) -> list[str]:
-    labels: list[str] = []
-    spec = plan.get("figure_specification", {})
-    terminology = spec.get("terminology", {})
-    if isinstance(terminology, dict):
-        labels.extend(str(value) for value in terminology.values())
-    elif isinstance(terminology, list):
-        labels.extend(str(item.get("visible_label") or item.get("statement") or "") for item in terminology if isinstance(item, dict))
-    for module in spec.get("modules", []):
-        if isinstance(module, dict):
-            labels.append(str(module.get("name") or module.get("statement") or ""))
-    result = []
-    for label in labels:
-        label = label.strip()
-        if label and len(label) <= 48 and label not in result:
-            result.append(label)
-    return result[:24]
+    return collect_visible_labels(plan.get("figure_specification", {}))
 
 
 def _local_ocr(path: Path, engine: str, lang: str, adapter: Callable | None = None) -> tuple[list[dict], str, str | None]:

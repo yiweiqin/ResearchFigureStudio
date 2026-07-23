@@ -173,6 +173,26 @@ The main outputs are `paper_review.json`, `review_coverage_report.json`,
 `image2_request_manifest.json`, four critic reports, the `candidates/`
 directory, and production-only `selected_image.png`.
 
+To repair a reviewed failed candidate without paying for a new initial candidate
+batch, reuse it as the starting image:
+
+```powershell
+rfs paper-to-image `
+  --paper "C:\path\paper.pdf" `
+  --out "output\paper_to_image_repair" `
+  --asset-mode image2 `
+  --review-mode vlm `
+  --repair-source "output\paper_to_image\candidates\candidate_01.png" `
+  --repair-rounds 1 `
+  --image-retries 0 `
+  --json
+```
+
+The reused source is rechecked against the current paper contract and Prompt.
+Only a failing source triggers one localized Image2 edit. This is useful after
+fixing a contract or Prompt bug because it preserves correct regions and avoids
+regenerating the initial image from scratch.
+
 Reference-conditioned production generation requires an Image2 edit endpoint.
 It defaults to `<API_BASE>/images/edits` and may be overridden with
 `RFS_IMAGE_EDIT_URL`. No API key value is written to output artifacts or logs.

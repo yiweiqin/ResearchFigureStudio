@@ -107,6 +107,28 @@ rfs paper-to-image `
   --json
 ```
 
+Resume a failed candidate with one localized repair instead of generating a new
+initial batch:
+
+```powershell
+rfs paper-to-image `
+  --paper "C:\path\paper.pdf" `
+  --out "output\paper_to_image_repair" `
+  --planner-mode vlm `
+  --asset-mode image2 `
+  --review-mode vlm `
+  --repair-source "output\paper_to_image\candidates\candidate_01.png" `
+  --repair-rounds 1 `
+  --image-retries 0 `
+  --ocr-engine off `
+  --json
+```
+
+`--repair-source` skips fresh initial candidate generation. The source is first
+reviewed against the current exact-label and scientific contract. If it fails,
+the best source is edited once and reviewed again. The request manifest marks
+the reused source separately from the real Image2 repair request.
+
 Never reuse a key that has appeared in chat, source control, an issue, or a terminal transcript. The command records only `api_key_present`; it never records a key value.
 
 ## Paper Review Contract

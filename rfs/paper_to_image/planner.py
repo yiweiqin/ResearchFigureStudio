@@ -505,6 +505,31 @@ def plan_paper_image(parsed: dict, preferences: dict, mode: str = "vlm", model: 
     return normalize_plan(_heuristic_plan(parsed, preferences, paper_review=paper_review), preferences), metadata
 
 
+def collect_visible_labels(spec: dict, limit: int = 24) -> list[str]:
+    labels: list[str] = []
+
+    def add(value: object) -> None:
+        if isinstance(value, dict):
+            value = value.get("visible_label") or value.get("name") or value.get("text") or value.get("statement")
+        label = str(value or "").strip()
+        if label and len(label) <= 64 and label not in labels:
+            labels.append(label)
+
+    for item in spec.get("required_labels", []) if isinstance(spec.get("required_labels"), list) else []:
+        add(item)
+    terminology = spec.get("terminology", {})
+    if isinstance(terminology, dict):
+        for value in terminology.values():
+            add(value)
+    elif isinstance(terminology, list):
+        for item in terminology:
+            add(item)
+    for field in ("inputs", "modules", "outputs"):
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            add(item)
+    return labels[: max(1, int(limit))]
+
+
 def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int = 1, selected_template: dict | None = None) -> str:
     spec = plan["figure_specification"]
     design = plan["design_plan"]
@@ -512,14 +537,8 @@ def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int =
     metaphors = plan["visual_metaphors"]
     style = plan["style_plan"]
     template = selected_template or {}
-    labels = []
-    terminology = spec.get("terminology", {})
-    if isinstance(terminology, dict):
-        labels.extend(str(value) for value in terminology.values())
-    for module in spec.get("modules", []):
-        if isinstance(module, dict):
-            labels.append(str(module.get("name") or ""))
-    labels = list(dict.fromkeys(label.strip() for label in labels if label.strip() and len(label.strip()) <= 48))[:24]
+    labels = collect_visible_labels(spec)
+    numbered_labels = "\n".join(f"{index}. {label}" for index, label in enumerate(labels, start=1))
     return f"""
 # Summary
 
@@ -551,6 +570,11 @@ Reference-derived content-free template contract:
 Exact visible label whitelist (render these exactly and do not invent alternatives):
 {json.dumps(labels, ensure_ascii=False)}
 
+Mandatory visible label checklist:
+{numbered_labels}
+
+Every checklist item must appear once as clearly readable text in the completed figure. An icon, symbol, equation variable, or unlabeled output card does not satisfy a checklist item. Reserve enough width for long labels and place each output label beside or inside its output node.
+
 Forbidden copied reference terms:
 {json.dumps(template.get('forbidden_copy_terms', []), ensure_ascii=False)}
 
@@ -566,6 +590,7 @@ Hard requirements:
 - Avoid commercial-poster styling, cyberpunk effects, unrelated robots, generic brains, and repeated dashboard cards.
 - Treat the supplied blueprint as a hard macro-layout guide, but replace all reference content with this paper's content.
 - Every visible scientific word must come from the exact label whitelist; do not paraphrase labels.
+- Render every mandatory visible label exactly once; never replace an output label with an icon-only node.
 - Keep separately named scientific components as separately editable nodes; do not collapse special tokens, embeddings, heads, inputs, or outputs into composite labels.
 - Include explicit input-boundary and output-boundary connectors.
 """.strip()

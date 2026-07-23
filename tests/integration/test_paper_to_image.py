@@ -13,8 +13,9 @@ from PIL import Image
 
 from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
-from rfs.paper_to_image.critics import review_candidate
+from rfs.paper_to_image.critics import required_labels, review_candidate
 from rfs.paper_to_image.generator import generate_and_select, native_image2_aspect_ratio
+from rfs.paper_to_image.planner import compile_image_prompt
 from rfs.paper_to_image.review import detect_domain_profile, validate_review_coverage
 from rfs.paper_to_image.templates import build_template_profiles, render_layout_blueprint, select_template
 
@@ -125,6 +126,27 @@ class PaperToImageTests(unittest.TestCase):
         self.assertEqual(native_image2_aspect_ratio("16:9"), "3:2")
         self.assertEqual(native_image2_aspect_ratio("9:16"), "2:3")
         self.assertEqual(native_image2_aspect_ratio("1:1"), "1:1")
+
+    def test_prompt_and_critic_share_complete_visible_label_contract(self):
+        plan = _plan()
+        spec = plan["figure_specification"]
+        spec.update({
+            "required_labels": ["Input Matrix", "Document Parser", "Final Answer"],
+            "inputs": [{"id": "input", "name": "Input Matrix"}],
+            "outputs": [{"id": "answer", "name": "Final Answer"}],
+            "innovations": [{"id": "grounding", "name": "Evidence Grounding"}],
+        })
+
+        labels = required_labels(plan)
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "16:9", "language": "English"})
+
+        self.assertEqual(labels[:3], ["Input Matrix", "Document Parser", "Final Answer"])
+        for label in ("Input Matrix", "Document Parser", "Final Answer"):
+            self.assertIn(label, labels)
+            self.assertIn(label, prompt)
+        self.assertNotIn("Evidence Grounding", labels)
+        self.assertIn("Evidence Grounding", prompt)
+        self.assertIn("never replace an output label with an icon-only node", prompt)
 
     def test_candidate_review_accepts_requested_ratio_when_image2_ignores_blueprint_ratio(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -344,6 +366,34 @@ class PaperToImageTests(unittest.TestCase):
             self.assertNotIn("secret-value", manifest_text)
             self.assertTrue(all(item["endpoint"].endswith("/images/edits") for item in manifest["requests"]))
 
+    @patch("rfs.paper_to_image.generator.requests.post")
+    def test_repair_source_skips_fresh_candidate_generation_when_source_passes(self, post):
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"API_BASE": "https://example.test/v1", "API_KEY": "secret-value"}, clear=False):
+            root = Path(temp)
+            blueprint = root / "blueprint.png"
+            source = root / "failed_candidate.png"
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            Image.new("RGB", (1536, 1024), "white").save(source)
+
+            result = generate_and_select(
+                _plan(),
+                {"aspect_ratio": "3:2", "language": "English"},
+                {"template_id": "linear", "forbidden_copy_terms": []},
+                blueprint,
+                root / "run",
+                asset_mode="image2",
+                candidates=3,
+                review_mode="vlm",
+                repair_rounds=1,
+                repair_source=source,
+                critic_adapter=_passing_critic,
+            )
+
+            post.assert_not_called()
+            self.assertEqual(result["requested_candidates"], 0)
+            self.assertEqual(result["selected_candidate_id"], "source_candidate")
+            self.assertTrue(Path(result["selected_image"]).exists())
+
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     def test_failed_candidates_get_one_repair(self, _post):
         calls = {"count": 0}
@@ -364,6 +414,9 @@ class PaperToImageTests(unittest.TestCase):
             result = generate_and_select(_plan(), {"aspect_ratio": "1.5:1", "language": "English"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=critic)
             self.assertEqual(result["repair_candidates"], 1)
             self.assertEqual(result["selected_candidate_id"], "repair_01")
+            repair = next(item for item in result["candidates"] if item["candidate_id"] == "repair_01")
+            self.assertIn("generation_seconds", repair["timings"])
+            self.assertIn("review_seconds", repair["timings"])
 
     @patch("rfs.paper_to_image.generator.requests.post", return_value=FakeResponse())
     @patch("rfs.paper_to_image.workflow.validate_review_coverage", return_value={"ok": True, "errors": [], "warnings": []})
