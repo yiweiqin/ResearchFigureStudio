@@ -192,6 +192,23 @@ it does not copy paper figures or invent labels. It reduces topology drift by
 making Image2 preserve an explicit scientific source of truth instead of
 inferring node mapping from empty placeholder boxes.
 
+Entity roles are part of that source of truth. Data sources, modalities,
+processing modules, innovations, and outputs are reviewed separately even when
+all their words are present. Explicit provenance text is normalized into a
+source-to-modality-to-method chain, and multiple named sources may be collapsed
+into one evidence-backed source group to avoid redundant nodes and crossed
+edges. Explicit internal/external evaluation boundaries and named paper methods
+or techniques are repaired deterministically when overview evidence states
+them.
+
+Image-2 candidates must enrich the semantic blueprint rather than merely
+restyling its boxes. Candidate review records `blueprint_enrichment_ratio` and
+`blueprint_mean_abs_difference`; production defaults require at least `0.08`
+changed-pixel enrichment. The VLM aesthetic review separately scores visual
+information density, mechanism visualization, and publication polish. Sparse
+text-only nodes therefore fail even when labels, arrows, spacing, and colors
+are otherwise correct.
+
 The same generic semantic plan can now bypass raster generation entirely:
 
 ```powershell
@@ -205,10 +222,9 @@ This writes `figure_program.json` and `editable_composition.pptx`. Nodes are
 native PowerPoint shapes with exact editable labels; multi-segment routes and
 feedback loops are native connectors created behind the nodes. The compiler
 also writes `semantic_ppt_report.json` and records every editable node and
-connector in `composition_quality_report.json`. A narrow evidence repair can
-attach an otherwise isolated dataset/source input to the same downstream
-module as sibling modalities only when the cited caption explicitly states the
-shared provenance (for example, modalities "from" that dataset).
+connector in `composition_quality_report.json`. The same provenance contract is
+used here, so data sources feed their declared modalities instead of appearing
+as peer sensor inputs.
 
 Before semantic layout, contract completion prefers true early model-overview
 figures over late scaling, timing, attention, or visualization figures. It also

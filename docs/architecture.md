@@ -56,12 +56,18 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 |---|---|
 | Scientific entities and exact labels | `paper_review.json`, `figure_specification.json` |
 | Scientific relations and evidence | Paper semantic contract |
+| Entity roles, provenance, and evaluation boundaries | Normalized evidence-backed contract completion |
 | Paper-to-image draft node and connector geometry | `layout_blueprint.json.semantic_plan` |
 | Direct paper-to-PPT node and connector geometry | `figure_program.json` compiled from the same semantic plan |
 | Layout, visual rhythm, palette, object style | Approved generated/user reference image |
 | Editable object geometry | `figure_program.json` |
 | PowerPoint rendering | `ppt_compiler.py` |
 | Production eligibility | Candidate, semantic, visual, and PPTX validation reports |
+
+The scientific contract cache is keyed by paper hash, planner model, compiler
+version, and scientific domain profile. Canvas ratio and display-language
+preferences are intentionally excluded because they are rendering concerns and
+must not produce competing scientific interpretations of the same paper.
 
 ## Stable workflow boundaries
 

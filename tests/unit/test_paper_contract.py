@@ -2,7 +2,7 @@ import re
 import unittest
 
 from rfs.paper_to_image.planner import validate_plan_grounding
-from rfs.paper_to_image.preparation import build_overlay_spec, expand_plan_evidence, normalize_figure_contract, synchronize_plan_to_contract
+from rfs.paper_to_image.preparation import _fast_cache_path, build_overlay_spec, expand_plan_evidence, normalize_figure_contract, synchronize_plan_to_contract
 from rfs.paper_to_image.contract_completion import _overview_candidates
 
 
@@ -1370,8 +1370,68 @@ class PaperContractTests(unittest.TestCase):
         self.assertNotIn("Text Encoder", ids)
         self.assertNotIn("Contrastive Learning", ids)
 
-    def test_isolated_dataset_input_is_connected_when_caption_explicitly_supplies_sibling_modalities(self):
-        caption = "Figure 1: Stage one constructs RETFound by means of SSL, using CFP and OCT from MEH-MIDAS and public datasets."
+    def test_dataset_sources_are_separated_from_modalities_when_caption_states_provenance(self):
+        caption = "Figure 1: Stage one constructs RETFound by means of SSL, using CFP and OCT from MEH-MIDAS and public datasets. Stage two adapts RETFound by supervised fine-tuning for internal and external evaluation."
+        parsed = {
+            "page_count": 4,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [
+                {"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E0002", "page": 3, "kind": "paragraph", "text": "Models were adapted with labelled training data and internally evaluated on hold-out test data from the MEH-AlzEye dataset.", "section_hint": "Evaluation", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "linear",
+                "inputs": [
+                    {"id": "cfp", "name": "CFP", "evidence_ids": ["E0001"]},
+                    {"id": "oct", "name": "OCT", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [
+                    {"id": "ssl", "name": "SSL", "evidence_ids": ["E0001"]},
+                    {"id": "supervised", "name": "supervised fine-tuning", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source": "cfp", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "oct", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "ssl", "target": "supervised", "type": "data_flow", "evidence_ids": ["E0001"]},
+                ],
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+        by_name = {item["name"]: item for item in spec["inputs"]}
+        source_id = by_name["MEH-MIDAS + public datasets"]["id"]
+
+        self.assertEqual(by_name["MEH-MIDAS + public datasets"]["role"], "data_source")
+        self.assertEqual(by_name["CFP"]["role"], "input modality")
+        self.assertEqual(by_name["OCT"]["role"], "input modality")
+        self.assertIn((source_id, "cfp"), pairs)
+        self.assertIn((source_id, "oct"), pairs)
+        self.assertNotIn((source_id, "ssl"), pairs)
+        self.assertIn(source_id, plan["contract_completion_report"]["added_data_sources"])
+        self.assertNotIn("MEH-MIDAS", by_name)
+        self.assertNotIn("public datasets", by_name)
+        self.assertNotIn("MEH-AlzEye dataset", by_name)
+        output_names = {item["name"]: item["id"] for item in spec["outputs"]}
+        self.assertIn(("supervised", output_names["internal evaluation"]), pairs)
+        self.assertIn(("supervised", output_names["external evaluation"]), pairs)
+
+    def test_fast_contract_cache_is_scoped_by_scientific_domain_not_visual_preferences(self):
+        parsed = {"source_sha256": "abc123"}
+
+        first = _fast_cache_path(parsed, "planner-model", "ai-ml-method")
+        second = _fast_cache_path(parsed, "planner-model", "ai-ml-method")
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, _fast_cache_path(parsed, "planner-model", "empirical-science"))
+
+    def test_generic_foundation_model_label_is_replaced_by_explicit_paper_name(self):
+        caption = "Figure 1: Schematic of development and evaluation of the foundation models (RETFound)."
         parsed = {
             "page_count": 4,
             "document_index": {"figures": [{"page": 2, "caption": caption}]},
@@ -1381,26 +1441,45 @@ class PaperContractTests(unittest.TestCase):
             "paper_summary": {"unknowns": []},
             "figure_specification": {
                 "topology": "linear",
-                "inputs": [
-                    {"id": "cfp", "name": "CFP", "evidence_ids": ["E0001"]},
-                    {"id": "oct", "name": "OCT", "evidence_ids": ["E0001"]},
-                    {"id": "meh", "name": "MEH-MIDAS", "evidence_ids": ["E0001"]},
-                ],
-                "modules": [{"id": "ssl", "name": "SSL", "evidence_ids": ["E0001"]}],
+                "inputs": [],
+                "modules": [{"id": "model", "name": "foundation model", "role": "module", "evidence_ids": ["E0001"]}],
                 "outputs": [],
                 "innovations": [],
-                "relations": [
-                    {"source": "cfp", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
-                    {"source": "oct", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
-                ],
+                "relations": [],
+                "terminology": {"RETFound": "foundation model"},
             },
         }
 
         spec = normalize_figure_contract(plan, parsed)
-        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
 
-        self.assertIn(("meh", "ssl"), pairs)
-        self.assertIn("meh->ssl", plan["contract_completion_report"]["repaired_isolated_inputs"])
+        self.assertEqual(spec["modules"][0]["name"], "RETFound")
+        self.assertEqual(spec["terminology"], {"RETFound": "RETFound"})
+        self.assertIn("foundation model->RETFound", plan["contract_completion_report"]["repaired_generic_named_modules"])
+
+    def test_explicit_named_ssl_technique_is_restored_as_required_innovation(self):
+        parsed = {
+            "page_count": 4,
+            "document_index": {"figures": []},
+            "evidence": [{"id": "E0001", "page": 2, "kind": "paragraph", "text": "We use an advanced SSL technique (masked autoencoder 15) on retinal images.", "section_hint": "Method", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "linear",
+                "inputs": [],
+                "modules": [{"id": "ssl", "name": "SSL", "role": "training_objective", "evidence_ids": ["E0001"]}],
+                "outputs": [],
+                "innovations": [],
+                "relations": [],
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertEqual(spec["innovations"][0]["name"], "masked autoencoder")
+        self.assertTrue(spec["innovations"][0]["visible_label_required"])
+        self.assertTrue(spec["innovations"][0]["must_appear_in_figure"])
+        self.assertTrue(plan["contract_completion_report"]["added_explicit_named_techniques"])
 
     def test_generic_completion_recovers_retrieval_conditioned_generation(self):
         caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."

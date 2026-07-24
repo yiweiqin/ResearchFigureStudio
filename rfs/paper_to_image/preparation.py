@@ -964,66 +964,343 @@ def _clear_unverbatim_relation_labels(spec: dict[str, Any], parsed: dict[str, An
     return removed
 
 
-def _repair_isolated_input_relations(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
-    """Attach a grounded source input to a shared downstream module.
+def _repair_isolated_input_relations(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, list[str]]:
+    """Recover explicit data-source -> modality provenance from overview text.
 
-    Planners sometimes extract a dataset/source label as an input but omit its
-    edge while correctly connecting sibling modalities from the same caption.
-    This repair is intentionally narrow: the isolated label must appear in the
-    same cited evidence as an existing input-to-module edge, and the evidence
-    must explicitly describe data provenance (for example, "images from X").
+    A common planner error is to flatten ``CFP and OCT from MEH-MIDAS and
+    public datasets`` into three peer inputs.  That preserves all words while
+    changing the scientific meaning.  This repair only fires for an explicit
+    ``using/with ... from ...`` clause in cited evidence.  It reclassifies the
+    right-hand entities as data sources, creates a missing generic dataset
+    source when it is named verbatim, and connects sources to the left-hand
+    modalities before the existing modality-to-method flow.
     """
     inputs = [item for item in spec.get("inputs", []) if isinstance(item, dict) and item.get("id")]
-    module_ids = {str(item.get("id")) for item in spec.get("modules", []) if isinstance(item, dict) and item.get("id")}
     relations = spec.get("relations", []) if isinstance(spec.get("relations"), list) else []
-    connected = {
-        str(endpoint)
-        for relation in relations if isinstance(relation, dict)
-        for endpoint in (relation.get("source"), relation.get("target"))
-        if endpoint
+    by_normalized = {_normalized_label(_item_label(item)): item for item in inputs if _normalized_label(_item_label(item))}
+    repaired: list[str] = []
+    added_sources: list[str] = []
+    reclassified: list[str] = []
+    removed_shortcuts: list[str] = []
+    removed_orphan_sources: list[str] = []
+    collapsed_source_entities: list[str] = []
+    existing_pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+    provenance_pattern = re.compile(r"\b(?:using|uses?|with)\s+(.{1,140}?)\s+from\s+(.{1,140}?)(?=[.;]|\bstage\s+(?:two|2)\b|$)", re.IGNORECASE)
+    source_term_pattern = re.compile(r"\b(?:datasets?|data|corpus|corpora|cohort|database|registry|biobank|repository)\b", re.IGNORECASE)
+
+    for evidence in parsed.get("evidence", []):
+        if not isinstance(evidence, dict) or not evidence.get("id"):
+            continue
+        text = str(evidence.get("text") or "")
+        match = provenance_pattern.search(text)
+        if not match:
+            continue
+        modality_phrase, source_phrase = match.groups()
+        normalized_modality_phrase = _normalized_label(modality_phrase)
+        normalized_source_phrase = _normalized_label(source_phrase)
+        modalities = [
+            item for item in inputs
+            if _normalized_label(_item_label(item))
+            and _normalized_label(_item_label(item)) in normalized_modality_phrase
+        ]
+        if not modalities:
+            continue
+        sources = [
+            item for item in inputs
+            if _normalized_label(_item_label(item))
+            and _normalized_label(_item_label(item)) in normalized_source_phrase
+        ]
+        component_norms: list[str] = []
+        component_labels: list[str] = []
+        for raw_chunk in re.split(r"\s*(?:,|\band\b|\+)\s*", source_phrase, flags=re.IGNORECASE):
+            chunk = re.sub(r"^(?:the|a|an)\s+", "", raw_chunk.strip(" ()"), flags=re.IGNORECASE).strip()
+            normalized_chunk = _normalized_label(chunk)
+            if not chunk or not normalized_chunk:
+                continue
+            component_norms.append(normalized_chunk)
+            component_labels.append(chunk)
+            exact_existing = by_normalized.get(normalized_chunk)
+            if exact_existing:
+                if exact_existing not in sources:
+                    sources.append(exact_existing)
+                continue
+            acronym_source = bool(re.fullmatch(r"[A-Z][A-Z0-9-]{2,}", chunk))
+            if (not source_term_pattern.search(chunk) and not acronym_source) or len(chunk) > 50:
+                continue
+            source = {
+                "id": _stable_id("source", chunk, len(inputs)),
+                "name": chunk,
+                "role": "data_source",
+                "evidence_ids": [str(evidence["id"])],
+            }
+            inputs.append(source)
+            spec.setdefault("inputs", []).append(source)
+            by_normalized[normalized_chunk] = source
+            sources.append(source)
+            added_sources.append(str(source["id"]))
+        component_norms = list(dict.fromkeys(component_norms))
+        if len(component_norms) >= 2:
+            composite = next(
+                (
+                    item for item in inputs
+                    if isinstance(item, dict)
+                    and _normalized_label(_item_label(item)) not in component_norms
+                    and all(value in _normalized_label(_item_label(item)) for value in component_norms)
+                ),
+                None,
+            )
+            if not composite:
+                composite_label = " + ".join(component_labels)
+                composite = {
+                    "id": _stable_id("source", composite_label, len(inputs)),
+                    "name": composite_label,
+                    "role": "data_source",
+                    "evidence_ids": [str(evidence["id"])],
+                }
+                inputs.append(composite)
+                spec.setdefault("inputs", []).append(composite)
+                by_normalized[_normalized_label(composite_label)] = composite
+                added_sources.append(str(composite["id"]))
+            component_ids = {
+                str(item.get("id"))
+                for item in inputs
+                if isinstance(item, dict) and _normalized_label(_item_label(item)) in component_norms
+            }
+            if component_ids:
+                collapsed_source_entities.extend(sorted(component_ids))
+                inputs = [item for item in inputs if str(item.get("id")) not in component_ids]
+                spec["inputs"] = [item for item in spec.get("inputs", []) if not (isinstance(item, dict) and str(item.get("id")) in component_ids)]
+                relations = [
+                    item for item in relations
+                    if not (
+                        isinstance(item, dict)
+                        and (str(item.get("source")) in component_ids or str(item.get("target")) in component_ids)
+                    )
+                ]
+                existing_pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+                added_sources = [value for value in added_sources if value not in component_ids]
+                for value in component_norms:
+                    by_normalized.pop(value, None)
+            sources = [composite]
+        if not sources:
+            continue
+
+        evidence_id = str(evidence["id"])
+        modality_ids = {str(item.get("id")) for item in modalities}
+        source_ids = {str(item.get("id")) for item in sources}
+        downstream_targets = {
+            str(relation.get("target"))
+            for relation in relations
+            if isinstance(relation, dict) and str(relation.get("source")) in modality_ids
+        }
+        kept_relations = []
+        for relation in relations:
+            if not isinstance(relation, dict):
+                kept_relations.append(relation)
+                continue
+            pair = (str(relation.get("source")), str(relation.get("target")))
+            if pair[0] in source_ids and pair[1] in downstream_targets:
+                removed_shortcuts.append(f"{pair[0]}->{pair[1]}")
+                existing_pairs.discard(pair)
+                continue
+            kept_relations.append(relation)
+        relations = kept_relations
+
+        for modality in modalities:
+            if str(modality.get("role") or "").casefold() != "input modality":
+                modality["role"] = "input modality"
+                reclassified.append(str(modality.get("id")))
+        for source in sources:
+            if str(source.get("role") or "").casefold() != "data_source":
+                source["role"] = "data_source"
+                reclassified.append(str(source.get("id")))
+            source["evidence_ids"] = list(dict.fromkeys([*source.get("evidence_ids", []), evidence_id]))
+            for modality in modalities:
+                pair = (str(source.get("id")), str(modality.get("id")))
+                if pair in existing_pairs:
+                    continue
+                relations.append({
+                    "source": pair[0],
+                    "target": pair[1],
+                    "type": "data_source",
+                    "label": "",
+                    "evidence_ids": [evidence_id],
+                })
+                existing_pairs.add(pair)
+                repaired.append(f"{pair[0]}->{pair[1]}")
+    connected_sources = {
+        str(item.get("source"))
+        for item in relations
+        if isinstance(item, dict) and str(item.get("type") or "").casefold() == "data_source"
+    }
+    retained_inputs = []
+    for item in spec.get("inputs", []) if isinstance(spec.get("inputs"), list) else []:
+        item_id = str(item.get("id") or "") if isinstance(item, dict) else ""
+        role = str(item.get("role") or "").casefold() if isinstance(item, dict) else ""
+        if item_id.startswith("source_") and role == "data_source" and item_id not in connected_sources:
+            removed_orphan_sources.append(item_id)
+            continue
+        retained_inputs.append(item)
+    spec["inputs"] = retained_inputs
+    spec["relations"] = relations
+    return {
+        "repaired_relations": list(dict.fromkeys(repaired)),
+        "added_source_entities": list(dict.fromkeys(added_sources)),
+        "reclassified_entities": list(dict.fromkeys(reclassified)),
+        "removed_source_shortcuts": list(dict.fromkeys(removed_shortcuts)),
+        "removed_orphan_sources": list(dict.fromkeys(removed_orphan_sources)),
+        "collapsed_source_entities": list(dict.fromkeys(collapsed_source_entities)),
+    }
+
+
+def _repair_explicit_evaluation_outputs(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, list[str]]:
+    modules = [item for item in spec.get("modules", []) if isinstance(item, dict) and item.get("id")]
+    if not modules:
+        return {"added_outputs": [], "added_relations": []}
+    source = next(
+        (
+            item for item in reversed(modules)
+            if any(term in _item_label(item).casefold() for term in ("supervised", "fine-tun", "adapt"))
+        ),
+        modules[-1],
+    )
+    outputs = spec.setdefault("outputs", [])
+    by_normalized = {
+        _normalized_label(_item_label(item)): item
+        for item in outputs if isinstance(item, dict) and _normalized_label(_item_label(item))
+    }
+    relations = spec.setdefault("relations", [])
+    existing_pairs = {(str(item.get("source")), str(item.get("target"))) for item in relations if isinstance(item, dict)}
+    added_outputs: list[str] = []
+    added_relations: list[str] = []
+    for evidence in parsed.get("evidence", []):
+        if not isinstance(evidence, dict) or not evidence.get("id"):
+            continue
+        text = str(evidence.get("text") or "")
+        section = str(evidence.get("section_hint") or "").casefold()
+        if str(evidence.get("kind") or "").casefold() != "caption" and "figure" not in section:
+            continue
+        if not re.search(r"\binternal\s+and\s+external\s+evaluation\b", text, re.IGNORECASE):
+            continue
+        evidence_id = str(evidence["id"])
+        for label in ("internal evaluation", "external evaluation"):
+            normalized = _normalized_label(label)
+            output = by_normalized.get(normalized)
+            if not output:
+                output = {
+                    "id": _stable_id("output", label, len(outputs)),
+                    "name": label,
+                    "role": "evaluation output",
+                    "evidence_ids": [evidence_id],
+                }
+                outputs.append(output)
+                by_normalized[normalized] = output
+                added_outputs.append(str(output["id"]))
+            else:
+                output["evidence_ids"] = list(dict.fromkeys([*output.get("evidence_ids", []), evidence_id]))
+            pair = (str(source.get("id")), str(output.get("id")))
+            if pair not in existing_pairs:
+                relations.append({"source": pair[0], "target": pair[1], "type": "evaluation", "label": "", "evidence_ids": [evidence_id]})
+                existing_pairs.add(pair)
+                added_relations.append(f"{pair[0]}->{pair[1]}")
+        break
+    return {"added_outputs": added_outputs, "added_relations": added_relations}
+
+
+def _repair_generic_named_modules(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    generic_names = {
+        "model", "foundationmodel", "proposedmodel", "ourmodel", "method", "proposedmethod", "framework", "proposedframework",
     }
     evidence_by_id = {
-        str(item.get("id")): str(item.get("text") or "")
+        str(item.get("id")): item
         for item in parsed.get("evidence", [])
         if isinstance(item, dict) and item.get("id")
     }
-    input_ids = {str(item.get("id")) for item in inputs}
-    sibling_edges = [
-        relation for relation in relations
-        if isinstance(relation, dict)
-        and str(relation.get("source")) in input_ids
-        and str(relation.get("target")) in module_ids
-    ]
     repaired: list[str] = []
-    for item in inputs:
-        source_id = str(item.get("id"))
-        if source_id in connected:
+    patterns = (
+        re.compile(r"\bfoundation models?\s*\(\s*([A-Za-z][A-Za-z0-9_-]{2,40})\s*\)", re.IGNORECASE),
+        re.compile(r"\b(?:model|method|framework)\s+(?:called|named|denoted as)\s+([A-Za-z][A-Za-z0-9_-]{2,40})\b", re.IGNORECASE),
+    )
+    for item in spec.get("modules", []) if isinstance(spec.get("modules"), list) else []:
+        if not isinstance(item, dict) or _normalized_label(_item_label(item)) not in generic_names:
             continue
-        label = _item_label(item).strip()
-        if not label:
-            continue
-        item_evidence = {str(value) for value in item.get("evidence_ids", []) if value}
-        for relation in sibling_edges:
-            shared_ids = item_evidence & {str(value) for value in relation.get("evidence_ids", []) if value}
-            if not shared_ids:
+        cited = [evidence_by_id.get(str(value)) for value in item.get("evidence_ids", [])]
+        candidates = [record for record in cited if record]
+        candidates.extend(
+            record for record in parsed.get("evidence", [])
+            if isinstance(record, dict)
+            and record not in candidates
+            and (str(record.get("kind") or "").casefold() == "caption" or int(record.get("page") or 9999) <= 3)
+        )
+        replacement = None
+        replacement_evidence = None
+        for record in candidates:
+            text = str(record.get("text") or "")
+            match = next((pattern.search(text) for pattern in patterns if pattern.search(text)), None)
+            if not match:
                 continue
-            cited_text = " ".join(evidence_by_id.get(value, "") for value in shared_ids)
-            label_pattern = re.escape(label).replace(r"\ ", r"\s+")
-            explicit_source = bool(re.search(rf"\b(?:from|using|uses?|sourced?\s+from)\b[^.;:]{{0,120}}{label_pattern}", cited_text, re.IGNORECASE))
-            if not explicit_source:
+            candidate = match.group(1).strip()
+            if _normalized_label(candidate) in {"ssl", "cnn", "transformer", "network"}:
                 continue
-            target_id = str(relation.get("target"))
-            relations.append({
-                "source": source_id,
-                "target": target_id,
-                "type": "data_flow",
-                "label": "",
-                "evidence_ids": sorted(shared_ids),
-            })
-            connected.add(source_id)
-            repaired.append(f"{source_id}->{target_id}")
+            replacement = candidate
+            replacement_evidence = str(record.get("id") or "")
             break
-    spec["relations"] = relations
+        if not replacement:
+            continue
+        old_label = _item_label(item)
+        item["name"] = replacement
+        terminology = spec.get("terminology") if isinstance(spec.get("terminology"), dict) else {}
+        for key, value in list(terminology.items()):
+            if _normalized_label(value) == _normalized_label(old_label) and _normalized_label(key) == _normalized_label(replacement):
+                terminology[key] = replacement
+            elif _normalized_label(key) == _normalized_label(old_label):
+                terminology.pop(key, None)
+                terminology[replacement] = replacement
+        if replacement_evidence:
+            item["evidence_ids"] = list(dict.fromkeys([*item.get("evidence_ids", []), replacement_evidence]))
+        repaired.append(f"{old_label}->{replacement}")
+    return repaired
+
+
+def _repair_explicit_named_techniques(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    existing = {
+        _normalized_label(_item_label(item)): item
+        for item in spec.get("innovations", []) if isinstance(item, dict) and _normalized_label(_item_label(item))
+    }
+    modules = [item for item in spec.get("modules", []) if isinstance(item, dict) and item.get("id")]
+    ssl_module = next((item for item in modules if _normalized_label(_item_label(item)) in {"ssl", "selfsupervisedlearning", "sslpretraining"}), None)
+    if not ssl_module:
+        return []
+    repaired: list[str] = []
+    pattern = re.compile(r"\b(?:ssl\s+)?(?:technique|method|approach)\s*\(\s*([A-Za-z][A-Za-z -]{2,50}?)\s*(?:\d+)?\s*\)", re.IGNORECASE)
+    for evidence in parsed.get("evidence", []):
+        if not isinstance(evidence, dict) or not evidence.get("id"):
+            continue
+        match = pattern.search(str(evidence.get("text") or ""))
+        if not match:
+            continue
+        label = re.sub(r"\s+", " ", match.group(1)).strip()
+        normalized = _normalized_label(label)
+        if not normalized or normalized in {"ssl", "learning", "training"}:
+            continue
+        innovation = existing.get(normalized)
+        if innovation:
+            innovation["evidence_ids"] = list(dict.fromkeys([*innovation.get("evidence_ids", []), str(evidence["id"])]))
+            innovation["must_appear_in_figure"] = True
+            innovation["visible_label_required"] = True
+            continue
+        innovation = {
+            "id": _stable_id("innovation", label, len(existing)),
+            "name": label,
+            "role": f"technique used by {_item_label(ssl_module)}",
+            "evidence_ids": [str(evidence["id"])],
+            "must_appear_in_figure": True,
+            "visible_label_required": True,
+        }
+        spec.setdefault("innovations", []).append(innovation)
+        existing[normalized] = innovation
+        repaired.append(str(innovation["id"]))
+        break
     return repaired
 
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
@@ -1067,7 +1344,19 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     completion_report["removed_duplicate_relations"] = endpoint_report["removed_duplicates"]
     completion_report["removed_unresolved_relations"] = endpoint_report["removed_unresolved"]
     completion_report["removed_self_relations"] = endpoint_report["removed_self_relations"]
-    completion_report["repaired_isolated_inputs"] = _repair_isolated_input_relations(spec, parsed)
+    provenance_report = _repair_isolated_input_relations(spec, parsed)
+    completion_report["repaired_isolated_inputs"] = provenance_report["repaired_relations"]
+    completion_report["repaired_data_provenance"] = provenance_report["repaired_relations"]
+    completion_report["added_data_sources"] = provenance_report["added_source_entities"]
+    completion_report["reclassified_data_entities"] = provenance_report["reclassified_entities"]
+    completion_report["removed_data_source_shortcuts"] = provenance_report["removed_source_shortcuts"]
+    completion_report["removed_orphan_data_sources"] = provenance_report["removed_orphan_sources"]
+    completion_report["collapsed_data_source_entities"] = provenance_report["collapsed_source_entities"]
+    evaluation_report = _repair_explicit_evaluation_outputs(spec, parsed)
+    completion_report["added_explicit_evaluation_outputs"] = evaluation_report["added_outputs"]
+    completion_report["added_explicit_evaluation_relations"] = evaluation_report["added_relations"]
+    completion_report["repaired_generic_named_modules"] = _repair_generic_named_modules(spec, parsed)
+    completion_report["added_explicit_named_techniques"] = _repair_explicit_named_techniques(spec, parsed)
     if endpoint_report["repaired"]:
         secondary_completion = augment_contract_from_evidence(spec, parsed)
         for key in ("added_entities", "upgraded_entities", "adopted_entities", "added_relations", "repaired_relations", "grounded_entities"):
@@ -1470,8 +1759,8 @@ def _paper_review_from_plan(plan: dict[str, Any], selected_domain: dict[str, Any
     }
 
 
-def _fast_cache_path(parsed: dict[str, Any], model: str, preferences: dict[str, Any]) -> Path:
-    signature = json.dumps({"version": 29, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "aspect_ratio": preferences.get("aspect_ratio"), "language": preferences.get("language")}, sort_keys=True).encode("utf-8")
+def _fast_cache_path(parsed: dict[str, Any], model: str, domain_profile: str) -> Path:
+    signature = json.dumps({"version": 30, "document_cache_version": DOCUMENT_CACHE_VERSION, "model": model, "domain_profile": domain_profile}, sort_keys=True).encode("utf-8")
     variant = hashlib.sha256(signature).hexdigest()[:16]
     root = Path(os.getenv("RFS_CACHE_DIR", "").strip() or (Path.home() / ".cache" / "research-figure-studio"))
     return root / "paper_contracts" / str(parsed.get("source_sha256")) / variant / "fast_plan.json"
@@ -1559,7 +1848,7 @@ def prepare_paper_figure_contract(
     if fast_mode:
         remaining = max(0, int(provider_deadline_at - time.monotonic()))
         effective_mode = planner_mode if remaining >= 25 else "heuristic"
-        cache_path = _fast_cache_path(parsed, str(planner_model or ""), preferences)
+        cache_path = _fast_cache_path(parsed, str(planner_model or ""), str(selected_domain.get("id") or "general"))
         if cache_path.exists() and effective_mode == "vlm" and _semantic_cache_safe(parsed):
             plan = read_json(cache_path)
             planner_metadata = {"requested_mode": "vlm", "mode": "vlm", "model": planner_model, "warning": None, "prompt": "", "cached": True}

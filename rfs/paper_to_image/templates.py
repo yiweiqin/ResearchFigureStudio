@@ -608,7 +608,9 @@ def render_layout_blueprint(
             )
             field = str(node.get("field") or "modules")
             role = str(node.get("role") or "").casefold()
-            if field == "inputs":
+            if "data_source" in role or role in {"dataset", "source dataset"}:
+                fill, outline = (248, 244, 236), (137, 101, 56)
+            elif field == "inputs":
                 fill, outline = (237, 245, 252), (42, 99, 161)
             elif field == "outputs":
                 fill, outline = (242, 248, 243), (66, 126, 80)

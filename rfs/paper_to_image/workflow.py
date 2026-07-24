@@ -39,6 +39,7 @@ def run_paper_to_image(
     critic_adapter=None,
     topology_adapter=None,
     resume_candidates: bool = False,
+    require_visual_enrichment: bool = True,
 ) -> dict:
     started = time.time()
     effective_planner_model = planner_model or os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
@@ -173,6 +174,7 @@ def run_paper_to_image(
         critic_adapter=critic_adapter,
         topology_adapter=topology_adapter,
         resume_candidates=resume_candidates,
+        require_visual_enrichment=require_visual_enrichment,
     )
     elapsed = round(time.time() - started, 3)
     run_summary: dict[str, Any] = {

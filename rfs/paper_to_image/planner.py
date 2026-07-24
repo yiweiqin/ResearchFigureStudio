@@ -530,6 +530,9 @@ def collect_visible_labels(spec: dict, limit: int = 24) -> list[str]:
     for field in ("inputs", "modules", "outputs"):
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             add(item)
+    for item in spec.get("innovations", []) if isinstance(spec.get("innovations"), list) else []:
+        if isinstance(item, dict) and (item.get("visible_label_required") or item.get("must_appear_in_figure")):
+            add(item)
     for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
         if isinstance(relation, dict):
             add(relation.get("label"))
@@ -575,6 +578,43 @@ def collect_visual_relations(spec: dict) -> list[dict[str, str]]:
             "type": relation_type,
             "label": str(entry["labels"][0]) if entry["labels"] else "",
         })
+    return result
+
+
+def collect_visual_roles(spec: dict) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for field in ("inputs", "modules", "outputs", "innovations"):
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            role = str(item.get("role") or field.rstrip("s"))
+            normalized_role = re.sub(r"[^a-z0-9]+", "", role.casefold())
+            if "datasource" in normalized_role or role.casefold() in {"dataset", "source dataset"}:
+                constraint = "Show as an upstream data source that provides declared modalities; never show it as a peer modality or processing module."
+                visual_cue = "Layered dataset cards, database/archive symbols, or source-record thumbnails grounded in the named source."
+            elif "modality" in normalized_role:
+                constraint = "Show as an observed input modality downstream of any declared data sources and upstream of the processing method."
+                visual_cue = "A representative sample or measurement thumbnail for the named modality, not an empty text card."
+            elif field == "inputs":
+                constraint = "Show at the input boundary and connect only to its declared downstream target."
+                visual_cue = "A compact paper-grounded input example or input-object icon."
+            elif field == "outputs":
+                constraint = "Show at the output/evaluation boundary, not as an upstream input or internal method module."
+                visual_cue = "A compact outcome, prediction, or evaluation visual that does not introduce new metrics or numbers."
+            elif field == "innovations":
+                constraint = "Show as a highlighted paper innovation attached to its supported method context, not as an unrelated pipeline stage."
+                visual_cue = "A small mechanism inset that visually explains the named innovation."
+            else:
+                constraint = "Show as an internal method operation or component between its declared incoming and outgoing relations."
+                visual_cue = "A mechanism-level mini diagram or scientific icon showing what the named operation does."
+            result.append({
+                "id": str(item.get("id")),
+                "label": str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or item.get("id")),
+                "field": field,
+                "role": role,
+                "visual_constraint": constraint,
+                "visual_cue": visual_cue,
+            })
     return result
 
 
@@ -647,11 +687,66 @@ def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int =
         for index, label in enumerate(labels, start=1)
     )
     visual_relations = collect_visual_relations(spec)
+    visual_roles = collect_visual_roles(spec)
     connector_checklist = "\n".join(
         f"{index}. {item['source_label']} -> {item['target_label']} [{item['type']}]" + (f" label: {item['label']}" if item["label"] else "")
         for index, item in enumerate(visual_relations, start=1)
     )
     topology_specific_rules = _topology_specific_prompt_rules(spec)
+    compact_roles = [
+        {"id": item["id"], "label": item["label"], "role": item["role"], "visual_cue": item["visual_cue"]}
+        for item in visual_roles
+    ]
+    compact_contract = {
+        "figure_goal": spec.get("figure_goal"),
+        "central_claim": spec.get("central_claim", {}).get("text") if isinstance(spec.get("central_claim"), dict) else spec.get("central_claim"),
+        "topology": spec.get("topology"),
+        "training_flow": spec.get("training_flow", []),
+        "inference_flow": spec.get("inference_flow", []),
+        "forbidden_inventions": spec.get("forbidden_inventions", []),
+        "uncertainties": spec.get("uncertainties", []),
+    }
+    compact_style = {
+        "medium": style.get("medium"),
+        "palette": style.get("palette", []),
+        "viewpoint": style.get("viewpoint"),
+        "line_and_shadow": style.get("line_and_shadow"),
+        "visual_density": style.get("visual_density"),
+        "background": style.get("background"),
+        "negative_reference_rules": style.get("negative_reference_rules", []),
+        "template_style": style.get("template_style", {}),
+    }
+    compact_template = {
+        "template_id": template.get("template_id"),
+        "visual_density": template.get("visual_density"),
+        "style": template.get("style", {}),
+        "panels": [] if semantic_plan.get("applied") else template.get("panels", []),
+        "connectors": [] if semantic_plan.get("applied") else template.get("connectors", []),
+    }
+    compact_semantic_plan = {
+        "applied": bool(semantic_plan.get("applied")),
+        "topology": semantic_plan.get("topology"),
+        "nodes": [
+            {
+                "id": item.get("id"),
+                "label": item.get("label"),
+                "rank": item.get("rank"),
+                "bbox_percent": item.get("bbox_percent"),
+            }
+            for item in semantic_plan.get("nodes", []) if isinstance(item, dict)
+        ],
+        "connectors": [
+            {
+                "source": item.get("source"),
+                "target": item.get("target"),
+                "type": item.get("type"),
+                "label": item.get("label"),
+                "path_percent": item.get("path_percent"),
+                "route_style": item.get("route_style"),
+            }
+            for item in semantic_plan.get("connectors", []) if isinstance(item, dict)
+        ],
+    }
     return f"""
 # Summary
 
@@ -662,26 +757,17 @@ Scientific goal: {spec.get('figure_goal')}.
 Target canvas ratio: {preferences.get('aspect_ratio', '16:9')}.
 Text language: {preferences.get('language', 'English')}.
 
-Scientific contract:
-{json.dumps(spec, ensure_ascii=False, indent=2)}
-
-Information narrative:
-{json.dumps(design, ensure_ascii=False, indent=2)}
-
-Layout intent:
-{json.dumps(layout, ensure_ascii=False, indent=2)}
-
-Concrete visual metaphors:
-{json.dumps(metaphors, ensure_ascii=False, indent=2)}
+Compact scientific contract:
+{json.dumps(compact_contract, ensure_ascii=False, separators=(',', ':'))}
 
 Style contract:
-{json.dumps(style, ensure_ascii=False, indent=2)}
+{json.dumps(compact_style, ensure_ascii=False, separators=(',', ':'))}
 
 Reference-derived content-free template contract:
-{json.dumps({key: template.get(key) for key in ['template_id', 'panels', 'connectors', 'visual_density', 'style', 'selection']}, ensure_ascii=False, indent=2)}
+{json.dumps(compact_template, ensure_ascii=False, separators=(',', ':'))}
 
 Paper-grounded semantic blueprint geometry:
-{json.dumps(semantic_plan if semantic_plan.get('applied') else {"applied": False}, ensure_ascii=False, indent=2)}
+{json.dumps(compact_semantic_plan, ensure_ascii=False, separators=(',', ':'))}
 
 Exact visible label whitelist (render these exactly and do not invent alternatives):
 {json.dumps(labels, ensure_ascii=False)}
@@ -696,6 +782,11 @@ Mandatory directed connector checklist:
 
 Every connector above must be visible with the stated direction. Do not bypass an intermediate module, do not replace two required inputs with one shortcut arrow, and do not add direct source-to-output paths that are absent from this checklist. Shared component labels may repeat as visual badges without adding extra implementation-level arrows.
 
+Mandatory entity role and containment checklist:
+{json.dumps(compact_roles, ensure_ascii=False, separators=(',', ':'))}
+
+Preserve these semantic roles in the visible composition. A data source, modality, processing module, innovation, and output are not interchangeable even when all labels are present. In particular, do not flatten a source -> modality -> method chain into peer inputs or place a dataset beside modalities as though it were another sensor type.
+
 Topology-specific rendering rules:
 {topology_specific_rules}
 
@@ -708,6 +799,10 @@ Hard requirements:
 - Make arrows unambiguous and follow the specified source-to-target direction.
 - Emphasize the paper's actual innovation rather than generic AI decoration.
 - Use a clean academic composition with dense but readable information hierarchy.
+- Enrich every input, core method, innovation, and output node with a paper-grounded visual cue from the role checklist. Do not return a bare text-only flowchart.
+- Use roughly 35-60% of each node interior for a representative example, mechanism inset, scientific icon, or outcome cue while keeping the exact label clearly readable.
+- For modality nodes, show a representative sample of that modality; for data sources, show dataset/archive cues; for method nodes, show the internal operation; for outputs, show a compact outcome/evaluation cue.
+- Preserve the supplied geometry and connectors while adding visual explanation inside the nodes; do not merely add gradients or shadows to the blueprint boxes.
 - Keep all major objects complete and inside the canvas; avoid large blank margins.
 - Do not invent datasets, mechanisms, formulas, metrics, modules, or results.
 - Do not render paragraphs, citations, fake equations, fake axes, fake charts, or invented numbers.

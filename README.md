@@ -138,6 +138,10 @@ paper labels and connector geometry. Self-Refine feedback and SAM-style dense
 multi-frame contracts retain stricter specialized layouts. It never invokes the
 PPTX compiler.
 
+The contract normalizer preserves semantic roles instead of checking labels alone. Explicit provenance clauses such as `CFP and OCT from MEH-MIDAS and public datasets` compile to `data source -> modality -> method`; multi-source phrases collapse into one evidence-backed source group; explicit internal/external evaluation outputs are restored; generic labels such as `foundation model` are replaced by an explicitly named paper model when the evidence provides the alias; and named techniques such as `masked autoencoder` become required innovations. Paper-contract caching is independent of canvas ratio and display-language preferences, so changing 16:9 to 3:2 cannot select a different scientific contract.
+
+Production Image-2 review rejects a neat but empty text-only flowchart. The critic checks entity-role mismatches, focused provenance topology, mechanism visualization, visual information density, and publication polish. A deterministic blueprint-enrichment gate requires substantive visual content beyond gradients and shadows; configure its default `0.08` changed-pixel threshold with `RFS_MIN_BLUEPRINT_ENRICHMENT_RATIO`. Generation prompts use a compact scientific contract so evidence, geometry, roles, and visual requirements remain explicit without repeating the full planning documents.
+
 Offline engineering validation:
 
 ```powershell

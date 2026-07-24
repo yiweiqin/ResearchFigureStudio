@@ -76,7 +76,9 @@ def build_semantic_figure_program(
     for node in semantic_plan["nodes"]:
         style = dict(_NODE_STYLES.get(str(node.get("field") or "modules"), _NODE_STYLES["modules"]))
         role = str(node.get("role") or "").casefold()
-        if any(term in role for term in ("shared", "joint", "fusion")):
+        if "data_source" in role or role in {"dataset", "source dataset"}:
+            style = {"fill_color": "#F8F4EC", "stroke_color": "#896538", "text_color": "#684B28"}
+        elif any(term in role for term in ("shared", "joint", "fusion")):
             style = {"fill_color": "#F4F1FA", "stroke_color": "#62529A", "text_color": "#4B3F78"}
         label = str(node.get("label") or node["id"])
         semantic_nodes.append({

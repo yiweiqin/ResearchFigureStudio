@@ -16,8 +16,9 @@ from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
 from rfs.paper_to_image.critics import required_labels, review_candidate
 from rfs.paper_to_image.generator import generate_and_select, native_image2_aspect_ratio
-from rfs.paper_to_image.planner import collect_visual_relations, compile_image_prompt
+from rfs.paper_to_image.planner import collect_visual_relations, collect_visual_roles, compile_image_prompt
 from rfs.paper_to_image.review import detect_domain_profile, validate_review_coverage
+from rfs.paper_to_image.semantic_blueprint import compile_semantic_blueprint
 from rfs.paper_to_image.templates import build_template_profiles, render_layout_blueprint, select_template
 
 
@@ -149,6 +150,66 @@ class PaperToImageTests(unittest.TestCase):
         self.assertIn("Evidence Grounding", prompt)
         self.assertIn("never replace an output label with an icon-only node", prompt)
 
+    def test_evidence_required_innovation_label_is_added_to_visible_contract(self):
+        plan = _plan()
+        plan["figure_specification"]["innovations"] = [{
+            "id": "innovation_masked_autoencoder",
+            "name": "masked autoencoder",
+            "visible_label_required": True,
+            "must_appear_in_figure": True,
+        }]
+
+        labels = required_labels(plan)
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+
+        self.assertIn("masked autoencoder", labels)
+        self.assertIn("masked autoencoder", prompt)
+
+    def test_semantic_generation_prompt_stays_compact_for_nine_node_figure(self):
+        plan = _plan()
+        spec = {
+            "topology": "linear",
+            "figure_goal": "Show source, modalities, training stages, and evaluation outputs.",
+            "central_claim": {"text": "A named foundation model is pretrained then fine-tuned."},
+            "inputs": [
+                {"id": "source", "name": "Dataset + public data", "role": "data_source"},
+                {"id": "image_a", "name": "Image A", "role": "input modality"},
+                {"id": "image_b", "name": "Image B", "role": "input modality"},
+            ],
+            "modules": [
+                {"id": "ssl", "name": "SSL", "role": "training_objective"},
+                {"id": "model", "name": "Named Model", "role": "module"},
+                {"id": "tune", "name": "Supervised fine-tuning", "role": "training_objective"},
+            ],
+            "outputs": [
+                {"id": "diagnosis", "name": "Diagnosis", "role": "output"},
+                {"id": "internal", "name": "internal evaluation", "role": "evaluation output"},
+                {"id": "external", "name": "external evaluation", "role": "evaluation output"},
+            ],
+            "innovations": [{"id": "masked", "name": "masked autoencoder", "role": "technique used by SSL", "visible_label_required": True}],
+            "required_labels": ["Dataset + public data", "Image A", "Image B", "SSL", "Named Model", "Supervised fine-tuning", "Diagnosis", "internal evaluation", "external evaluation"],
+            "relations": [
+                {"source": "source", "target": "image_a", "type": "data_source"},
+                {"source": "source", "target": "image_b", "type": "data_source"},
+                {"source": "image_a", "target": "ssl", "type": "data_flow"},
+                {"source": "image_b", "target": "ssl", "type": "data_flow"},
+                {"source": "ssl", "target": "model", "type": "encoding"},
+                {"source": "model", "target": "tune", "type": "conditioning"},
+                {"source": "tune", "target": "diagnosis", "type": "prediction"},
+                {"source": "tune", "target": "internal", "type": "evaluation"},
+                {"source": "tune", "target": "external", "type": "evaluation"},
+            ],
+            "forbidden_inventions": ["Do not add unsupported layers."],
+        }
+        plan["figure_specification"] = spec
+        semantic_plan = compile_semantic_blueprint(spec)
+
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"}, selected_template={"template_id": "linear", "semantic_plan": semantic_plan})
+
+        self.assertLess(len(prompt), 14000)
+        self.assertIn("masked autoencoder", prompt)
+        self.assertIn('"route_style":"straight"', prompt)
+
     def test_visual_relation_checklist_deduplicates_edges_and_skips_shared_model_wiring(self):
         spec = {
             "inputs": [{"id": "input", "name": "Input"}],
@@ -210,6 +271,30 @@ class PaperToImageTests(unittest.TestCase):
             self.assertTrue(review["basic"]["passed"])
             self.assertEqual(review["basic"]["matched_aspect_ratio"], "16:9")
 
+    def test_image2_candidate_must_visually_enrich_the_bare_blueprint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+
+            review = review_candidate(
+                candidate,
+                blueprint,
+                _plan(),
+                {"template_id": "linear", "forbidden_copy_terms": []},
+                mode="vlm",
+                ocr_engine="off",
+                critic_adapter=_passing_critic,
+                require_visual_enrichment=True,
+            )
+
+            self.assertFalse(review["basic"]["visual_enrichment_passed"])
+            self.assertFalse(review["production_pass"])
+            self.assertTrue(any("too close to the bare layout blueprint" in value for value in review["hard_errors"]))
+            self.assertTrue(any("Enrich node interiors" in value for value in review["repair"]))
+
     def test_candidate_review_allows_evidence_supported_shared_label_reuse(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -251,6 +336,46 @@ class PaperToImageTests(unittest.TestCase):
             self.assertEqual(review["ocr"]["unexpected_labels"], ["Contrastive Loss"])
             self.assertIn("Remove unexpected visible label: Contrastive Loss", review["repair"])
             self.assertIn("Contrastive Loss", review["remove"])
+
+    def test_candidate_review_rejects_dataset_drawn_as_peer_modality(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            plan = _plan()
+            plan["figure_specification"].update({
+                "inputs": [
+                    {"id": "dataset", "name": "Source Dataset", "role": "data_source"},
+                    {"id": "image", "name": "Image", "role": "input modality"},
+                ],
+                "relations": [
+                    {"source": "dataset", "target": "image", "type": "data_source"},
+                    {"source": "image", "target": "parser", "type": "data_flow"},
+                    {"source": "parser", "target": "graph", "type": "data_flow"},
+                ],
+                "required_labels": ["Source Dataset", "Image", "Document Parser", "Evidence Graph Builder"],
+            })
+
+            def critic(path, template, prompt):
+                result = _passing_critic(path, template, prompt)
+                result["ocr"]["detected_labels"] = ["Source Dataset", "Image", "Document Parser", "Evidence Graph Builder"]
+                result["scientific"]["role_mismatches"] = ["Source Dataset is shown as a peer input modality instead of the source of Image"]
+                return result
+
+            def topology(_path, _prompt):
+                return {"summary": "Topology pass.", "relations": [], "missing_relations": [], "reversed_relations": [], "bypassed_relations": [], "invented_relations": [], "repair": [], "repair_regions": [], "score": 1.0, "passed": True}
+
+            review = review_candidate(candidate, blueprint, plan, {"template_id": "linear", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=critic, topology_adapter=topology)
+
+            self.assertFalse(review["production_pass"])
+            self.assertFalse(review["scientific"]["passed"])
+            self.assertEqual(len(review["scientific"]["role_mismatches"]), 1)
+            roles = collect_visual_roles(plan["figure_specification"])
+            self.assertIn("never show it as a peer modality", next(item["visual_constraint"] for item in roles if item["id"] == "dataset"))
+            prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+            self.assertIn("source -> modality -> method chain", prompt)
 
     def test_visible_label_whitelist_includes_declared_connector_labels(self):
         plan = _plan()
@@ -420,7 +545,7 @@ class PaperToImageTests(unittest.TestCase):
             self.assertTrue(Path(report["path"]).exists())
             prompt = compile_image_prompt(_plan(), {"aspect_ratio": "3:2", "language": "English"}, selected_template={**linear, "semantic_plan": report["semantic_plan"]})
             self.assertIn("Paper-grounded semantic blueprint geometry", prompt)
-            self.assertIn('"route_style": "straight"', prompt)
+            self.assertIn('"route_style":"straight"', prompt)
             self.assertIn("preserve every node bounding box", prompt)
 
     def test_generic_branch_multimodal_and_feedback_blueprints_render_without_paper_specific_rules(self):
@@ -560,7 +685,7 @@ class PaperToImageTests(unittest.TestCase):
             def critic(path, template, prompt):
                 result = _passing_critic(path, template, prompt)
                 for section in ("ocr", "scientific", "template", "aesthetic"):
-                    result[section]["score"] = 7.0
+                    result[section]["score"] = 8.0
                     result[section]["passed"] = False
                 return result
 
@@ -570,8 +695,8 @@ class PaperToImageTests(unittest.TestCase):
             self.assertTrue(review["production_pass"])
             self.assertEqual(review["ocr"]["score"], 1.0)
             self.assertEqual(review["scientific"]["score"], 1.0)
-            self.assertEqual(review["template"]["score"], 0.7)
-            self.assertEqual(review["aesthetic"]["score"], 0.7)
+            self.assertEqual(review["template"]["score"], 0.8)
+            self.assertEqual(review["aesthetic"]["score"], 0.8)
 
     def test_inspect_pdf_cli_defaults(self):
         parser = build_parser()
@@ -815,7 +940,7 @@ class PaperToImageTests(unittest.TestCase):
             root = Path(temp)
             template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
             render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
-            result = generate_and_select(_plan(), {"aspect_ratio": "1.5:1", "language": "English"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=_passing_critic)
+            result = generate_and_select(_plan(), {"aspect_ratio": "1.5:1", "language": "English"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=_passing_critic, require_visual_enrichment=False)
             self.assertTrue(result["selected_passed_all_checks"])
             self.assertEqual(result["successful_candidates"], 3)
             self.assertTrue((root / "selected_image.png").exists())
@@ -871,7 +996,7 @@ class PaperToImageTests(unittest.TestCase):
             template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
             render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
 
-            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic)
+            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic, require_visual_enrichment=False)
 
             self.assertEqual(post.call_count, 4)
             self.assertEqual(result["stability"]["production_pass_rate"], 1.0)
@@ -888,7 +1013,7 @@ class PaperToImageTests(unittest.TestCase):
             Image.new("RGB", (1536, 1024), "white").save(candidate_dir / "candidate_01.png")
             Image.new("RGB", (1536, 1024), "white").save(candidate_dir / "candidate_02.png")
 
-            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic, resume_candidates=True)
+            result = generate_and_select(_plan(), {"aspect_ratio": "3:2"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, image_retries=1, review_mode="vlm", repair_rounds=0, ocr_engine="off", critic_adapter=_passing_critic, resume_candidates=True, require_visual_enrichment=False)
 
             self.assertEqual(post.call_count, 1)
             modes = {item["candidate_id"]: item["generation"]["mode"] for item in result["candidates"]}
@@ -918,6 +1043,7 @@ class PaperToImageTests(unittest.TestCase):
                 repair_rounds=1,
                 repair_source=source,
                 critic_adapter=_passing_critic,
+                require_visual_enrichment=False,
             )
 
             post.assert_not_called()
@@ -942,7 +1068,7 @@ class PaperToImageTests(unittest.TestCase):
             root = Path(temp)
             template = {"template_id": "linear", "profile_id": "builtin_linear", "panels": [], "connectors": [], "visual_density": "high", "style": {}, "forbidden_copy_terms": []}
             render_layout_blueprint({**template, "source_aspect_ratio": 1.5}, root / "layout_blueprint.png", "1.5:1")
-            result = generate_and_select(_plan(), {"aspect_ratio": "1.5:1", "language": "English"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=critic)
+            result = generate_and_select(_plan(), {"aspect_ratio": "1.5:1", "language": "English"}, template, root / "layout_blueprint.png", root, asset_mode="image2", candidates=3, review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=critic, require_visual_enrichment=False)
             self.assertEqual(result["repair_candidates"], 1)
             self.assertEqual(result["selected_candidate_id"], "repair_01")
             repair = next(item for item in result["candidates"] if item["candidate_id"] == "repair_01")
@@ -960,7 +1086,7 @@ class PaperToImageTests(unittest.TestCase):
             paper = root / "paper.md"
             paper.write_text(PAPER_TEXT, encoding="utf-8")
             out = root / "run"
-            result = run_paper_to_image(paper=paper, out=out, planner_mode="vlm", domain_profile="general", template="linear", asset_mode="image2", candidates=3, aspect_ratio="1.5:1", review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=_passing_critic)
+            result = run_paper_to_image(paper=paper, out=out, planner_mode="vlm", domain_profile="general", template="linear", asset_mode="image2", candidates=3, aspect_ratio="1.5:1", review_mode="vlm", repair_rounds=1, ocr_engine="vlm", critic_adapter=_passing_critic, require_visual_enrichment=False)
             self.assertTrue(result["ok"])
             self.assertEqual(result["paper_review_mode"], "derived_from_vlm_plan")
             self.assertEqual(result["template_id"], "linear")

@@ -123,6 +123,8 @@ def _candidate_failure_modes(record: dict) -> list[str]:
         modes.append("bypassed_relations")
     if scientific.get("invented_items") or topology.get("invented_relations"):
         modes.append("invented_content")
+    if scientific.get("role_mismatches") or scientific.get("containment_mismatches"):
+        modes.append("semantic_role_mismatch")
     if not template.get("passed", False):
         modes.append("template_alignment")
     if not aesthetic.get("passed", False):
@@ -267,7 +269,7 @@ Hard errors:
 Mandatory directed connector checklist after repair:
 {connector_checklist}
 
-Preserve every currently correct connector. Add or redirect only the connectors named by the repair findings. The repaired image must contain every checklist edge exactly in the stated direction. Never draw a shortcut that bypasses Generate, Feedback, Self-Feedback, or Refine.
+Preserve every currently correct connector. Add or redirect only the connectors named by the repair findings. The repaired image must contain every checklist edge exactly in the stated direction. Never draw a shortcut that bypasses any declared intermediate module.
 
 Original scientific and visual contract:
 {base_prompt}
@@ -294,6 +296,7 @@ def generate_and_select(
     critic_adapter: Callable | None = None,
     topology_adapter: Callable | None = None,
     resume_candidates: bool = False,
+    require_visual_enrichment: bool = True,
 ) -> dict:
     root = ensure_dir(out_dir)
     candidate_dir = ensure_dir(root / "candidates")
@@ -335,7 +338,7 @@ def generate_and_select(
                 generation = _generate_one(prompt, plan, blueprint, path, aspect_ratio, asset_mode, image_model, image_retries)
                 generation_seconds = round(time.monotonic() - generation_started, 3)
             review_started = time.monotonic()
-            review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
+            review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios, require_visual_enrichment=asset_mode == "image2" and require_visual_enrichment)
             review_seconds = round(time.monotonic() - review_started, 3)
             return {
                 "record": {
@@ -367,7 +370,7 @@ def generate_and_select(
         prompt_path = prompt_dir / f"{candidate_id}_prompt.txt"
         write_text(prompt_path, prompt)
         review_started = time.monotonic()
-        review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
+        review = review_candidate(path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios, require_visual_enrichment=asset_mode == "image2" and require_visual_enrichment)
         review_seconds = round(time.monotonic() - review_started, 3)
         generation = {"mode": "existing_candidate", "source": str(repair_source_path), "api_key_present": bool(os.getenv("API_KEY") or os.getenv("GEMINI_API_KEY"))}
         records.append({
@@ -448,7 +451,7 @@ def generate_and_select(
             generation_seconds = round(time.monotonic() - generation_started, 3)
             requests_manifest.append({"candidate_id": repaired_id, "repair_source": source["candidate_id"], "generation_seconds": generation_seconds, **generation})
             review_started = time.monotonic()
-            review = review_candidate(repaired_path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios)
+            review = review_candidate(repaired_path, blueprint, plan, selected_template, mode=review_mode, model=review_model, ocr_engine=ocr_engine, ocr_lang=ocr_lang, ocr_adapter=ocr_adapter, critic_adapter=critic_adapter, topology_adapter=topology_adapter, acceptable_aspect_ratios=acceptable_aspect_ratios, require_visual_enrichment=asset_mode == "image2" and require_visual_enrichment)
             review_seconds = round(time.monotonic() - review_started, 3)
             repaired = {"candidate_id": repaired_id, "path": str(repaired_path), "prompt_path": str(prompt_path), "generation": generation, "review": review, "production_pass": review["production_pass"], "score": review["overall_score"], "repair_source": source["candidate_id"], "timings": {"generation_seconds": generation_seconds, "review_seconds": review_seconds, "total_seconds": round(time.monotonic() - repair_started, 3)}}
             repair_records.append(repaired)

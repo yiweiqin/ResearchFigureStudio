@@ -7,11 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 from ..reference_text_extractor import run_easyocr, run_paddle_ocr, run_rapidocr
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
-from .planner import collect_visible_labels, collect_visual_relations
+from .planner import collect_visible_labels, collect_visual_relations, collect_visual_roles
 
 
 def _normalize_text(value: str) -> str:
@@ -71,7 +71,10 @@ Scientific specification:
 Mandatory visual connector checklist:
 {json.dumps(collect_visual_relations(plan.get('figure_specification', {})), ensure_ascii=False, indent=2)}
 
-Judge the visible flow against the mandatory visual connector checklist. Relations involving an evidence-supported repeatable shared component may be represented by repeated badges rather than extra implementation-level arrows. A shortcut that bypasses a checklist module is a scientific error.
+Mandatory entity role and containment checklist:
+{json.dumps(collect_visual_roles(plan.get('figure_specification', {})), ensure_ascii=False, indent=2)}
+
+Judge the visible flow against both checklists. Relations involving an evidence-supported repeatable shared component may be represented by repeated badges rather than extra implementation-level arrows. A shortcut that bypasses a checklist module is a scientific error. Merely showing every word is insufficient: a dataset/source shown as a peer modality, an output shown as an internal module, or a modality shown as a processing stage is a hard scientific role mismatch.
 
 Selected template:
 {json.dumps({key: template.get(key) for key in ['template_id', 'panels', 'connectors', 'visual_density', 'style']}, ensure_ascii=False, indent=2)}
@@ -82,9 +85,9 @@ Return:
 {{
   "summary": "Production candidate review.",
   "ocr": {{"detected_labels": [], "missing_labels": [], "misspelled_labels": [], "duplicate_labels": [], "forbidden_labels_found": [], "score": 0.0, "passed": false}},
-  "scientific": {{"missing_modules": [], "missing_relations": [], "reversed_relations": [], "invented_items": [], "innovation_visible": true, "score": 0.0, "passed": false}},
+  "scientific": {{"missing_modules": [], "missing_relations": [], "reversed_relations": [], "invented_items": [], "role_mismatches": [], "containment_mismatches": [], "innovation_visible": true, "score": 0.0, "passed": false}},
   "template": {{"macro_panel_match": 0.0, "reading_order_match": 0.0, "connector_rhythm_match": 0.0, "visual_density_match": 0.0, "copied_reference_content": [], "score": 0.0, "passed": false}},
-  "aesthetic": {{"hierarchy": 0.0, "balance": 0.0, "whitespace": 0.0, "color": 0.0, "icon_consistency": 0.0, "readability": 0.0, "score": 0.0, "passed": false}},
+  "aesthetic": {{"hierarchy": 0.0, "balance": 0.0, "whitespace": 0.0, "color": 0.0, "icon_consistency": 0.0, "readability": 0.0, "visual_information_density": 0.0, "mechanism_visualization": 0.0, "publication_polish": 0.0, "score": 0.0, "passed": false}},
   "preserve": [],
   "repair": [],
   "remove": [],
@@ -94,7 +97,14 @@ Return:
   "overall_score": 0.0
 }}
 
-Hard failures: any missing/misspelled critical label, any duplicate label not explicitly allowed above, copied reference term, missing core module, reversed relation, invented mechanism, or template score below 0.72. Aesthetic quality cannot compensate for scientific or OCR failure.
+Hard failures: any missing/misspelled critical label, any duplicate label not explicitly allowed above, copied reference term, missing core module, reversed relation, invented mechanism, semantic role/containment mismatch, or template score below 0.72. Aesthetic quality cannot compensate for scientific or OCR failure.
+
+Aesthetic scoring rules:
+- A neat text-only flowchart is not a complete Image-2 scientific figure. Empty rounded rectangles containing only labels must score below 0.70 for mechanism_visualization and visual_information_density.
+- Inspect whether inputs, core methods, innovations, and outputs contain paper-grounded visual cues, examples, mechanism details, or icons rather than unused interior space.
+- icon_consistency cannot receive full credit when no icons or scientific visual metaphors are present.
+- visual_density_match must reflect actual information inside nodes, not merely the number and alignment of boxes.
+- Reserve scores above 0.90 for figures that are both structurally correct and visually explanatory at publication quality.
 """.strip()
     if adapter:
         return adapter(path, blueprint, prompt)
@@ -134,6 +144,9 @@ Act as a focused topology verifier for one scientific framework image. Inspect v
 Mandatory directed connectors:
 {json.dumps(relations, ensure_ascii=False, indent=2)}
 
+Mandatory entity roles:
+{json.dumps(collect_visual_roles(specification), ensure_ascii=False, indent=2)}
+
 Evidence-supported repeatable shared-component labels:
 {json.dumps(repeatable_labels, ensure_ascii=False)}
 
@@ -141,6 +154,7 @@ Rules:
 - Verify every source, target, and arrowhead direction from visible geometry.
 - A line that joins the outgoing side of a target or a downstream junction does not count as entering that target.
 - A shortcut that bypasses an intermediate module is an invented relation.
+- Verify that source, modality, module, and output layers preserve their declared roles. A source -> modality -> method chain must not be flattened into peer inputs.
 - For refinement loops, Initial Output and Self-Feedback must both enter Refine or its explicit input-side shared-model node before Refined Output.
 - Refined Output must return to Feedback to close the loop.
 - Do not penalize repeated labels explicitly allowed by the scientific contract.
@@ -185,6 +199,7 @@ def review_candidate(
     critic_adapter: Callable | None = None,
     topology_adapter: Callable | None = None,
     acceptable_aspect_ratios: list[str] | None = None,
+    require_visual_enrichment: bool = False,
 ) -> dict:
     candidate = Path(path)
     blueprint_path = Path(blueprint)
@@ -195,6 +210,21 @@ def review_candidate(
         width, height = image.size
     with Image.open(blueprint_path) as image:
         bw, bh = image.size
+    with Image.open(candidate) as candidate_image, Image.open(blueprint_path) as blueprint_image:
+        candidate_rgb = candidate_image.convert("RGB")
+        blueprint_rgb = blueprint_image.convert("RGB").resize(candidate_rgb.size)
+        visual_diff = ImageChops.difference(candidate_rgb, blueprint_rgb)
+        threshold_mask = visual_diff.point(lambda value: 255 if value > 35 else 0).convert("L")
+        mask_histogram = threshold_mask.histogram()
+        changed_pixels = sum(mask_histogram[1:])
+        total_pixels = max(1, candidate_rgb.size[0] * candidate_rgb.size[1])
+        blueprint_enrichment_ratio = changed_pixels / total_pixels
+        blueprint_mean_abs_difference = sum(ImageStat.Stat(visual_diff).mean) / 3.0
+    try:
+        minimum_enrichment_ratio = max(0.0, min(1.0, float(os.getenv("RFS_MIN_BLUEPRINT_ENRICHMENT_RATIO", "0.08"))))
+    except ValueError:
+        minimum_enrichment_ratio = 0.08
+    visual_enrichment_passed = not require_visual_enrichment or blueprint_enrichment_ratio >= minimum_enrichment_ratio
     candidate_ratio = width / max(height, 1)
     ratio_targets: list[tuple[str, float]] = [("blueprint", bw / max(bh, 1))]
     for value in acceptable_aspect_ratios or []:
@@ -223,7 +253,12 @@ def review_candidate(
         "aspect_ratio_errors": ratio_errors,
         "matched_aspect_ratio": matched_ratio,
         "aspect_ratio_error": ratio_error,
-        "passed": ratio_error <= 0.08 and min(width, height) >= 512,
+        "visual_enrichment_required": bool(require_visual_enrichment),
+        "blueprint_enrichment_ratio": round(blueprint_enrichment_ratio, 5),
+        "blueprint_mean_abs_difference": round(blueprint_mean_abs_difference, 3),
+        "minimum_blueprint_enrichment_ratio": minimum_enrichment_ratio,
+        "visual_enrichment_passed": visual_enrichment_passed,
+        "passed": ratio_error <= 0.08 and min(width, height) >= 512 and visual_enrichment_passed,
     }
 
     local_records: list[dict] = []
@@ -236,7 +271,9 @@ def review_candidate(
         local_records, local_engine, local_warning = _local_ocr(candidate, requested_engine, ocr_lang, adapter=ocr_adapter)
 
     topology_name = str(plan.get("figure_specification", {}).get("topology") or "unknown")
-    topology_required = topology_name in {"feedback", "branch", "multimodal", "dense_multiframe"} or str(template.get("template_id") or "") in {"feedback", "arbor"}
+    visual_roles = collect_visual_roles(plan.get("figure_specification", {}))
+    has_structured_provenance = any(str(item.get("role") or "").casefold() == "data_source" for item in visual_roles)
+    topology_required = topology_name in {"feedback", "branch", "multimodal", "dense_multiframe"} or str(template.get("template_id") or "") in {"feedback", "arbor"} or has_structured_provenance
     vlm_raw: dict = {}
     topology_raw: dict = {}
     vlm_warning = None
@@ -303,6 +340,11 @@ def review_candidate(
     scientific = _normalize_section(vlm_raw.get("scientific"), "Scientific")
     template_review = _normalize_section(vlm_raw.get("template"), "Template")
     aesthetic = _normalize_section(vlm_raw.get("aesthetic"), "Aesthetic")
+    for field in ("visual_information_density", "mechanism_visualization", "publication_polish"):
+        try:
+            aesthetic[field] = max(0.0, min(1.0, float(aesthetic.get(field, aesthetic["score"]))))
+        except Exception:
+            aesthetic[field] = aesthetic["score"]
     topology_review = _normalize_section(topology_raw, "Topology") if topology_required else {"summary": "Focused topology review not required for this topology.", "score": 1.0, "passed": True, "skipped": True}
     topology_issues = sum(len(topology_review.get(field, [])) for field in ["missing_relations", "reversed_relations", "bypassed_relations", "invented_relations"])
     if topology_required:
@@ -311,7 +353,7 @@ def review_candidate(
     if ocr_issues == 0:
         ocr["score"] = 1.0
     ocr["passed"] = ocr["score"] >= 0.999 and ocr_issues == 0
-    scientific_issues = sum(len(scientific.get(field, [])) for field in ["missing_modules", "missing_relations", "reversed_relations", "invented_items"])
+    scientific_issues = sum(len(scientific.get(field, [])) for field in ["missing_modules", "missing_relations", "reversed_relations", "invented_items", "role_mismatches", "containment_mismatches"])
     has_innovations = bool(plan.get("figure_specification", {}).get("innovations"))
     innovation_ok = not has_innovations or bool(scientific.get("innovation_visible", False))
     if scientific_issues == 0 and innovation_ok:
@@ -319,7 +361,8 @@ def review_candidate(
     scientific["passed"] = scientific["score"] >= 0.95 and scientific_issues == 0 and innovation_ok
     copied = template_review.get("copied_reference_content", [])
     template_review["passed"] = template_review["score"] >= 0.70 and not copied
-    aesthetic["passed"] = aesthetic["score"] >= 0.70
+    aesthetic_floor = min(aesthetic["visual_information_density"], aesthetic["mechanism_visualization"], aesthetic["publication_polish"])
+    aesthetic["passed"] = aesthetic["score"] >= 0.78 and aesthetic_floor >= 0.70 and visual_enrichment_passed
     if mode != "vlm":
         template_review.update({"score": 1.0 if basic["passed"] else 0.0, "passed": basic["passed"], "engineering_only": True})
         aesthetic.update({"score": 0.0, "passed": False, "engineering_only": True})
@@ -349,6 +392,10 @@ def review_candidate(
     repair.extend(f"Remove unexpected visible label: {value}" for value in unexpected_labels)
     remove = list(vlm_raw.get("remove", []))
     remove.extend(unexpected_labels)
+    if require_visual_enrichment and not visual_enrichment_passed:
+        repair.append("Enrich node interiors with paper-grounded visual examples, mechanism cues, and consistent scientific icons while preserving all node boxes and connectors.")
+        hard_errors.append(f"Image-2 visual enrichment ratio {blueprint_enrichment_ratio:.3f} is below required {minimum_enrichment_ratio:.3f}; candidate is too close to the bare layout blueprint")
+        hard_errors = list(dict.fromkeys(hard_errors))
     production_pass = bool(basic["passed"] and ocr["passed"] and scientific["passed"] and topology_review["passed"] and template_review["passed"] and aesthetic["passed"] and not hard_errors)
     score = 0.25 * scientific["score"] + 0.20 * ocr["score"] + 0.20 * topology_review["score"] + 0.20 * template_review["score"] + 0.15 * aesthetic["score"]
     return {
