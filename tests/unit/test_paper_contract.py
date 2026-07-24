@@ -3,9 +3,141 @@ import unittest
 
 from rfs.paper_to_image.planner import validate_plan_grounding
 from rfs.paper_to_image.preparation import build_overlay_spec, expand_plan_evidence, normalize_figure_contract, synchronize_plan_to_contract
+from rfs.paper_to_image.contract_completion import _overview_candidates
 
 
 class PaperContractTests(unittest.TestCase):
+    def test_overview_selection_rejects_late_scaling_figure_when_figure_one_is_a_true_model_overview(self):
+        parsed = {
+            "document_index": {
+                "figures": [
+                    {"page": 3, "caption": "Figure 1: Model overview. Images become patches and enter a Transformer encoder."},
+                    {"page": 16, "caption": "Figure 8: Scaling different model dimensions of the Vision Transformer."},
+                ]
+            }
+        }
+
+        candidates = _overview_candidates(parsed)
+
+        self.assertEqual([item["page"] for item in candidates], [3])
+
+    def test_contract_prunes_appendix_only_diagram_label_and_ungrounded_innovation(self):
+        overview = "Figure 1: Model overview. We split an input image into image patches, linearly embed them, add position embeddings and a class token, and feed them to a Transformer Encoder for classification."
+        parsed = {
+            "page_count": 18,
+            "document_index": {
+                "figures": [
+                    {"page": 3, "caption": overview},
+                    {"page": 16, "caption": "Figure 8: Scaling different model dimensions of the Vision Transformer."},
+                ]
+            },
+            "evidence": [
+                {"id": "E_OVERVIEW", "page": 3, "kind": "caption", "text": overview, "section_hint": "Figure Captions", "confidence": 1.0},
+                {"id": "E_DEPTH", "page": 16, "kind": "paragraph", "text": "Depth", "section_hint": "APPENDIX", "confidence": 1.0},
+            ],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "figure_goal": "Show the Vision Transformer model overview.",
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "Images are processed as patch sequences.", "evidence_ids": ["E_OVERVIEW"]},
+                "inputs": [
+                    {"id": "image", "name": "Input Image", "evidence_ids": ["E_OVERVIEW"]},
+                    {"id": "depth", "name": "Depth", "evidence_ids": ["E_DEPTH"]},
+                ],
+                "modules": [{"id": "encoder", "name": "Transformer Encoder", "evidence_ids": ["E_OVERVIEW"]}],
+                "outputs": [{"id": "classification", "name": "Classification", "evidence_ids": ["E_OVERVIEW"]}],
+                "innovations": [{"id": "innovation_class_token", "name": "Learnable Class Token", "evidence_ids": []}],
+                "relations": [
+                    {"source": "image", "target": "encoder", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                    {"source": "depth", "target": "encoder", "type": "data_flow", "evidence_ids": ["E_DEPTH"]},
+                    {"source": "encoder", "target": "classification", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+
+        self.assertNotIn("Depth", [item["name"] for item in spec["inputs"]])
+        self.assertEqual(spec["innovations"], [])
+        self.assertFalse(any(item["source"] == "depth" or item["target"] == "depth" for item in spec["relations"]))
+        self.assertIn("Depth", plan["contract_completion_report"]["removed_out_of_scope_entities"])
+        self.assertIn("Learnable Class Token", plan["contract_completion_report"]["removed_ungrounded_innovations"])
+
+    def test_vit_mlp_is_upgraded_to_one_mlp_head_instead_of_duplicating_the_prediction_path(self):
+        overview = "Figure 1: Model overview. The Transformer encoder representation is passed through an MLP head for classification."
+        parsed = {
+            "page_count": 4,
+            "document_index": {"figures": [{"page": 2, "caption": overview}]},
+            "evidence": [{"id": "E_OVERVIEW", "page": 2, "kind": "caption", "text": overview, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "figure_goal": "Show image classification.",
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [],
+                "modules": [
+                    {"id": "encoder", "name": "Transformer Encoder", "evidence_ids": ["E_OVERVIEW"]},
+                    {"id": "mlp", "name": "MLP", "role": "module", "evidence_ids": ["E_OVERVIEW"]},
+                ],
+                "outputs": [{"id": "classification", "name": "Classification", "evidence_ids": ["E_OVERVIEW"]}],
+                "innovations": [],
+                "relations": [
+                    {"source": "encoder", "target": "mlp", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                    {"source": "mlp", "target": "classification", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        labels = [item["name"] for item in spec["modules"]]
+
+        self.assertEqual(labels.count("MLP Head"), 1)
+        self.assertNotIn("MLP", labels)
+        self.assertEqual(len([item for item in spec["relations"] if item["target"] == "classification"]), 1)
+
+    def test_explicit_input_intermediate_path_removes_redundant_input_shortcut(self):
+        overview = "Figure 1: Input Image is split into Image Patches, followed by Linear Projection and a Transformer Encoder."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 2, "caption": overview}]},
+            "evidence": [{"id": "E_OVERVIEW", "page": 2, "kind": "caption", "text": overview, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "figure_goal": "Show the patch pipeline.",
+                "research_problem": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "central_claim": {"text": "unknown", "evidence_ids": [], "status": "unknown"},
+                "inputs": [{"id": "image", "name": "Input Image", "evidence_ids": ["E_OVERVIEW"]}],
+                "modules": [
+                    {"id": "patches", "name": "Image Patches", "role": "intermediate", "evidence_ids": ["E_OVERVIEW"]},
+                    {"id": "projection", "name": "Linear Projection", "evidence_ids": ["E_OVERVIEW"]},
+                ],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source": "image", "target": "projection", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                    {"source": "image", "target": "patches", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                    {"source": "patches", "target": "projection", "type": "data_flow", "evidence_ids": ["E_OVERVIEW"]},
+                ],
+                "terminology": {},
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertNotIn(("image", "projection"), pairs)
+        self.assertIn(("image", "patches"), pairs)
+        self.assertIn(("patches", "projection"), pairs)
+        self.assertIn("image->projection", plan["contract_completion_report"]["removed_input_shortcuts"])
+
     def _parsed(self):
         return {
             "evidence": [

@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..utils import ensure_dir, write_json
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
+from .semantic_blueprint import compile_semantic_blueprint
 
 
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
@@ -371,7 +372,11 @@ def render_layout_blueprint(
         )
     }
     semantic_dense = profile.get("template_id") == "dense-multiframe" and dense_required.issubset(exact_labels)
-    semantic_blueprint = semantic_feedback or semantic_dense
+    generic_semantic_plan = compile_semantic_blueprint(figure_specification)
+    semantic_generic = bool(generic_semantic_plan.get("applied")) and not semantic_feedback and not semantic_dense
+    semantic_blueprint = semantic_feedback or semantic_dense or semantic_generic
+    if semantic_generic:
+        panels = []
 
     def font(size: int, bold: bool = False):
         candidates = ["arialbd.ttf", "DejaVuSans-Bold.ttf"] if bold else ["arial.ttf", "DejaVuSans.ttf"]
@@ -396,6 +401,41 @@ def render_layout_blueprint(
         x = box[0] + ((box[2] - box[0]) - text_width) / 2
         y = box[1] + ((box[3] - box[1]) - text_height) / 2 - bounds[1]
         draw.text((x, y), value, font=selected_font, fill=fill)
+
+    def centered_wrapped_text(box: tuple[int, int, int, int], value: str, size: int, fill=(42, 72, 91), bold: bool = True) -> None:
+        max_width = max(20, box[2] - box[0] - 14)
+        max_height = max(20, box[3] - box[1] - 10)
+        tokens = value.split() if " " in value.strip() else list(value.strip())
+        selected_font = font(size, bold=bold)
+        selected_lines = [value]
+        for fitted_size in range(max(10, size), 9, -1):
+            selected_font = font(fitted_size, bold=bold)
+            lines: list[str] = []
+            current = ""
+            separator = " " if " " in value.strip() else ""
+            for token in tokens:
+                candidate = token if not current else f"{current}{separator}{token}"
+                if draw.textlength(candidate, font=selected_font) <= max_width or not current:
+                    current = candidate
+                else:
+                    lines.append(current)
+                    current = token
+            if current:
+                lines.append(current)
+            if len(lines) > 3:
+                continue
+            text_value = "\n".join(lines)
+            bounds = draw.multiline_textbbox((0, 0), text_value, font=selected_font, spacing=3, align="center")
+            if bounds[2] - bounds[0] <= max_width and bounds[3] - bounds[1] <= max_height:
+                selected_lines = lines
+                break
+        text_value = "\n".join(selected_lines)
+        bounds = draw.multiline_textbbox((0, 0), text_value, font=selected_font, spacing=3, align="center")
+        text_width = bounds[2] - bounds[0]
+        text_height = bounds[3] - bounds[1]
+        x = box[0] + ((box[2] - box[0]) - text_width) / 2
+        y = box[1] + ((box[3] - box[1]) - text_height) / 2 - bounds[1]
+        draw.multiline_text((x, y), text_value, font=selected_font, fill=fill, spacing=3, align="center")
 
     centers = []
     panel_boxes = []
@@ -555,6 +595,54 @@ def render_layout_blueprint(
         centered_text(region(task_box, 0.03, 0.03, 0.97, 0.15), exact("Promptable Segmentation Task"), title_size)
         centered_text(region(model_box, 0.03, 0.03, 0.97, 0.15), exact("Segment Anything Model"), title_size)
         centered_text(region(data_box, 0.03, 0.03, 0.97, 0.15), exact("Data Engine"), title_size, fill=(177, 92, 33))
+    elif semantic_generic:
+        node_boxes: dict[str, tuple[int, int, int, int]] = {}
+        node_styles: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {}
+        for node in generic_semantic_plan.get("nodes", []):
+            bbox = node["bbox_percent"]
+            node_box = (
+                round(bbox["x"] * width),
+                round(bbox["y"] * height),
+                round((bbox["x"] + bbox["w"]) * width),
+                round((bbox["y"] + bbox["h"]) * height),
+            )
+            field = str(node.get("field") or "modules")
+            role = str(node.get("role") or "").casefold()
+            if field == "inputs":
+                fill, outline = (237, 245, 252), (42, 99, 161)
+            elif field == "outputs":
+                fill, outline = (242, 248, 243), (66, 126, 80)
+            elif field == "innovations":
+                fill, outline = (252, 244, 235), (177, 92, 33)
+            elif "shared" in role or "joint" in role or "fusion" in role:
+                fill, outline = (244, 242, 251), (98, 84, 147)
+            else:
+                fill, outline = (237, 249, 247), (31, 117, 126)
+            node_boxes[node["id"]] = node_box
+            node_styles[node["id"]] = (fill, outline)
+            draw.rounded_rectangle(node_box, radius=max(8, round(height * 0.014)), fill=fill, outline=outline, width=3)
+
+        relation_colors = {
+            "feedback_loop": (177, 92, 33),
+            "branch": (98, 84, 147),
+            "conditioning": (31, 117, 126),
+            "feature_flow": (42, 99, 161),
+        }
+        for connector in generic_semantic_plan.get("connectors", []):
+            points = [(round(point[0] * width), round(point[1] * height)) for point in connector.get("path_percent", [])]
+            color = relation_colors.get(str(connector.get("type") or ""), (80, 111, 134))
+            draw_arrow_path(points, color)
+            label = str(connector.get("label") or "").strip()
+            if label and len(points) >= 2:
+                middle = points[len(points) // 2]
+                label_box = (middle[0] - 60, middle[1] - 18, middle[0] + 60, middle[1] + 18)
+                draw.rounded_rectangle(label_box, radius=7, fill=(250, 250, 249), outline=color, width=1)
+                centered_wrapped_text(label_box, label, max(11, round(height * 0.014)), fill=color, bold=False)
+
+        for node in generic_semantic_plan.get("nodes", []):
+            node_box = node_boxes[node["id"]]
+            _, outline = node_styles[node["id"]]
+            centered_wrapped_text(node_box, str(node.get("label") or node["id"]), max(13, round(height * 0.019)), fill=outline)
     else:
         for index in range(len(centers) - 1):
             draw_arrow_path([centers[index], centers[index + 1]])
@@ -570,6 +658,9 @@ def render_layout_blueprint(
             "Image Encoder", "Prompt Encoder", "Mask Decoder", "Valid Segmentation Mask",
             "Assisted-manual", "Semi-automatic", "Fully Automatic", "SA-1B",
         ]
+    elif semantic_generic:
+        semantic_label_order = [str(item.get("label") or "") for item in generic_semantic_plan.get("nodes", [])]
+        semantic_label_order.extend(str(item.get("label") or "") for item in generic_semantic_plan.get("connectors", []) if str(item.get("label") or "").strip())
     return {
         "summary": "Paper-semantic layout blueprint rendered from the normalized contract." if semantic_blueprint else "Content-free layout blueprint rendered from selected template.",
         "path": str(path),
@@ -581,4 +672,5 @@ def render_layout_blueprint(
         "contains_reference_objects": False,
         "contains_paper_semantic_labels": semantic_blueprint,
         "semantic_labels": [exact(value) for value in semantic_label_order],
+        "semantic_plan": generic_semantic_plan if semantic_generic else None,
     }

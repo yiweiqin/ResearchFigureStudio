@@ -56,6 +56,7 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 |---|---|
 | Scientific entities and exact labels | `paper_review.json`, `figure_specification.json` |
 | Scientific relations and evidence | Paper semantic contract |
+| Paper-to-image draft node and connector geometry | `layout_blueprint.json.semantic_plan` |
 | Layout, visual rhythm, palette, object style | Approved generated/user reference image |
 | Editable object geometry | `figure_program.json` |
 | PowerPoint rendering | `ppt_compiler.py` |
@@ -75,7 +76,8 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 - Engineering previews are opt-in and never production-approved.
 - Critical text and relations remain editable PPT objects.
 - Image/OCR guesses cannot override paper-grounded terminology or relation endpoints.
-- Deterministic completion is graph-scoped: rich VLM contracts only gain overview-local or directly connected evidence-backed entities, while heuristic contracts grow from overview seeds or the largest connected method chain.
+- Deterministic completion is graph-scoped: rich VLM contracts only gain overview-local or directly connected evidence-backed entities, while heuristic contracts grow from overview seeds or the largest connected method chain. Late appendix-only diagram labels, ungrounded innovations, and input shortcuts that bypass an explicit intermediate node are removed before planning.
+- `semantic_blueprint.py` compiles 2-16 visible contract entities into normalized graph geometry. It ranks DAG layers, places source-only conditioning nodes immediately before their targets, assigns distinct fan-in/fan-out ports, routes skip-layer edges around intermediate nodes, and sends feedback loops through an outer lane.
 - Benchmark entity matching uses both label fidelity and relation consistency so relation labels and variable suffixes cannot steal mappings from real contract entities.
 - VLM correction is optional and bounded; deterministic reports remain available offline.
 - Historical sample-specific scripts stay under `experiments/legacy_reference_rebuilds/` and are not imported by production code.

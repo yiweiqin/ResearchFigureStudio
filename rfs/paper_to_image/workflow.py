@@ -120,6 +120,8 @@ def run_paper_to_image(
         figure_specification=plan.get("figure_specification"),
     )
     write_json(root / "layout_blueprint.json", blueprint_report)
+    if isinstance(blueprint_report.get("semantic_plan"), dict) and blueprint_report["semantic_plan"].get("applied"):
+        selected_template["semantic_plan"] = blueprint_report["semantic_plan"]
 
     plan["style_plan"]["selected_template_id"] = selected_template.get("profile_id")
     plan["style_plan"]["template_style"] = selected_template.get("style", {})

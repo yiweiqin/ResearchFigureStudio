@@ -184,6 +184,109 @@ def _ground_exact_visible_entities(spec: dict[str, Any], parsed: dict[str, Any])
     return grounded
 
 
+def _prune_out_of_scope_entities(spec: dict[str, Any], parsed: dict[str, Any], completion_report: dict[str, Any]) -> list[str]:
+    selected_ids = {str(value) for value in completion_report.get("selected_overview_evidence_ids", []) if str(value)}
+    if not selected_ids:
+        return []
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in parsed.get("evidence", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    anchor_text = " ".join(
+        [
+            str(spec.get("figure_goal") or ""),
+            str(spec.get("research_problem", {}).get("text") or "") if isinstance(spec.get("research_problem"), dict) else str(spec.get("research_problem") or ""),
+            str(spec.get("central_claim", {}).get("text") or "") if isinstance(spec.get("central_claim"), dict) else str(spec.get("central_claim") or ""),
+            *(str(evidence_by_id[value].get("text") or "") for value in selected_ids if value in evidence_by_id),
+        ]
+    )
+    normalized_anchor = _normalized_label(anchor_text)
+    blocked_sections = ("appendix", "experiment", "result", "analysis", "visualization", "ablation", "attention map", "reference", "acknowledg")
+    removed_ids: set[str] = set()
+    removed_labels: list[str] = []
+    for field in ("inputs", "modules", "outputs"):
+        kept = []
+        for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
+            if not isinstance(item, dict):
+                continue
+            evidence_ids = [str(value) for value in item.get("evidence_ids", []) if str(value)]
+            records = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
+            label = _item_label(item)
+            label_in_anchor = bool(_normalized_label(label) and _normalized_label(label) in normalized_anchor)
+            selected_grounded = any(value in selected_ids for value in evidence_ids)
+            only_blocked = bool(records) and all(any(term in str(record.get("section_hint") or "").casefold() for term in blocked_sections) for record in records)
+            weak_isolated_label = bool(records) and all(_normalized_label(str(record.get("text") or "")) == _normalized_label(label) for record in records)
+            if not selected_grounded and not label_in_anchor and only_blocked and weak_isolated_label:
+                removed_ids.add(str(item.get("id") or ""))
+                removed_labels.append(label)
+                continue
+            kept.append(item)
+        spec[field] = kept
+    if removed_ids:
+        spec["relations"] = [
+            item for item in spec.get("relations", [])
+            if isinstance(item, dict) and str(item.get("source")) not in removed_ids and str(item.get("target")) not in removed_ids
+        ]
+    return removed_labels
+
+
+def _remove_ungrounded_innovations(spec: dict[str, Any]) -> list[str]:
+    removed_ids: set[str] = set()
+    removed_labels: list[str] = []
+    kept = []
+    for item in spec.get("innovations", []) if isinstance(spec.get("innovations"), list) else []:
+        if isinstance(item, dict) and item.get("evidence_ids"):
+            kept.append(item)
+            continue
+        if isinstance(item, dict):
+            removed_ids.add(str(item.get("id") or ""))
+            removed_labels.append(_item_label(item))
+    spec["innovations"] = kept
+    if removed_ids:
+        spec["relations"] = [
+            item for item in spec.get("relations", [])
+            if isinstance(item, dict) and str(item.get("source")) not in removed_ids and str(item.get("target")) not in removed_ids
+        ]
+    return removed_labels
+
+
+def _remove_input_shortcuts_through_intermediates(spec: dict[str, Any]) -> list[str]:
+    inputs = {str(item.get("id")) for item in spec.get("inputs", []) if isinstance(item, dict) and item.get("id")}
+    entities = {
+        str(item.get("id")): item
+        for field in ("modules", "outputs")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    relations = [item for item in spec.get("relations", []) if isinstance(item, dict)]
+    outgoing: dict[str, list[dict[str, Any]]] = {}
+    for relation in relations:
+        outgoing.setdefault(str(relation.get("source") or ""), []).append(relation)
+    removed: list[str] = []
+    remove_ids: set[int] = set()
+    flow_types = {"data_flow", "encoding", "prediction", "generation_input"}
+    for index, direct in enumerate(relations):
+        source = str(direct.get("source") or "")
+        target = str(direct.get("target") or "")
+        if source not in inputs or str(direct.get("type") or "data_flow") not in flow_types:
+            continue
+        for first in outgoing.get(source, []):
+            middle = str(first.get("target") or "")
+            if middle == target or middle not in entities:
+                continue
+            role_text = f"{entities[middle].get('role', '')} {_item_label(entities[middle])}".casefold()
+            if not any(term in role_text for term in ("intermediate", "artifact", "patch", "token sequence", "representation")):
+                continue
+            if any(str(second.get("target") or "") == target and str(second.get("type") or "data_flow") in flow_types for second in outgoing.get(middle, [])):
+                remove_ids.add(index)
+                removed.append(f"{source}->{target}")
+                break
+    if remove_ids:
+        spec["relations"] = [item for index, item in enumerate(relations) if index not in remove_ids]
+    return removed
+
+
 def _stable_id(prefix: str, value: str, index: int) -> str:
     slug = "_".join(part for part in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split() if part)[:48]
     return f"{prefix}_{slug or index}"
@@ -1059,6 +1162,9 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     if str(spec.get("topology") or "") not in allowed_topologies or inferred_topology in {"feedback", "multimodal"}:
         spec["topology"] = inferred_topology
     completion_report["exact_visible_entity_groundings"] = _ground_exact_visible_entities(spec, parsed)
+    completion_report["removed_out_of_scope_entities"] = _prune_out_of_scope_entities(spec, parsed, completion_report)
+    completion_report["removed_ungrounded_innovations"] = _remove_ungrounded_innovations(spec)
+    completion_report["removed_input_shortcuts"] = _remove_input_shortcuts_through_intermediates(spec)
     _repair_cross_script_terminology(spec, parsed)
     completion_report["removed_unverbatim_relation_labels"] = _clear_unverbatim_relation_labels(spec, parsed)
     labels = []

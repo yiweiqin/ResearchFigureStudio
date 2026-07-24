@@ -353,8 +353,10 @@ class PaperToImageTests(unittest.TestCase):
 
             self.assertNotIn("Model M is a reusable badge", prompt)
             self.assertIn("Do not introduce Self-Refine-specific labels", prompt)
-            self.assertFalse(report["contains_paper_semantic_labels"])
-            self.assertEqual(report["semantic_labels"], [])
+            self.assertTrue(report["contains_paper_semantic_labels"])
+            self.assertEqual(report["semantic_labels"], ["Sample", "Measure", "Update", "Estimate"])
+            self.assertTrue(report["semantic_plan"]["applied"])
+            self.assertNotIn("Self-Feedback", report["semantic_labels"])
 
     def test_dense_multiframe_prompt_forbids_crossed_sam_paths(self):
         plan = _plan()
@@ -391,6 +393,81 @@ class PaperToImageTests(unittest.TestCase):
 
         self.assertNotIn("Image must connect only to Image Encoder", prompt)
         self.assertIn("Do not introduce SAM-specific encoders", prompt)
+
+    def test_generic_linear_blueprint_renders_contract_nodes_and_connectors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            linear = next(item for item in profiles if item["template_id"] == "linear")
+            specification = {
+                "topology": "linear",
+                "required_labels": ["Source", "Parser", "Reasoner", "Answer"],
+                "inputs": [{"id": "source", "name": "Source"}],
+                "modules": [{"id": "parser", "name": "Parser"}, {"id": "reasoner", "name": "Reasoner"}],
+                "outputs": [{"id": "answer", "name": "Answer"}],
+                "relations": [
+                    {"source": "source", "target": "parser", "type": "data_flow"},
+                    {"source": "parser", "target": "reasoner", "type": "data_flow"},
+                    {"source": "reasoner", "target": "answer", "type": "data_flow"},
+                ],
+            }
+
+            report = render_layout_blueprint(linear, Path(temp) / "generic_linear.png", "3:2", figure_specification=specification)
+
+            self.assertTrue(report["contains_paper_semantic_labels"])
+            self.assertEqual(report["semantic_labels"], ["Source", "Parser", "Reasoner", "Answer"])
+            self.assertTrue(report["semantic_plan"]["applied"])
+            self.assertEqual(report["semantic_plan"]["connector_count"], 3)
+            self.assertTrue(Path(report["path"]).exists())
+            prompt = compile_image_prompt(_plan(), {"aspect_ratio": "3:2", "language": "English"}, selected_template={**linear, "semantic_plan": report["semantic_plan"]})
+            self.assertIn("Paper-grounded semantic blueprint geometry", prompt)
+            self.assertIn('"route_style": "straight"', prompt)
+            self.assertIn("preserve every node bounding box", prompt)
+
+    def test_generic_branch_multimodal_and_feedback_blueprints_render_without_paper_specific_rules(self):
+        cases = [
+            (
+                "branch",
+                {
+                    "topology": "branch",
+                    "required_labels": ["Input", "Shared Trunk", "Head A", "Head B"],
+                    "inputs": [{"id": "input", "name": "Input"}],
+                    "modules": [{"id": "trunk", "name": "Shared Trunk"}],
+                    "outputs": [{"id": "a", "name": "Head A"}, {"id": "b", "name": "Head B"}],
+                    "relations": [{"source": "input", "target": "trunk", "type": "data_flow"}, {"source": "trunk", "target": "a", "type": "branch"}, {"source": "trunk", "target": "b", "type": "branch"}],
+                },
+            ),
+            (
+                "multimodal",
+                {
+                    "topology": "multimodal",
+                    "required_labels": ["Vision", "Language", "Fusion", "Decision"],
+                    "inputs": [{"id": "vision", "name": "Vision"}, {"id": "language", "name": "Language"}],
+                    "modules": [{"id": "fusion", "name": "Fusion", "role": "shared representation"}],
+                    "outputs": [{"id": "decision", "name": "Decision"}],
+                    "relations": [{"source": "vision", "target": "fusion", "type": "encoding"}, {"source": "language", "target": "fusion", "type": "encoding"}, {"source": "fusion", "target": "decision", "type": "data_flow"}],
+                },
+            ),
+            (
+                "feedback",
+                {
+                    "topology": "feedback",
+                    "required_labels": ["Observation", "Estimator", "Correction", "State", "repeat"],
+                    "inputs": [{"id": "observation", "name": "Observation"}],
+                    "modules": [{"id": "estimator", "name": "Estimator"}, {"id": "correction", "name": "Correction"}],
+                    "outputs": [{"id": "state", "name": "State"}],
+                    "relations": [{"source": "observation", "target": "estimator", "type": "data_flow"}, {"source": "estimator", "target": "correction", "type": "data_flow"}, {"source": "correction", "target": "state", "type": "data_flow"}, {"source": "state", "target": "estimator", "type": "feedback_loop", "label": "repeat"}],
+                },
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            by_id = {item["template_id"]: item for item in profiles}
+            for template_id, specification in cases:
+                with self.subTest(template_id=template_id):
+                    report = render_layout_blueprint(by_id[template_id], Path(temp) / f"{template_id}.png", "3:2", figure_specification=specification)
+                    self.assertTrue(report["semantic_plan"]["applied"])
+                    self.assertEqual(set(report["semantic_labels"]), set(specification["required_labels"]))
+                    self.assertTrue(Path(report["path"]).exists())
 
     def test_dense_multiframe_blueprint_embeds_sam_semantic_topology(self):
         with tempfile.TemporaryDirectory() as temp:

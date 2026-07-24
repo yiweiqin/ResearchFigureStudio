@@ -638,6 +638,7 @@ def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int =
     metaphors = plan["visual_metaphors"]
     style = plan["style_plan"]
     template = selected_template or {}
+    semantic_plan = template.get("semantic_plan", {}) if isinstance(template.get("semantic_plan"), dict) else {}
     labels = collect_visible_labels(spec)
     repeatable_labels = [str(value).strip() for value in spec.get("repeatable_labels", []) if str(value).strip()] if isinstance(spec.get("repeatable_labels"), list) else []
     repeatable_normalized = {re.sub(r"[^\w\u4e00-\u9fff]+", "", value.casefold()) for value in repeatable_labels}
@@ -679,6 +680,9 @@ Style contract:
 Reference-derived content-free template contract:
 {json.dumps({key: template.get(key) for key in ['template_id', 'panels', 'connectors', 'visual_density', 'style', 'selection']}, ensure_ascii=False, indent=2)}
 
+Paper-grounded semantic blueprint geometry:
+{json.dumps(semantic_plan if semantic_plan.get('applied') else {"applied": False}, ensure_ascii=False, indent=2)}
+
 Exact visible label whitelist (render these exactly and do not invent alternatives):
 {json.dumps(labels, ensure_ascii=False)}
 
@@ -709,6 +713,7 @@ Hard requirements:
 - Do not render paragraphs, citations, fake equations, fake axes, fake charts, or invented numbers.
 - Avoid commercial-poster styling, cyberpunk effects, unrelated robots, generic brains, and repeated dashboard cards.
 - Treat the supplied blueprint as a hard macro-layout guide, but replace all reference content with this paper's content.
+- When semantic blueprint geometry is supplied, preserve every node bounding box, layer assignment, connector path, and arrow direction; visual decoration may change but graph geometry may not.
 - Template panels are macro spatial regions, not an exact limit on the number of scientific content nodes inside those regions.
 - Every visible scientific word must come from the exact label whitelist; do not paraphrase labels.
 - Render every mandatory visible label at least once; repeat only labels explicitly marked as evidence-supported shared components, and never replace an output label with an icon-only node.

@@ -162,9 +162,24 @@ and requested ratio.
 
 The selected profile is rendered as `layout_blueprint.png` and is the only image
 supplied to Image2 edit for initial candidates. Reference-derived profiles remain
-free of copied reference text and reference-specific objects. When the normalized
-paper contract matches a strict built-in topology, the renderer may add exact
-paper-semantic labels and connector geometry:
+free of copied reference text and reference-specific objects.
+
+For supported normalized topologies (`linear`, `branch`, `multimodal`,
+`feedback`, and `dense_multiframe`), contracts with 2-16 visible entities are
+compiled into `layout_blueprint.json.semantic_plan`. The plan records exact
+paper labels, normalized node boxes, graph ranks, distinct source/target ports,
+relation types, connector labels, multi-point paths, and route styles. The
+generic compiler:
+
+- puts independent inputs in one layer and separates their fan-in ports;
+- keeps parallel branch outputs in one layer with separate fan-out ports;
+- moves source-only conditioning nodes immediately before their target;
+- routes skip-layer edges around intermediate nodes instead of through them;
+- routes backward/feedback edges through an outer canvas lane;
+- refuses to force more than 16 visible nodes into one raster guide.
+
+When the contract matches a stricter built-in topology, the renderer uses a
+specialized semantic layout instead:
 
 - `feedback`: the forward generation chain, two independent inputs to refinement,
   the self-feedback node, and the return loop terminating at feedback;
@@ -176,6 +191,12 @@ This semantic blueprint is still generated from the evidence-backed contract;
 it does not copy paper figures or invent labels. It reduces topology drift by
 making Image2 preserve an explicit scientific source of truth instead of
 inferring node mapping from empty placeholder boxes.
+
+Before semantic layout, contract completion prefers true early model-overview
+figures over late scaling, timing, attention, or visualization figures. It also
+removes isolated appendix-only diagram labels, innovations that cannot be
+grounded to novelty evidence, duplicate aliases such as `MLP`/`MLP Head`, and
+input shortcuts that bypass an explicit intermediate representation.
 
 The general production review and focused topology review execute concurrently.
 Their default request timeout is 90 seconds with no automatic retry, preventing

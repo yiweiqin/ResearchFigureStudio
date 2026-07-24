@@ -59,7 +59,7 @@ CONCEPT_RULES = (
     ConceptRule("image_patches", "Image Patches", "modules", "intermediate", r"\bimage patches?\b|\bfixed-size patches\b", ("patches",), True),
     ConceptRule("linear_projection", "Linear Projection of Flattened Patches", "modules", "projection", r"\blinear projection(?: of flattened patches)?\b|\blinearly embed\b", ("linear projection",), True),
     ConceptRule("class_token", "Class Token", "modules", "conditioning", r"\bclass(?:ification)? token\b|\bclass embedding\b", ("classification token", "class embedding"), True),
-    ConceptRule("mlp_head", "MLP Head", "modules", "prediction head", r"\bmlp head\b|\bclassification head[^.]{0,100}\bmlp\b"),
+    ConceptRule("mlp_head", "MLP Head", "modules", "prediction head", r"\bmlp head\b|\bclassification head[^.]{0,100}\bmlp\b", ("mlp",)),
     ConceptRule("sampled_points", "Sampled 3D Points", "modules", "intermediate", r"\bsampl(?:e|ed|ing)\s+(?:the\s+)?(?:5d coordinates|3d points)\b|\b5d coordinates\b", ("5d coordinates", "spatial locations")),
     ConceptRule("prediction_ffn", "Feed Forward Network", "modules", "prediction head", r"\bfeed[ -]?forward network\b|\bprediction ffn\b|\bffn\b", ("ffn", "prediction feed-forward network")),
     ConceptRule("region_proposals", "Region Proposals", "modules", "proposal artifact", r"\bregion proposals?\b|\bregion proposal network\b|\brpn\b", ("proposals", "region proposal network (rpn)")),
@@ -220,7 +220,7 @@ RELATION_RULES = (
 
 def _overview_candidates(parsed: dict[str, Any], limit: int = 2) -> list[dict[str, Any]]:
     positive = re.compile(r"\b(overview|framework|architecture|pipeline|procedure|approach|model|system|workflow|representation|encoder|decoder|directly predicts)\b", re.IGNORECASE)
-    negative = re.compile(r"\b(comparison|differences?|versus|performance|result|ablation|visualization|qualitative|attention|distribution|interface)\b", re.IGNORECASE)
+    negative = re.compile(r"\b(comparison|differences?|versus|performance|result|ablation|visualization|qualitative|attention|distribution|interface|scaling|dimensions?|timings?|compute|memory)\b", re.IGNORECASE)
     ranked = []
     for index, figure in enumerate(parsed.get("document_index", {}).get("figures", [])):
         caption = str(figure.get("caption") or "")
@@ -231,7 +231,17 @@ def _overview_candidates(parsed: dict[str, Any], limit: int = 2) -> list[dict[st
         score += 3 if 160 <= len(caption) <= 1600 else 0
         score -= 14 if negative.search(caption) else 0
         ranked.append((score, -index, figure))
-    return [item for score, _, item in sorted(ranked, reverse=True) if score > 0][:limit]
+    ranked.sort(reverse=True)
+    if not ranked:
+        return []
+    best_score = ranked[0][0]
+    # Keep a second, explicitly architectural figure when it is not a result or
+    # analysis figure.  Early Figure 1/2 overviews still rank first, while the
+    # negative-caption penalty excludes late scaling, timing, attention, and
+    # visualization figures.  The second page often contains the readable
+    # subsystem labels that a short overview caption omits.
+    minimum_score = max(8, best_score - 4)
+    return [item for score, _, item in ranked if score >= minimum_score][:limit]
 
 
 def _evidence_for_figure(parsed: dict[str, Any], figure: dict[str, Any]) -> dict[str, Any] | None:

@@ -128,10 +128,13 @@ figure rather than an editable PowerPoint file. The production route performs a
 universal evidence-grounded paper review, loads a domain extension, converts
 positive references into content-free architecture templates, selects a template,
 renders `layout_blueprint.png`, and uses Image2 edit to create and review three
-candidates. For normalized feedback-loop and SAM-style dense-multiframe
-contracts, the blueprint also embeds exact paper labels and mandatory connector
-geometry so Image2 edits a scientific source of truth instead of guessing node
-mapping from empty boxes. It never invokes the PPTX compiler.
+candidates. For evidence-grounded contracts with 2-16 visible nodes, a generic
+semantic compiler now writes ranked node boxes, distinct input/output ports,
+orthogonal paths, branch lanes, and outer feedback loops into
+`layout_blueprint.json.semantic_plan`; the rendered blueprint embeds the exact
+paper labels and connector geometry. Self-Refine feedback and SAM-style dense
+multi-frame contracts retain stricter specialized layouts. It never invokes the
+PPTX compiler.
 
 Offline engineering validation:
 
@@ -172,7 +175,7 @@ rfs paper-to-image `
 
 The main outputs are `paper_review.json`, `review_coverage_report.json`,
 `domain_profile.json`, `template_profiles/`, `selected_template.json`,
-`layout_blueprint.png`, `figure_specification.json`, `image_prompt.txt`,
+`layout_blueprint.png`, `layout_blueprint.json`, `figure_specification.json`, `image_prompt.txt`,
 `image2_request_manifest.json`, the general and focused-topology critic reports, the `candidates/`
 directory, and production-only `selected_image.png`.
 
