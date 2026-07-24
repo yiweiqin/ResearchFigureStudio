@@ -192,6 +192,24 @@ it does not copy paper figures or invent labels. It reduces topology drift by
 making Image2 preserve an explicit scientific source of truth instead of
 inferring node mapping from empty placeholder boxes.
 
+The same generic semantic plan can now bypass raster generation entirely:
+
+```powershell
+rfs fast-framework-prompt `
+  --paper paper.pdf `
+  --out output\fast_result `
+  --editable-ppt
+```
+
+This writes `figure_program.json` and `editable_composition.pptx`. Nodes are
+native PowerPoint shapes with exact editable labels; multi-segment routes and
+feedback loops are native connectors created behind the nodes. The compiler
+also writes `semantic_ppt_report.json` and records every editable node and
+connector in `composition_quality_report.json`. A narrow evidence repair can
+attach an otherwise isolated dataset/source input to the same downstream
+module as sibling modalities only when the cited caption explicitly states the
+shared provenance (for example, modalities "from" that dataset).
+
 Before semantic layout, contract completion prefers true early model-overview
 figures over late scaling, timing, attention, or visualization figures. It also
 removes isolated appendix-only diagram labels, innovations that cannot be

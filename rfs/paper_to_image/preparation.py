@@ -963,6 +963,69 @@ def _clear_unverbatim_relation_labels(spec: dict[str, Any], parsed: dict[str, An
         relation["label"] = ""
     return removed
 
+
+def _repair_isolated_input_relations(spec: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    """Attach a grounded source input to a shared downstream module.
+
+    Planners sometimes extract a dataset/source label as an input but omit its
+    edge while correctly connecting sibling modalities from the same caption.
+    This repair is intentionally narrow: the isolated label must appear in the
+    same cited evidence as an existing input-to-module edge, and the evidence
+    must explicitly describe data provenance (for example, "images from X").
+    """
+    inputs = [item for item in spec.get("inputs", []) if isinstance(item, dict) and item.get("id")]
+    module_ids = {str(item.get("id")) for item in spec.get("modules", []) if isinstance(item, dict) and item.get("id")}
+    relations = spec.get("relations", []) if isinstance(spec.get("relations"), list) else []
+    connected = {
+        str(endpoint)
+        for relation in relations if isinstance(relation, dict)
+        for endpoint in (relation.get("source"), relation.get("target"))
+        if endpoint
+    }
+    evidence_by_id = {
+        str(item.get("id")): str(item.get("text") or "")
+        for item in parsed.get("evidence", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    input_ids = {str(item.get("id")) for item in inputs}
+    sibling_edges = [
+        relation for relation in relations
+        if isinstance(relation, dict)
+        and str(relation.get("source")) in input_ids
+        and str(relation.get("target")) in module_ids
+    ]
+    repaired: list[str] = []
+    for item in inputs:
+        source_id = str(item.get("id"))
+        if source_id in connected:
+            continue
+        label = _item_label(item).strip()
+        if not label:
+            continue
+        item_evidence = {str(value) for value in item.get("evidence_ids", []) if value}
+        for relation in sibling_edges:
+            shared_ids = item_evidence & {str(value) for value in relation.get("evidence_ids", []) if value}
+            if not shared_ids:
+                continue
+            cited_text = " ".join(evidence_by_id.get(value, "") for value in shared_ids)
+            label_pattern = re.escape(label).replace(r"\ ", r"\s+")
+            explicit_source = bool(re.search(rf"\b(?:from|using|uses?|sourced?\s+from)\b[^.;:]{{0,120}}{label_pattern}", cited_text, re.IGNORECASE))
+            if not explicit_source:
+                continue
+            target_id = str(relation.get("target"))
+            relations.append({
+                "source": source_id,
+                "target": target_id,
+                "type": "data_flow",
+                "label": "",
+                "evidence_ids": sorted(shared_ids),
+            })
+            connected.add(source_id)
+            repaired.append(f"{source_id}->{target_id}")
+            break
+    spec["relations"] = relations
+    return repaired
+
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
     spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
@@ -1004,6 +1067,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     completion_report["removed_duplicate_relations"] = endpoint_report["removed_duplicates"]
     completion_report["removed_unresolved_relations"] = endpoint_report["removed_unresolved"]
     completion_report["removed_self_relations"] = endpoint_report["removed_self_relations"]
+    completion_report["repaired_isolated_inputs"] = _repair_isolated_input_relations(spec, parsed)
     if endpoint_report["repaired"]:
         secondary_completion = augment_contract_from_evidence(spec, parsed)
         for key in ("added_entities", "upgraded_entities", "adopted_entities", "added_relations", "repaired_relations", "grounded_entities"):
@@ -1694,9 +1758,35 @@ def prepare_paper_figure_contract(
 
 
 def run_fast_framework_prompt(**kwargs: Any) -> dict[str, Any]:
+    editable_ppt = bool(kwargs.pop("editable_ppt", False))
     if not kwargs.get("planner_model"):
         kwargs["planner_model"] = os.getenv("RFS_FAST_FRAMEWORK_MODEL", "").strip() or "gemini-2.5-flash"
     kwargs["fast_mode"] = True
     prepared = prepare_paper_figure_contract(**kwargs)
+    if editable_ppt and prepared.get("ok"):
+        from .editable_ppt import compile_semantic_ppt
+
+        ppt_started = time.monotonic()
+        paper_summary = prepared.get("plan", {}).get("paper_summary", {})
+        title = str(paper_summary.get("title") or paper_summary.get("title_guess") or "").strip() or None
+        ppt_result = compile_semantic_ppt(
+            prepared["plan"]["figure_specification"],
+            prepared["root"],
+            aspect_ratio=prepared.get("preferences", {}).get("aspect_ratio") or "16:9",
+            title=title,
+        )
+        prepared.update({
+            "pptx_generated": bool(ppt_result.get("ok")),
+            "pptx": ppt_result.get("pptx"),
+            "semantic_ppt": ppt_result,
+        })
+        ppt_seconds = round(time.monotonic() - ppt_started, 3)
+        prepared["ppt_compile_seconds"] = ppt_seconds
+        prepared["elapsed_seconds"] = round(float(prepared.get("elapsed_seconds") or 0.0) + ppt_seconds, 3)
+        if isinstance(prepared.get("stage_timings"), dict):
+            prepared["stage_timings"]["ppt_compile_seconds"] = ppt_seconds
+            prepared["stage_timings"]["total_seconds"] = prepared["elapsed_seconds"]
+        prepared["artifacts"] = [*prepared.get("artifacts", []), "figure_program.json", "editable_composition.pptx", "semantic_ppt_report.json", "composition_quality_report.json"]
+        write_json(Path(prepared["root"]) / "run_report.json", {key: value for key, value in prepared.items() if key not in {"root", "parsed", "preferences", "paper_review", "review_metadata", "selected_domain", "plan", "planner_metadata", "archived_positive", "archived_negative", "planning_validation"}})
     internal = {"root", "parsed", "preferences", "paper_review", "review_metadata", "selected_domain", "plan", "planner_metadata", "archived_positive", "archived_negative", "planning_validation"}
     return {key: value for key, value in prepared.items() if key not in internal}

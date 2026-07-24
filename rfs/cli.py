@@ -163,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     fast_prompt.add_argument("--language", default="English")
     fast_prompt.add_argument("--ocr-engine", choices=["auto", "rapidocr", "paddle", "easyocr", "off"], default="auto")
     fast_prompt.add_argument("--ocr-lang", choices=["en", "ch", "en_ch"], default="en_ch")
+    fast_prompt.add_argument("--editable-ppt", action="store_true", help="Also compile the semantic contract into native editable PowerPoint shapes, text, and connectors.")
     fast_prompt.add_argument("--json", action="store_true", help="Emit JSON.")
 
     make = sub.add_parser("make-framework", help="Create a paper-grounded, reference-guided editable PPTX framework figure.")
@@ -413,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
                 aspect_ratio=args.aspect_ratio,
                 language=args.language,
                 domain_profile=args.domain_profile,
+                editable_ppt=args.editable_ppt,
             )
         elif args.command == "make-framework":
             result = make_framework(

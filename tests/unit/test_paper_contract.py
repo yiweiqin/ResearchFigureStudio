@@ -1370,6 +1370,38 @@ class PaperContractTests(unittest.TestCase):
         self.assertNotIn("Text Encoder", ids)
         self.assertNotIn("Contrastive Learning", ids)
 
+    def test_isolated_dataset_input_is_connected_when_caption_explicitly_supplies_sibling_modalities(self):
+        caption = "Figure 1: Stage one constructs RETFound by means of SSL, using CFP and OCT from MEH-MIDAS and public datasets."
+        parsed = {
+            "page_count": 4,
+            "document_index": {"figures": [{"page": 2, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 2, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "linear",
+                "inputs": [
+                    {"id": "cfp", "name": "CFP", "evidence_ids": ["E0001"]},
+                    {"id": "oct", "name": "OCT", "evidence_ids": ["E0001"]},
+                    {"id": "meh", "name": "MEH-MIDAS", "evidence_ids": ["E0001"]},
+                ],
+                "modules": [{"id": "ssl", "name": "SSL", "evidence_ids": ["E0001"]}],
+                "outputs": [],
+                "innovations": [],
+                "relations": [
+                    {"source": "cfp", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "oct", "target": "ssl", "type": "data_flow", "evidence_ids": ["E0001"]},
+                ],
+            },
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertIn(("meh", "ssl"), pairs)
+        self.assertIn("meh->ssl", plan["contract_completion_report"]["repaired_isolated_inputs"])
+
     def test_generic_completion_recovers_retrieval_conditioned_generation(self):
         caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."
         result_caption = "Figure 2: Posterior for each generated token with five retrieved documents."

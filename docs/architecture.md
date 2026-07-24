@@ -57,6 +57,7 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 | Scientific entities and exact labels | `paper_review.json`, `figure_specification.json` |
 | Scientific relations and evidence | Paper semantic contract |
 | Paper-to-image draft node and connector geometry | `layout_blueprint.json.semantic_plan` |
+| Direct paper-to-PPT node and connector geometry | `figure_program.json` compiled from the same semantic plan |
 | Layout, visual rhythm, palette, object style | Approved generated/user reference image |
 | Editable object geometry | `figure_program.json` |
 | PowerPoint rendering | `ppt_compiler.py` |
@@ -64,6 +65,7 @@ The current package remains under `rfs/` to avoid a disruptive all-at-once move.
 
 ## Stable workflow boundaries
 
+- `fast-framework-prompt`: produces the cached semantic contract and prompt; `--editable-ppt` additionally emits a fast native-shape PPTX without image generation.
 - `paper-to-image`: produces reviewed visual candidates and paper-grounding artifacts; it never creates PPTX.
 - `rebuild-editable`: reconstructs an image; it can optionally accept a paper semantic contract.
 - `paper-to-editable`: runs both stages and requires a production-approved image unless engineering preview use is explicitly enabled.

@@ -230,6 +230,7 @@ def _align_from_text_item(item: dict):
 def _object_map(program: dict) -> dict[str, dict]:
     objects = {panel["id"]: panel for panel in program.get("panels", [])}
     objects.update({slot["id"]: slot for slot in program.get("slots", [])})
+    objects.update({node["id"]: node for node in program.get("semantic_nodes", []) if isinstance(node, dict) and node.get("id")})
     return objects
 
 
@@ -307,6 +308,7 @@ def _draw_program_arrows(slide, program: dict, width_in: float, height_in: float
                 if dashed:
                     halo.line.dash_style = MSO_LINE_DASH_STYLE.DASH
             connector = slide.shapes.add_connector(connector_type, Inches(x1), Inches(y1), Inches(x2), Inches(y2))
+            connector.name = f"RFS Connector {arrow.get('id') or 'unnamed'} {idx + 1}"
             connector.line.color.rgb = _rgb(arrow_color)
             connector.line.width = Pt(line_width)
             _apply_line_cap(connector, str(arrow.get("line_cap") or "round"))
@@ -420,6 +422,42 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
         })
 
     rendered_arrows = _draw_program_arrows(slide, program, width_in, height_in)
+
+    # Paper semantic nodes are rendered after connectors so every edge stays
+    # behind the editable node shape and its exact paper label.
+    rendered_semantic_nodes = []
+    for node in sorted(program.get("semantic_nodes", []), key=lambda item: int(item.get("z_index", 30))):
+        if not isinstance(node, dict) or not isinstance(node.get("bbox_percent"), dict):
+            continue
+        x, y, w, h = pct_to_inches(node["bbox_percent"], width_in, height_in)
+        shape_kind = str(node.get("shape_kind") or "rounded_rect").casefold()
+        shape_type = MSO_SHAPE.RECTANGLE if shape_kind == "rect" else MSO_SHAPE.ROUNDED_RECTANGLE
+        shape = slide.shapes.add_shape(shape_type, Inches(x), Inches(y), Inches(w), Inches(h))
+        shape.name = f"RFS Semantic Node {node.get('id') or 'unnamed'}"
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _rgb(str(node.get("fill_color") or "#F5FAFC"))
+        shape.line.color.rgb = _rgb(str(node.get("stroke_color") or "#1F6F8B"))
+        shape.line.width = Pt(float(node.get("stroke_width_pt") or 1.6))
+        shape.shadow.inherit = False
+        _set_text(
+            shape,
+            str(node.get("label") or node.get("name") or node.get("id") or ""),
+            font_size=float(node.get("font_size_pt") or 16),
+            bold=bool(node.get("bold", True)),
+            color=str(node.get("text_color") or node.get("stroke_color") or "#163B4D"),
+            font_family=str(node.get("font_family") or "Arial"),
+        )
+        rendered_semantic_nodes.append({
+            "node_id": node.get("id"),
+            "label": node.get("label") or node.get("name"),
+            "field": node.get("field"),
+            "role": node.get("role"),
+            "bbox_percent": node.get("bbox_percent"),
+            "shape_kind": shape_kind,
+            "editable_in": "pptx",
+            "render_policy": "ppt_shape_with_editable_text",
+            "status": "ok",
+        })
 
     # Slot image layer and editable captions.
     composition_items = []
@@ -585,6 +623,7 @@ def compile_ppt(program: dict, out_dir: str | Path) -> Path:
         "slots": composition_items,
         "cards": rendered_cards,
         "arrows": rendered_arrows,
+        "semantic_nodes": rendered_semantic_nodes,
         "text": rendered_text_items,
     })
     return pptx_path
