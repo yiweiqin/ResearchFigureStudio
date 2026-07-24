@@ -530,6 +530,9 @@ def collect_visible_labels(spec: dict, limit: int = 24) -> list[str]:
     for field in ("inputs", "modules", "outputs"):
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             add(item)
+    for relation in spec.get("relations", []) if isinstance(spec.get("relations"), list) else []:
+        if isinstance(relation, dict):
+            add(relation.get("label"))
     return labels[: max(1, int(limit))]
 
 
@@ -575,6 +578,59 @@ def collect_visual_relations(spec: dict) -> list[dict[str, str]]:
     return result
 
 
+def _topology_specific_prompt_rules(spec: dict) -> str:
+    topology = str(spec.get("topology") or "unknown")
+    normalized_labels = {
+        re.sub(r"[^\w\u4e00-\u9fff]+", "", str(item.get("name") or item.get("label") or item.get("title") or "").casefold())
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    }
+    feedback_signature = {
+        "inputx", "generate", "initialoutput", "feedback", "selffeedback", "refine", "refinedoutput", "modelm",
+    }
+    dense_signature = {
+        "promptablesegmentationtask", "segmentanythingmodel", "dataengine", "image", "prompt",
+        "imageencoder", "promptencoder", "maskdecoder", "validsegmentationmask",
+        "assistedmanual", "semiautomatic", "fullyautomatic", "sa1b",
+    }
+    if topology == "feedback" and feedback_signature.issubset(normalized_labels):
+        return """Feedback-loop topology hard rules:
+- Keep one top-row forward chain: input x -> Generate -> Initial Output -> FEEDBACK.
+- Initial Output must have exactly two distinct outgoing arrows: one to FEEDBACK and one directly to REFINE.
+- FEEDBACK must produce Self-Feedback, and Self-Feedback must have its own distinct outgoing arrow into REFINE.
+- REFINE must therefore receive exactly two visually separate incoming arrows: Initial Output -> REFINE and Self-Feedback -> REFINE. Do not merge them upstream and do not redirect either arrow to the other source node.
+- The connector labeled iterate must start at Refined output and terminate only at FEEDBACK. Its arrowhead must visibly touch the FEEDBACK boundary.
+- Model M is a reusable badge inside Generate, FEEDBACK, and/or REFINE; it is not a separate flow node and must not receive extra arrows.
+- Forbidden connectors: Initial Output -> Self-Feedback; Refined output -> Generate; REFINE -> Self-Feedback; Self-Feedback -> FEEDBACK; FEEDBACK -> REFINE as a shortcut that omits the visible Self-Feedback node.
+- Preserve the supplied blueprint's two-row geometry and right-side return loop. Do not rearrange the loop into a different circular or bottom-return layout."""
+    if topology == "feedback":
+        return """Feedback-loop topology hard rules:
+- Follow only the declared nodes and directed relations in the scientific contract.
+- Keep the forward path and return path visually separate, with the return arrowhead touching its declared target.
+- Preserve every declared intermediate feedback artifact; do not shortcut across it.
+- If two declared sources enter one refinement node, draw two visibly distinct incoming arrows.
+- Do not introduce Self-Refine-specific labels, shared-model badges, or connector names unless they are present in the contract."""
+    if topology == "dense_multiframe" and dense_signature.issubset(normalized_labels):
+        return """Dense multi-frame topology hard rules:
+- Preserve exactly three macro panels: Promptable Segmentation Task, Segment Anything Model, and Data Engine.
+- Image must connect only to Image Encoder; Prompt must connect only to Prompt Encoder.
+- Image Encoder and Prompt Encoder must each have a separate directed arrow into Mask Decoder. Do not chain one encoder through the other.
+- Mask Decoder must connect directly to Valid Segmentation Mask inside the model panel.
+- Data Engine must be a separate vertical chain: Assisted-manual -> Semi-automatic -> Fully Automatic -> SA-1B.
+- Draw the Segment Anything Model -> Data Engine annotation-support relation as a distinct high-level container-to-container arrow, visually separate from the mask-prediction path.
+- Forbidden connectors: Prompt -> Image Encoder; Image -> Prompt Encoder; Image Encoder -> Prompt Encoder; Prompt Encoder -> Image Encoder; Fully Automatic -> Valid Segmentation Mask; Mask Decoder -> Data Engine as a replacement for the required container-level support arrow.
+- Do not let any Data Engine stage enter Valid Segmentation Mask, and do not let the model inference path enter SA-1B."""
+    if topology == "dense_multiframe":
+        return """Dense multi-frame topology hard rules:
+- Preserve the declared macro-panel grouping and every directed cross-panel relation.
+- Keep independent input branches separate until their declared convergence node.
+- Keep panel-local output paths separate from dataset, training, or data-engine paths.
+- Draw high-level container-to-container relations separately from internal module arrows.
+- Do not introduce SAM-specific encoders, masks, data-engine stages, or dataset labels unless they are present in the contract."""
+    return "No additional topology-specific rules. Follow the directed connector checklist exactly."
+
+
 def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int = 1, selected_template: dict | None = None) -> str:
     spec = plan["figure_specification"]
     design = plan["design_plan"]
@@ -594,6 +650,7 @@ def compile_image_prompt(plan: dict, preferences: dict, candidate_variant: int =
         f"{index}. {item['source_label']} -> {item['target_label']} [{item['type']}]" + (f" label: {item['label']}" if item["label"] else "")
         for index, item in enumerate(visual_relations, start=1)
     )
+    topology_specific_rules = _topology_specific_prompt_rules(spec)
     return f"""
 # Summary
 
@@ -634,6 +691,9 @@ Mandatory directed connector checklist:
 {connector_checklist}
 
 Every connector above must be visible with the stated direction. Do not bypass an intermediate module, do not replace two required inputs with one shortcut arrow, and do not add direct source-to-output paths that are absent from this checklist. Shared component labels may repeat as visual badges without adding extra implementation-level arrows.
+
+Topology-specific rendering rules:
+{topology_specific_rules}
 
 Forbidden copied reference terms:
 {json.dumps(template.get('forbidden_copy_terms', []), ensure_ascii=False)}

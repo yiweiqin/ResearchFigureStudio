@@ -128,7 +128,10 @@ figure rather than an editable PowerPoint file. The production route performs a
 universal evidence-grounded paper review, loads a domain extension, converts
 positive references into content-free architecture templates, selects a template,
 renders `layout_blueprint.png`, and uses Image2 edit to create and review three
-candidates. It never invokes the PPTX compiler.
+candidates. For normalized feedback-loop and SAM-style dense-multiframe
+contracts, the blueprint also embeds exact paper labels and mandatory connector
+geometry so Image2 edits a scientific source of truth instead of guessing node
+mapping from empty boxes. It never invokes the PPTX compiler.
 
 Offline engineering validation:
 
@@ -210,7 +213,9 @@ systems with parallel prediction heads use `branch`; true search-tree systems
 use `arbor`; simple sequential systems use `linear`. Feedback, branch,
 multimodal, and dense candidates also run a focused connector judge that
 verifies visible arrow endpoints and rejects shortcuts that bypass required
-modules.
+modules. The judge understands explicit containment: an evidence-supported
+repeatable shared component inside a labeled operation container may implement
+that container's outgoing relation without being treated as an invented edge.
 
 The general production critic and focused connector critic run concurrently.
 Each uses a 90-second default timeout with no automatic full-call retry; override

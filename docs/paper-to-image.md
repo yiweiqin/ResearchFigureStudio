@@ -160,7 +160,22 @@ density, palette, and forbidden copied content. Automatic selection uses module
 count, loop/tree/parallel-branch structure, multimodality, retrieval structure,
 and requested ratio.
 
-The selected profile is rendered as `layout_blueprint.png`. The blueprint contains no reference text or reference-specific objects and is the only image supplied to Image2 edit for initial candidates.
+The selected profile is rendered as `layout_blueprint.png` and is the only image
+supplied to Image2 edit for initial candidates. Reference-derived profiles remain
+free of copied reference text and reference-specific objects. When the normalized
+paper contract matches a strict built-in topology, the renderer may add exact
+paper-semantic labels and connector geometry:
+
+- `feedback`: the forward generation chain, two independent inputs to refinement,
+  the self-feedback node, and the return loop terminating at feedback;
+- `dense-multiframe`: task/model/data-engine panels, separate image and prompt
+  encoder paths, decoder-to-mask output, the data-engine stage chain, and a
+  separate model-to-data-engine support arrow.
+
+This semantic blueprint is still generated from the evidence-backed contract;
+it does not copy paper figures or invent labels. It reduces topology drift by
+making Image2 preserve an explicit scientific source of truth instead of
+inferring node mapping from empty placeholder boxes.
 
 The general production review and focused topology review execute concurrently.
 Their default request timeout is 90 seconds with no automatic retry, preventing
@@ -201,6 +216,13 @@ The review gate also rejects `unexpected_labels`: visible scientific labels
 outside `figure_specification.required_labels` and `repeatable_labels`. This is
 stricter than checking hallucinations alone because a term can be supported by
 the paper yet still be outside the intended overview contract.
+
+The focused topology judge also supports explicit containment semantics. If a
+declared operation container visibly contains an evidence-supported repeatable
+shared component, an arrow from that nested component to the target may satisfy
+the container's outgoing relation. This is limited to repeatable labels inside
+the declared source container; it cannot excuse missing cross-panel arrows,
+shortcuts, reversed edges, or invented nodes.
 
 If a stability run is interrupted or one provider request fails, resume it in
 place:

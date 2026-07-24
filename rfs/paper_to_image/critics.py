@@ -123,7 +123,9 @@ def _normalize_section(raw: Any, name: str) -> dict:
 
 
 def _vlm_topology_critic(path: Path, plan: dict, model: str | None, adapter: Callable | None = None) -> dict:
-    relations = collect_visual_relations(plan.get("figure_specification", {}))
+    specification = plan.get("figure_specification", {})
+    relations = collect_visual_relations(specification)
+    repeatable_labels = [str(value).strip() for value in specification.get("repeatable_labels", []) if str(value).strip()]
     prompt = f"""
 # Summary
 
@@ -132,6 +134,9 @@ Act as a focused topology verifier for one scientific framework image. Inspect v
 Mandatory directed connectors:
 {json.dumps(relations, ensure_ascii=False, indent=2)}
 
+Evidence-supported repeatable shared-component labels:
+{json.dumps(repeatable_labels, ensure_ascii=False)}
+
 Rules:
 - Verify every source, target, and arrowhead direction from visible geometry.
 - A line that joins the outgoing side of a target or a downstream junction does not count as entering that target.
@@ -139,6 +144,9 @@ Rules:
 - For refinement loops, Initial Output and Self-Feedback must both enter Refine or its explicit input-side shared-model node before Refined Output.
 - Refined Output must return to Feedback to close the loop.
 - Do not penalize repeated labels explicitly allowed by the scientific contract.
+- Respect explicit containment semantics. When a mandatory source is a clearly labeled operation/container and an allowed repeatable shared-component badge inside that container visibly produces the target, count the container-to-target relation as present. The nested badge explains who implements the container operation; it is not an invented extra scientific edge.
+- In particular, a FEEDBACK container holding an allowed shared Model M badge with an arrow to Self-Feedback satisfies FEEDBACK -> Self-Feedback. Do not require an unnatural arrow starting at the container border or title text.
+- Apply the containment exception only when the shared badge is visibly inside the declared source container and is listed above as repeatable. Do not use it to excuse missing cross-container arrows or shortcuts.
 
 Return:
 {{

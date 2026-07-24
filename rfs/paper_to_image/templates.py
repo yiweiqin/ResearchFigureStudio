@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from ..utils import ensure_dir, write_json
 from ..vlm_client import call_vlm_json, resolve_vlm_model, vlm_credentials_available
@@ -72,12 +72,12 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         "ideal_module_range": [4, 9],
         "visual_density": "high",
         "panels": [
-            {"id": "task_input", "role": "input", "bbox_percent": {"x": 0.02, "y": 0.28, "w": 0.13, "h": 0.43}},
-            {"id": "generation", "role": "initial_generation", "bbox_percent": {"x": 0.20, "y": 0.10, "w": 0.20, "h": 0.28}},
-            {"id": "initial_output", "role": "initial_output", "bbox_percent": {"x": 0.44, "y": 0.10, "w": 0.18, "h": 0.28}},
-            {"id": "feedback", "role": "self_feedback", "bbox_percent": {"x": 0.72, "y": 0.29, "w": 0.20, "h": 0.30}},
-            {"id": "refinement", "role": "refinement", "bbox_percent": {"x": 0.24, "y": 0.63, "w": 0.22, "h": 0.24}},
-            {"id": "refined_output", "role": "refined_output", "bbox_percent": {"x": 0.54, "y": 0.63, "w": 0.20, "h": 0.24}},
+            {"id": "task_input", "role": "input", "bbox_percent": {"x": 0.02, "y": 0.12, "w": 0.12, "h": 0.24}},
+            {"id": "generation", "role": "initial_generation", "bbox_percent": {"x": 0.18, "y": 0.10, "w": 0.20, "h": 0.28}},
+            {"id": "initial_output", "role": "initial_output", "bbox_percent": {"x": 0.42, "y": 0.10, "w": 0.18, "h": 0.28}},
+            {"id": "feedback", "role": "self_feedback", "bbox_percent": {"x": 0.70, "y": 0.10, "w": 0.22, "h": 0.36}},
+            {"id": "refinement", "role": "refinement", "bbox_percent": {"x": 0.42, "y": 0.62, "w": 0.20, "h": 0.25}},
+            {"id": "refined_output", "role": "refined_output", "bbox_percent": {"x": 0.68, "y": 0.62, "w": 0.20, "h": 0.25}},
         ],
         "connectors": ["input_to_generation", "generation_to_initial_output", "initial_output_to_feedback", "initial_output_to_refinement", "feedback_to_refinement", "refinement_to_refined_output", "refined_output_to_feedback_loop"],
         "style": {"background": "white", "panel_fill": "near_white", "stroke": "muted_blue", "accent": ["navy", "teal", "orange"], "corners": "rounded", "shadow": "soft_cards"},
@@ -327,12 +327,78 @@ def _canvas_size(profile: dict, target_ratio: str) -> tuple[int, int, float]:
     return width, height, ratio
 
 
-def render_layout_blueprint(profile: dict, out_path: str | Path, target_ratio: str = "auto") -> dict:
+def render_layout_blueprint(
+    profile: dict,
+    out_path: str | Path,
+    target_ratio: str = "auto",
+    figure_specification: dict[str, Any] | None = None,
+) -> dict:
     width, height, ratio = _canvas_size(profile, target_ratio)
     image = Image.new("RGB", (width, height), (250, 250, 249))
     draw = ImageDraw.Draw(image)
     panels = profile.get("panels", [])
+
+    def normalized(value: Any) -> str:
+        return "".join(char for char in str(value or "").casefold() if char.isalnum())
+
+    exact_labels: dict[str, str] = {}
+    if figure_specification:
+        for field in ("inputs", "modules", "outputs", "innovations"):
+            for item in figure_specification.get(field, []) if isinstance(figure_specification.get(field), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("name") or item.get("label") or item.get("title") or "").strip()
+                if label:
+                    exact_labels[normalized(label)] = label
+        for label in figure_specification.get("required_labels", []) if isinstance(figure_specification.get("required_labels"), list) else []:
+            if str(label).strip():
+                exact_labels.setdefault(normalized(label), str(label).strip())
+
+    def exact(canonical: str) -> str:
+        return exact_labels.get(normalized(canonical), canonical)
+
+    feedback_required = {
+        normalized(value)
+        for value in ("input x", "Generate", "Initial Output", "FEEDBACK", "Self-Feedback", "REFINE", "Refined output", "Model M")
+    }
+    semantic_feedback = profile.get("template_id") == "feedback" and feedback_required.issubset(exact_labels)
+    dense_required = {
+        normalized(value)
+        for value in (
+            "Promptable Segmentation Task", "Segment Anything Model", "Data Engine", "Image", "Prompt",
+            "Image Encoder", "Prompt Encoder", "Mask Decoder", "Valid Segmentation Mask",
+            "Assisted-manual", "Semi-automatic", "Fully Automatic", "SA-1B",
+        )
+    }
+    semantic_dense = profile.get("template_id") == "dense-multiframe" and dense_required.issubset(exact_labels)
+    semantic_blueprint = semantic_feedback or semantic_dense
+
+    def font(size: int, bold: bool = False):
+        candidates = ["arialbd.ttf", "DejaVuSans-Bold.ttf"] if bold else ["arial.ttf", "DejaVuSans.ttf"]
+        for candidate in candidates:
+            try:
+                return ImageFont.truetype(candidate, max(12, size))
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def centered_text(box: tuple[int, int, int, int], value: str, size: int, fill=(42, 72, 91), bold: bool = True) -> None:
+        fitted_size = max(12, size)
+        selected_font = font(fitted_size, bold=bold)
+        bounds = draw.textbbox((0, 0), value, font=selected_font)
+        available_width = max(8, box[2] - box[0] - 12)
+        while bounds[2] - bounds[0] > available_width and fitted_size > 12:
+            fitted_size -= 1
+            selected_font = font(fitted_size, bold=bold)
+            bounds = draw.textbbox((0, 0), value, font=selected_font)
+        text_width = bounds[2] - bounds[0]
+        text_height = bounds[3] - bounds[1]
+        x = box[0] + ((box[2] - box[0]) - text_width) / 2
+        y = box[1] + ((box[3] - box[1]) - text_height) / 2 - bounds[1]
+        draw.text((x, y), value, font=selected_font, fill=fill)
+
     centers = []
+    panel_boxes = []
     for index, panel in enumerate(panels):
         bbox = panel["bbox_percent"]
         x0, y0 = int(bbox["x"] * width), int(bbox["y"] * height)
@@ -351,38 +417,168 @@ def render_layout_blueprint(profile: dict, out_path: str | Path, target_ratio: s
         else:
             draw.rounded_rectangle((x0, y0, x1, y1), radius=max(10, round(height * 0.025)), fill=fill, outline=(104, 132, 151), width=3)
         centers.append(((x0 + x1) // 2, (y0 + y1) // 2))
-        slots = max(2, min(6, round((x1 - x0) / max(width * 0.12, 1))))
-        for slot_index in range(slots):
-            sx0 = x0 + int((slot_index + 0.2) / slots * (x1 - x0))
-            sx1 = x0 + int((slot_index + 0.8) / slots * (x1 - x0))
-            sy0 = y0 + int(0.28 * (y1 - y0))
-            sy1 = y0 + int(0.70 * (y1 - y0))
-            draw.rounded_rectangle((sx0, sy0, sx1, sy1), radius=8, outline=(178, 190, 198), width=2)
-    for index in range(len(centers) - 1):
-        start = centers[index]
-        end = centers[index + 1]
-        draw.line((start, end), fill=(80, 111, 134), width=4)
-        angle = math.atan2(end[1] - start[1], end[0] - start[0])
+        panel_boxes.append((x0, y0, x1, y1))
+        if not semantic_blueprint:
+            slots = max(2, min(6, round((x1 - x0) / max(width * 0.12, 1))))
+            for slot_index in range(slots):
+                sx0 = x0 + int((slot_index + 0.2) / slots * (x1 - x0))
+                sx1 = x0 + int((slot_index + 0.8) / slots * (x1 - x0))
+                sy0 = y0 + int(0.28 * (y1 - y0))
+                sy1 = y0 + int(0.70 * (y1 - y0))
+                draw.rounded_rectangle((sx0, sy0, sx1, sy1), radius=8, outline=(178, 190, 198), width=2)
+    def draw_arrow_path(points: list[tuple[int, int]], color: tuple[int, int, int] = (80, 111, 134)) -> None:
+        draw.line(points, fill=color, width=4, joint="curve")
+        if len(points) < 2:
+            return
+        tail, end = points[-2], points[-1]
+        angle = math.atan2(end[1] - tail[1], end[0] - tail[0])
         arrow = 12
         points = [end, (end[0] - arrow * math.cos(angle - 0.45), end[1] - arrow * math.sin(angle - 0.45)), (end[0] - arrow * math.cos(angle + 0.45), end[1] - arrow * math.sin(angle + 0.45))]
-        draw.polygon(points, fill=(80, 111, 134))
-    if profile.get("template_id") == "feedback" and len(centers) >= 6:
-        extra_pairs = [(centers[2], centers[4]), (centers[5], centers[3])]
-        for pair_index, (start, end) in enumerate(extra_pairs):
-            if pair_index == 0:
-                mid_y = max(start[1], end[1])
-                path = [start, (start[0], mid_y), end]
-            else:
-                loop_x = min(width - 18, max(start[0], end[0]) + round(width * 0.08))
-                path = [start, (loop_x, start[1]), (loop_x, end[1]), end]
-            draw.line(path, fill=(31, 117, 126), width=4, joint="curve")
-            if len(path) >= 2:
-                tail, head = path[-2], path[-1]
-                angle = math.atan2(head[1] - tail[1], head[0] - tail[0])
-                arrow = 12
-                points = [head, (head[0] - arrow * math.cos(angle - 0.45), head[1] - arrow * math.sin(angle - 0.45)), (head[0] - arrow * math.cos(angle + 0.45), head[1] - arrow * math.sin(angle + 0.45))]
-                draw.polygon(points, fill=(31, 117, 126))
+        draw.polygon(points, fill=color)
+
+    def region(box, x0: float, y0: float, x1: float, y1: float) -> tuple[int, int, int, int]:
+        return (
+            round(box[0] + x0 * (box[2] - box[0])),
+            round(box[1] + y0 * (box[3] - box[1])),
+            round(box[0] + x1 * (box[2] - box[0])),
+            round(box[1] + y1 * (box[3] - box[1])),
+        )
+
+    def draw_dashed_arrow(start: tuple[int, int], end: tuple[int, int], color: tuple[int, int, int] = (177, 92, 33)) -> None:
+        length = max(1, end[0] - start[0])
+        dash = max(10, round(width * 0.008))
+        gap = max(7, round(width * 0.005))
+        cursor = 0
+        while cursor < length - 16:
+            draw.line((start[0] + cursor, start[1], min(end[0] - 16, start[0] + cursor + dash), end[1]), fill=color, width=4)
+            cursor += dash + gap
+        draw_arrow_path([(end[0] - 18, end[1]), end], color)
+
+    if profile.get("template_id") == "feedback" and len(panel_boxes) >= 6:
+        def left(box): return (box[0], (box[1] + box[3]) // 2)
+        def right(box): return (box[2], (box[1] + box[3]) // 2)
+        def top_at(box, fraction): return (round(box[0] + fraction * (box[2] - box[0])), box[1])
+        def bottom_at(box, fraction): return (round(box[0] + fraction * (box[2] - box[0])), box[3])
+        input_box, generation_box, initial_box, feedback_box, refinement_box, refined_box = panel_boxes[:6]
+        draw_arrow_path([right(input_box), left(generation_box)])
+        draw_arrow_path([right(generation_box), left(initial_box)])
+        draw_arrow_path([right(initial_box), left(feedback_box)])
+        initial_start, initial_end = bottom_at(initial_box, 0.45), top_at(refinement_box, 0.35)
+        initial_mid_y = round((initial_start[1] + initial_end[1]) / 2)
+        draw_arrow_path([initial_start, (initial_start[0], initial_mid_y), (initial_end[0], initial_mid_y), initial_end], (31, 117, 126))
+        feedback_start, feedback_end = bottom_at(feedback_box, 0.50), top_at(refinement_box, 0.72)
+        feedback_mid_y = round((feedback_start[1] + feedback_end[1]) / 2)
+        draw_arrow_path([feedback_start, (feedback_start[0], feedback_mid_y), (feedback_end[0], feedback_mid_y), feedback_end], (31, 117, 126))
+        draw_arrow_path([right(refinement_box), left(refined_box)], (31, 117, 126))
+        loop_start = right(refined_box)
+        loop_end = (feedback_box[2], round(feedback_box[1] + 0.70 * (feedback_box[3] - feedback_box[1])))
+        loop_x = min(width - 18, max(loop_start[0], loop_end[0]) + round(width * 0.045))
+        draw_arrow_path([loop_start, (loop_x, loop_start[1]), (loop_x, loop_end[1]), loop_end], (31, 117, 126))
+        if semantic_feedback:
+            input_box, generation_box, initial_box, feedback_box, refinement_box, refined_box = panel_boxes[:6]
+            title_size = max(16, round(height * 0.025))
+            badge_size = max(14, round(height * 0.020))
+            centered_text(region(input_box, 0.05, 0.30, 0.95, 0.70), exact("input x"), title_size)
+            centered_text(region(generation_box, 0.05, 0.06, 0.95, 0.35), exact("Generate"), title_size)
+            centered_text(region(initial_box, 0.04, 0.20, 0.96, 0.52), exact("Initial Output"), title_size)
+            centered_text(region(feedback_box, 0.05, 0.04, 0.95, 0.25), exact("FEEDBACK"), title_size, fill=(177, 92, 33))
+            centered_text(region(refinement_box, 0.05, 0.06, 0.95, 0.34), exact("REFINE"), title_size)
+            centered_text(region(refined_box, 0.04, 0.20, 0.96, 0.52), exact("Refined output"), title_size)
+
+            for badge_box in (
+                region(generation_box, 0.24, 0.48, 0.76, 0.76),
+                region(feedback_box, 0.30, 0.27, 0.70, 0.47),
+                region(refinement_box, 0.24, 0.48, 0.76, 0.76),
+            ):
+                draw.rounded_rectangle(badge_box, radius=10, fill=(235, 243, 248), outline=(126, 157, 177), width=2)
+                centered_text(badge_box, exact("Model M"), badge_size, bold=False)
+
+            self_feedback_box = region(feedback_box, 0.13, 0.60, 0.87, 0.88)
+            draw.rounded_rectangle(self_feedback_box, radius=10, fill=(238, 249, 248), outline=(31, 117, 126), width=2)
+            centered_text(self_feedback_box, exact("Self-Feedback"), badge_size)
+            internal_start = (round((feedback_box[0] + feedback_box[2]) / 2), region(feedback_box, 0, 0.47, 1, 0.47)[1])
+            internal_end = (round((self_feedback_box[0] + self_feedback_box[2]) / 2), self_feedback_box[1])
+            draw_arrow_path([internal_start, internal_end], (31, 117, 126))
+
+            iterate_box = (loop_x - round(width * 0.08), round((loop_start[1] + loop_end[1]) / 2) - 22, loop_x - 4, round((loop_start[1] + loop_end[1]) / 2) + 22)
+            centered_text(iterate_box, exact("iterate"), badge_size, fill=(31, 117, 126), bold=False)
+    elif semantic_dense and len(panel_boxes) >= 3:
+        task_box, model_box, data_box = panel_boxes[:3]
+        title_size = max(15, round(height * 0.022))
+        node_size = max(13, round(height * 0.017))
+
+        image_box = region(task_box, 0.12, 0.23, 0.88, 0.37)
+        prompt_box = region(task_box, 0.12, 0.57, 0.88, 0.71)
+        image_encoder_box = region(model_box, 0.06, 0.23, 0.43, 0.37)
+        prompt_encoder_box = region(model_box, 0.06, 0.57, 0.43, 0.71)
+        mask_decoder_box = region(model_box, 0.56, 0.38, 0.94, 0.54)
+        valid_mask_box = region(model_box, 0.56, 0.69, 0.94, 0.84)
+        assisted_box = region(data_box, 0.12, 0.22, 0.88, 0.34)
+        semi_box = region(data_box, 0.12, 0.41, 0.88, 0.53)
+        fully_box = region(data_box, 0.12, 0.60, 0.88, 0.72)
+        sa1b_box = region(data_box, 0.22, 0.80, 0.78, 0.91)
+
+        def left(box): return (box[0], (box[1] + box[3]) // 2)
+        def right(box): return (box[2], (box[1] + box[3]) // 2)
+        def top(box): return ((box[0] + box[2]) // 2, box[1])
+        def bottom(box): return ((box[0] + box[2]) // 2, box[3])
+
+        draw_arrow_path([right(image_box), left(image_encoder_box)], (42, 99, 161))
+        draw_arrow_path([right(prompt_box), left(prompt_encoder_box)], (31, 117, 126))
+        decoder_upper = (mask_decoder_box[0], round(mask_decoder_box[1] + 0.32 * (mask_decoder_box[3] - mask_decoder_box[1])))
+        decoder_lower = (mask_decoder_box[0], round(mask_decoder_box[1] + 0.70 * (mask_decoder_box[3] - mask_decoder_box[1])))
+        draw_arrow_path([right(image_encoder_box), decoder_upper], (42, 99, 161))
+        draw_arrow_path([right(prompt_encoder_box), decoder_lower], (31, 117, 126))
+        draw_arrow_path([bottom(mask_decoder_box), top(valid_mask_box)], (80, 111, 134))
+        draw_arrow_path([bottom(assisted_box), top(semi_box)], (177, 92, 33))
+        draw_arrow_path([bottom(semi_box), top(fully_box)], (177, 92, 33))
+        draw_arrow_path([bottom(fully_box), top(sa1b_box)], (177, 92, 33))
+        support_y = round(model_box[1] + 0.17 * (model_box[3] - model_box[1]))
+        draw_dashed_arrow((model_box[2], support_y), (data_box[0], support_y), (177, 92, 33))
+
+        node_specs = [
+            (image_box, "Image", (237, 245, 252), (42, 99, 161)),
+            (prompt_box, "Prompt", (237, 249, 247), (31, 117, 126)),
+            (image_encoder_box, "Image Encoder", (237, 245, 252), (42, 99, 161)),
+            (prompt_encoder_box, "Prompt Encoder", (237, 249, 247), (31, 117, 126)),
+            (mask_decoder_box, "Mask Decoder", (244, 242, 251), (98, 84, 147)),
+            (valid_mask_box, "Valid Segmentation Mask", (242, 248, 243), (66, 126, 80)),
+            (assisted_box, "Assisted-manual", (252, 244, 235), (177, 92, 33)),
+            (semi_box, "Semi-automatic", (252, 244, 235), (177, 92, 33)),
+            (fully_box, "Fully Automatic", (252, 244, 235), (177, 92, 33)),
+            (sa1b_box, "SA-1B", (247, 239, 229), (150, 76, 30)),
+        ]
+        for node_box, label, fill, outline in node_specs:
+            draw.rounded_rectangle(node_box, radius=10, fill=fill, outline=outline, width=2)
+            centered_text(node_box, exact(label), node_size, fill=outline)
+
+        centered_text(region(task_box, 0.03, 0.03, 0.97, 0.15), exact("Promptable Segmentation Task"), title_size)
+        centered_text(region(model_box, 0.03, 0.03, 0.97, 0.15), exact("Segment Anything Model"), title_size)
+        centered_text(region(data_box, 0.03, 0.03, 0.97, 0.15), exact("Data Engine"), title_size, fill=(177, 92, 33))
+    else:
+        for index in range(len(centers) - 1):
+            draw_arrow_path([centers[index], centers[index + 1]])
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
-    return {"summary": "Content-free layout blueprint rendered from selected template.", "path": str(path), "width": width, "height": height, "aspect_ratio_decimal": round(ratio, 6), "template_id": profile["template_id"], "contains_reference_text": False, "contains_reference_objects": False}
+    semantic_label_order = []
+    if semantic_feedback:
+        semantic_label_order = ["input x", "Generate", "Initial Output", "FEEDBACK", "Self-Feedback", "REFINE", "Refined output", "Model M", "iterate"]
+    elif semantic_dense:
+        semantic_label_order = [
+            "Promptable Segmentation Task", "Segment Anything Model", "Data Engine", "Image", "Prompt",
+            "Image Encoder", "Prompt Encoder", "Mask Decoder", "Valid Segmentation Mask",
+            "Assisted-manual", "Semi-automatic", "Fully Automatic", "SA-1B",
+        ]
+    return {
+        "summary": "Paper-semantic layout blueprint rendered from the normalized contract." if semantic_blueprint else "Content-free layout blueprint rendered from selected template.",
+        "path": str(path),
+        "width": width,
+        "height": height,
+        "aspect_ratio_decimal": round(ratio, 6),
+        "template_id": profile["template_id"],
+        "contains_reference_text": False,
+        "contains_reference_objects": False,
+        "contains_paper_semantic_labels": semantic_blueprint,
+        "semantic_labels": [exact(value) for value in semantic_label_order],
+    }

@@ -348,6 +348,10 @@ def _unexpected_visible_labels(review: dict, specification: dict) -> list[str]:
         _normalized_text(value)
         for value in specification.get("repeatable_labels", []) if _normalized_text(value)
     )
+    allowed.update(
+        _normalized_text(item.get("label"))
+        for item in specification.get("relations", []) if isinstance(item, dict) and _normalized_text(item.get("label"))
+    )
     detected = review.get("ocr", {}).get("detected_labels", []) if isinstance(review.get("ocr"), dict) else []
     return [str(value) for value in detected if _normalized_text(value) and _normalized_text(value) not in allowed]
 

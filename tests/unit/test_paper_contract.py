@@ -2,7 +2,7 @@ import re
 import unittest
 
 from rfs.paper_to_image.planner import validate_plan_grounding
-from rfs.paper_to_image.preparation import build_overlay_spec, expand_plan_evidence, normalize_figure_contract
+from rfs.paper_to_image.preparation import build_overlay_spec, expand_plan_evidence, normalize_figure_contract, synchronize_plan_to_contract
 
 
 class PaperContractTests(unittest.TestCase):
@@ -641,6 +641,63 @@ class PaperContractTests(unittest.TestCase):
         self.assertEqual(sum(name == "refinedoutput" for name in normalized_names), 1)
         self.assertTrue(all(item["source"] in endpoint_ids and item["target"] in endpoint_ids for item in spec["relations"]))
         self.assertEqual(len(spec["required_labels"]), len({_normalized.casefold() for _normalized in spec["required_labels"]}))
+
+    def test_feedback_contract_removes_parallel_model_path_and_keeps_one_eight_edge_loop(self):
+        caption = "Figure 1: Input x is used to Generate an Initial Output, obtain Self-Feedback from FEEDBACK, REFINE it into a Refined Output, and iterate."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "feedback",
+                "inputs": [{"id": "input", "name": "input x", "evidence_ids": ["E0001"]}],
+                "modules": [
+                    {"id": "model", "name": "Model M", "evidence_ids": ["E0001"]},
+                    {"id": "generate", "name": "Generate", "evidence_ids": ["E0001"]},
+                    {"id": "initial", "name": "Initial Output", "evidence_ids": ["E0001"]},
+                    {"id": "feedback", "name": "FEEDBACK", "evidence_ids": ["E0001"]},
+                    {"id": "self_feedback", "name": "Self-Feedback", "evidence_ids": ["E0001"]},
+                    {"id": "refine", "name": "REFINE", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [{"id": "refined", "name": "Refined output", "evidence_ids": ["E0001"]}],
+                "innovations": [{"id": "iteration", "name": "Iterative self-refinement", "evidence_ids": ["E0001"]}],
+                "relations": [
+                    {"source": "input", "target": "model", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "model", "target": "initial", "type": "prediction", "evidence_ids": ["E0001"]},
+                    {"source": "feedback", "target": "model", "type": "conditioning", "evidence_ids": ["E0001"]},
+                    {"source": "model", "target": "refine", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "input", "target": "generate", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "generate", "target": "initial", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "initial", "target": "feedback", "type": "evaluation", "evidence_ids": ["E0001"]},
+                    {"source": "feedback", "target": "self_feedback", "type": "feedback", "evidence_ids": ["E0001"]},
+                    {"source": "initial", "target": "refine", "type": "revision_input", "evidence_ids": ["E0001"]},
+                    {"source": "self_feedback", "target": "refine", "type": "feedback", "evidence_ids": ["E0001"]},
+                    {"source": "refine", "target": "refined", "type": "data_flow", "evidence_ids": ["E0001"]},
+                    {"source": "refined", "target": "feedback", "type": "feedback_loop", "evidence_ids": ["E0001"]},
+                ],
+                "must_show": [],
+                "terminology": {},
+                "repeatable_labels": ["Model M"],
+            },
+            "design_plan": {"summary": "Old plan", "reading_order": ["iteration"], "preserve": ["Iterative self-refinement"]},
+            "layout_intent": {"summary": "Old layout"},
+            "visual_metaphors": {"summary": "Old metaphors", "items": [{"module_id": "iteration", "metaphor": "Iterative self-refinement"}]},
+        }
+
+        spec = normalize_figure_contract(plan, parsed)
+        synchronize_plan_to_contract(plan)
+        pairs = {(item["source"], item["target"]) for item in spec["relations"]}
+
+        self.assertEqual(len(spec["relations"]), 8)
+        self.assertEqual(spec["innovations"], [])
+        self.assertFalse(any("model" in pair for pair in pairs))
+        self.assertIn(("input", "generate"), pairs)
+        self.assertIn(("refined", "feedback"), pairs)
+        self.assertNotIn("Iterative self-refinement", spec["must_show"])
+        self.assertEqual(plan["design_plan"]["preserve"], spec["required_labels"])
 
     def test_branch_contract_merges_head_output_aliases_and_removes_cross_branch_edges(self):
         caption = "Figure 1: An Input Image passes through a Backbone and RPN to RoIAlign, followed by parallel classification, bounding-box regression, and mask branches."

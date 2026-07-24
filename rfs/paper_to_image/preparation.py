@@ -651,6 +651,86 @@ def _simplify_dense_multiframe_contract(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _simplify_feedback_contract(spec: dict[str, Any]) -> dict[str, Any]:
+    if str(spec.get("topology") or "") != "feedback":
+        return {"applied": False, "removed_entities": [], "rebuilt_relations": []}
+    all_entities = [
+        (field, item)
+        for field in ("inputs", "modules", "outputs", "innovations")
+        for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
+        if isinstance(item, dict)
+    ]
+
+    def find(labels: set[str]) -> list[tuple[str, dict[str, Any]]]:
+        return [(field, item) for field, item in all_entities if _normalized_label(_item_label(item)) in labels]
+
+    groups = {
+        "input": find({"input", "inputx", "taskprompt", "taskinstruction"}),
+        "generate": find({"generate", "init", "generator"}),
+        "initial": find({"initialoutput"}),
+        "feedback": find({"feedback", "feedbackprovider"}),
+        "self_feedback": find({"selffeedback", "selffeedbacknl"}),
+        "refine": find({"refine", "iteraterefine", "refiner"}),
+        "refined": find({"refinedoutput"}),
+        "model": find({"modelm"}),
+    }
+    if any(not groups[key] for key in ("input", "generate", "initial", "feedback", "self_feedback", "refine", "refined")):
+        return {"applied": False, "removed_entities": [], "rebuilt_relations": []}
+
+    def merge(group: list[tuple[str, dict[str, Any]]], name: str, role: str) -> dict[str, Any]:
+        canonical = group[0][1]
+        canonical["name"] = name
+        canonical["role"] = role
+        canonical["evidence_ids"] = list(dict.fromkeys(value for _, item in group for value in item.get("evidence_ids", [])))
+        return canonical
+
+    input_item = merge(groups["input"], "input x", "input")
+    generate_item = merge(groups["generate"], "Generate", "generator")
+    initial_item = merge(groups["initial"], "Initial Output", "artifact")
+    feedback_item = merge(groups["feedback"], "FEEDBACK", "feedback module")
+    self_feedback_item = merge(groups["self_feedback"], "Self-Feedback", "feedback artifact")
+    refine_item = merge(groups["refine"], "REFINE", "refiner")
+    refined_item = merge(groups["refined"], "Refined output", "output")
+    model_item = merge(groups["model"], "Model M", "shared model") if groups["model"] else None
+    kept = [input_item, generate_item, initial_item, feedback_item, self_feedback_item, refine_item, refined_item]
+    if model_item:
+        kept.append(model_item)
+    keep_ids = {str(item.get("id")) for item in kept if item.get("id")}
+    removed_entities = [str(item.get("id")) for _, item in all_entities if item.get("id") and str(item.get("id")) not in keep_ids]
+    spec["inputs"] = [input_item]
+    spec["modules"] = [item for item in (model_item, generate_item, initial_item, feedback_item, self_feedback_item, refine_item) if item]
+    spec["outputs"] = [refined_item]
+    spec["innovations"] = []
+
+    def relation(source: dict[str, Any], target: dict[str, Any], relation_type: str) -> dict[str, Any]:
+        return {
+            "source": str(source.get("id")),
+            "target": str(target.get("id")),
+            "type": relation_type,
+            "label": "iterate" if relation_type == "feedback_loop" else "",
+            "evidence_ids": list(dict.fromkeys([*source.get("evidence_ids", []), *target.get("evidence_ids", [])])),
+        }
+
+    relations = [
+        relation(input_item, generate_item, "data_flow"),
+        relation(generate_item, initial_item, "data_flow"),
+        relation(initial_item, feedback_item, "evaluation"),
+        relation(feedback_item, self_feedback_item, "feedback"),
+        relation(initial_item, refine_item, "revision_input"),
+        relation(self_feedback_item, refine_item, "feedback"),
+        relation(refine_item, refined_item, "data_flow"),
+        relation(refined_item, feedback_item, "feedback_loop"),
+    ]
+    spec["relations"] = relations
+    spec["feedback_loops"] = [relations[-1]]
+    spec["topology"] = "feedback"
+    return {
+        "applied": True,
+        "removed_entities": removed_entities,
+        "rebuilt_relations": [f"{item['source']}->{item['target']}" for item in relations],
+    }
+
+
 def _normalize_contract_relations(spec: dict[str, Any]) -> list[dict[str, Any]]:
     aliases: dict[str, set[str]] = {}
     endpoint_ids: set[str] = set()
@@ -956,6 +1036,10 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
                 existing_pairs.add(pair)
                 incoming.add(target_id)
     spec["relations"] = relations
+    feedback_report = _simplify_feedback_contract(spec)
+    completion_report["feedback_simplification_applied"] = feedback_report["applied"]
+    completion_report["feedback_removed_entities"] = feedback_report["removed_entities"]
+    completion_report["feedback_rebuilt_relations"] = feedback_report["rebuilt_relations"]
     dense_report = _simplify_dense_multiframe_contract(spec)
     completion_report["dense_multiframe_simplification_applied"] = dense_report["applied"]
     completion_report["dense_multiframe_removed_entities"] = dense_report["removed_entities"]
@@ -1078,8 +1162,11 @@ def synchronize_plan_to_contract(plan: dict[str, Any]) -> None:
         for item in (spec.get(field, []) if isinstance(spec.get(field), list) else [])
         if isinstance(item, dict)
     ]
-    entity_ids = [str(item.get("id") or "") for item in entities if str(item.get("id") or "")]
-    labels = [_item_label(item) for item in entities if _item_label(item)]
+    required_labels = [str(value).strip() for value in spec.get("required_labels", []) if str(value).strip()]
+    allowed = {_normalized_label(value) for value in [*required_labels, *spec.get("repeatable_labels", [])] if _normalized_label(value)}
+    visible_entities = [item for item in entities if _normalized_label(_item_label(item)) in allowed] if allowed else entities
+    entity_ids = [str(item.get("id") or "") for item in visible_entities if str(item.get("id") or "")]
+    labels = required_labels or [_item_label(item) for item in visible_entities if _item_label(item)]
     spec["storyline"] = labels
     spec["must_show"] = labels
     topology = str(spec.get("topology") or "unknown")
@@ -1091,7 +1178,7 @@ def synchronize_plan_to_contract(plan: dict[str, Any]) -> None:
         "summary": "Information narrative synchronized to the normalized scientific contract.",
         "reading_order": entity_ids,
         "groups": [],
-        "innovation_emphasis": [_item_label(item) for item in spec.get("innovations", []) if isinstance(item, dict) and _item_label(item)],
+        "innovation_emphasis": [_item_label(item) for item in spec.get("innovations", []) if isinstance(item, dict) and _normalized_label(_item_label(item)) in allowed],
         "preserve": labels,
         "remove": list(spec.get("forbidden_inventions", []) if isinstance(spec.get("forbidden_inventions"), list) else []),
     }
@@ -1106,7 +1193,7 @@ def synchronize_plan_to_contract(plan: dict[str, Any]) -> None:
         "summary": "Paper-grounded visual metaphors synchronized to the normalized contract.",
         "items": [
             {"module_id": str(item.get("id") or ""), "metaphor": _item_label(item), "must_show": [], "avoid_showing": list(spec.get("forbidden_inventions", []))}
-            for item in entities
+            for item in visible_entities
         ],
     }
 

@@ -113,7 +113,12 @@ def run_paper_to_image(
         preferences["generation_ratio_policy"] = "nearest_native_image2_canvas; preserve_template_internal_geometry; no_semantic_crop"
         write_json(root / "preferences.json", preferences)
     write_json(root / "selected_template.json", {"summary": "Automatically or explicitly selected content-free architecture template.", **selected_template})
-    blueprint_report = render_layout_blueprint(selected_template, root / "layout_blueprint.png", target_ratio=preferences["aspect_ratio"])
+    blueprint_report = render_layout_blueprint(
+        selected_template,
+        root / "layout_blueprint.png",
+        target_ratio=preferences["aspect_ratio"],
+        figure_specification=plan.get("figure_specification"),
+    )
     write_json(root / "layout_blueprint.json", blueprint_report)
 
     plan["style_plan"]["selected_template_id"] = selected_template.get("profile_id")

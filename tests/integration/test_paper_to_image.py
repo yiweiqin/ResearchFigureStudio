@@ -252,6 +252,168 @@ class PaperToImageTests(unittest.TestCase):
             self.assertIn("Remove unexpected visible label: Contrastive Loss", review["repair"])
             self.assertIn("Contrastive Loss", review["remove"])
 
+    def test_visible_label_whitelist_includes_declared_connector_labels(self):
+        plan = _plan()
+        plan["figure_specification"]["relations"][0]["label"] = "iterate"
+
+        labels = required_labels(plan)
+
+        self.assertIn("iterate", labels)
+
+    def test_feedback_template_aligns_input_with_generation_and_stacks_refinement_below_initial_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            feedback = next(item for item in profiles if item["template_id"] == "feedback")
+            boxes = {item["id"]: item["bbox_percent"] for item in feedback["panels"]}
+            center = lambda box: (box["x"] + box["w"] / 2, box["y"] + box["h"] / 2)
+
+            self.assertLess(abs(center(boxes["task_input"])[1] - center(boxes["generation"])[1]), 0.04)
+            self.assertLess(abs(center(boxes["initial_output"])[0] - center(boxes["refinement"])[0]), 0.04)
+            self.assertLess(abs(center(boxes["feedback"])[0] - center(boxes["refined_output"])[0]), 0.06)
+
+    def test_feedback_prompt_forbids_known_wrong_edges_and_pins_iterate_target(self):
+        plan = _plan()
+        plan["figure_specification"].update({
+            "topology": "feedback",
+            "required_labels": ["input x", "Generate", "Initial Output", "FEEDBACK", "Self-Feedback", "REFINE", "Refined output", "Model M"],
+            "repeatable_labels": ["Model M"],
+            "inputs": [{"id": "input", "name": "input x"}],
+            "modules": [
+                {"id": "generate", "name": "Generate"},
+                {"id": "initial", "name": "Initial Output"},
+                {"id": "feedback", "name": "FEEDBACK"},
+                {"id": "self_feedback", "name": "Self-Feedback"},
+                {"id": "refine", "name": "REFINE"},
+                {"id": "model", "name": "Model M"},
+            ],
+            "outputs": [{"id": "refined", "name": "Refined output"}],
+            "relations": [
+                {"source": "input", "target": "generate", "type": "data_flow"},
+                {"source": "generate", "target": "initial", "type": "data_flow"},
+                {"source": "initial", "target": "feedback", "type": "evaluation"},
+                {"source": "feedback", "target": "self_feedback", "type": "feedback"},
+                {"source": "initial", "target": "refine", "type": "revision_input"},
+                {"source": "self_feedback", "target": "refine", "type": "feedback"},
+                {"source": "refine", "target": "refined", "type": "data_flow"},
+                {"source": "refined", "target": "feedback", "type": "feedback_loop", "label": "iterate"},
+            ],
+        })
+
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+
+        self.assertIn("Initial Output must have exactly two distinct outgoing arrows", prompt)
+        self.assertIn("Refined output -> Generate", prompt)
+        self.assertIn("terminate only at FEEDBACK", prompt)
+        self.assertIn("Model M is a reusable badge", prompt)
+
+    def test_feedback_blueprint_embeds_exact_semantic_labels(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            feedback = next(item for item in profiles if item["template_id"] == "feedback")
+            specification = {
+                "required_labels": ["input x", "Generate", "Initial Output", "FEEDBACK", "Self-Feedback", "REFINE", "Refined output", "Model M"],
+                "inputs": [{"id": "input", "name": "input x"}],
+                "modules": [
+                    {"id": "generate", "name": "Generate"},
+                    {"id": "initial", "name": "Initial Output"},
+                    {"id": "feedback", "name": "FEEDBACK"},
+                    {"id": "self_feedback", "name": "Self-Feedback"},
+                    {"id": "refine", "name": "REFINE"},
+                    {"id": "model", "name": "Model M"},
+                ],
+                "outputs": [{"id": "refined", "name": "Refined output"}],
+            }
+
+            report = render_layout_blueprint(feedback, Path(temp) / "feedback_semantic.png", "3:2", figure_specification=specification)
+
+            self.assertTrue(report["contains_paper_semantic_labels"])
+            self.assertEqual(report["semantic_labels"][-1], "iterate")
+            self.assertTrue(Path(report["path"]).exists())
+
+    def test_generic_feedback_contract_does_not_receive_self_refine_blueprint_or_prompt_terms(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            feedback = next(item for item in profiles if item["template_id"] == "feedback")
+            plan = _plan()
+            plan["figure_specification"].update({
+                "topology": "feedback",
+                "inputs": [{"id": "sample", "name": "Sample"}],
+                "modules": [{"id": "measure", "name": "Measure"}, {"id": "update", "name": "Update"}],
+                "outputs": [{"id": "estimate", "name": "Estimate"}],
+                "relations": [
+                    {"source": "sample", "target": "measure", "type": "data_flow"},
+                    {"source": "measure", "target": "update", "type": "feedback"},
+                    {"source": "update", "target": "estimate", "type": "data_flow"},
+                    {"source": "estimate", "target": "measure", "type": "feedback_loop"},
+                ],
+            })
+
+            prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+            report = render_layout_blueprint(feedback, Path(temp) / "generic_feedback.png", "3:2", figure_specification=plan["figure_specification"])
+
+            self.assertNotIn("Model M is a reusable badge", prompt)
+            self.assertIn("Do not introduce Self-Refine-specific labels", prompt)
+            self.assertFalse(report["contains_paper_semantic_labels"])
+            self.assertEqual(report["semantic_labels"], [])
+
+    def test_dense_multiframe_prompt_forbids_crossed_sam_paths(self):
+        plan = _plan()
+        labels = [
+            "Promptable Segmentation Task", "Segment Anything Model", "Data Engine", "Image", "Prompt",
+            "Image Encoder", "Prompt Encoder", "Mask Decoder", "Valid Segmentation Mask",
+            "Assisted-manual", "Semi-automatic", "Fully Automatic", "SA-1B",
+        ]
+        plan["figure_specification"].update({
+            "topology": "dense_multiframe",
+            "inputs": [{"id": "image", "name": "Image"}, {"id": "prompt", "name": "Prompt"}],
+            "modules": [{"id": f"module_{index}", "name": label} for index, label in enumerate(labels) if label not in {"Image", "Prompt", "Valid Segmentation Mask", "SA-1B"}],
+            "outputs": [{"id": "mask", "name": "Valid Segmentation Mask"}, {"id": "sa1b", "name": "SA-1B"}],
+        })
+
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+
+        self.assertIn("Image must connect only to Image Encoder", prompt)
+        self.assertIn("Image Encoder -> Prompt Encoder", prompt)
+        self.assertIn("Fully Automatic -> Valid Segmentation Mask", prompt)
+        self.assertIn("container-to-container arrow", prompt)
+
+    def test_generic_dense_multiframe_prompt_does_not_inject_sam_terms(self):
+        plan = _plan()
+        plan["figure_specification"].update({
+            "topology": "dense_multiframe",
+            "inputs": [{"id": "sensor", "name": "Sensor Stream"}],
+            "modules": [{"id": "fusion", "name": "Fusion Core"}, {"id": "archive", "name": "Archive Builder"}],
+            "outputs": [{"id": "report", "name": "Report"}],
+            "relations": [{"source": "sensor", "target": "fusion", "type": "data_flow"}, {"source": "fusion", "target": "report", "type": "data_flow"}],
+        })
+
+        prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
+
+        self.assertNotIn("Image must connect only to Image Encoder", prompt)
+        self.assertIn("Do not introduce SAM-specific encoders", prompt)
+
+    def test_dense_multiframe_blueprint_embeds_sam_semantic_topology(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = build_template_profiles([], Path(temp) / "profiles", mode="heuristic")
+            dense = next(item for item in profiles if item["template_id"] == "dense-multiframe")
+            labels = [
+                "Promptable Segmentation Task", "Segment Anything Model", "Data Engine", "Image", "Prompt",
+                "Image Encoder", "Prompt Encoder", "Mask Decoder", "Valid Segmentation Mask",
+                "Assisted-manual", "Semi-automatic", "Fully Automatic", "SA-1B",
+            ]
+            specification = {
+                "required_labels": labels,
+                "inputs": [{"id": "image", "name": "Image"}, {"id": "prompt", "name": "Prompt"}],
+                "modules": [{"id": f"module_{index}", "name": label} for index, label in enumerate(labels) if label not in {"Image", "Prompt", "Valid Segmentation Mask", "SA-1B"}],
+                "outputs": [{"id": "mask", "name": "Valid Segmentation Mask"}, {"id": "sa1b", "name": "SA-1B"}],
+            }
+
+            report = render_layout_blueprint(dense, Path(temp) / "dense_semantic.png", "3:2", figure_specification=specification)
+
+            self.assertTrue(report["contains_paper_semantic_labels"])
+            self.assertIn("Mask Decoder", report["semantic_labels"])
+            self.assertEqual(report["semantic_labels"][-1], "SA-1B")
+
     def test_complex_feedback_candidate_requires_focused_topology_pass(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -276,6 +438,37 @@ class PaperToImageTests(unittest.TestCase):
             self.assertFalse(review["topology"]["passed"])
             self.assertIn("Input -> Refine", review["hard_errors"])
             self.assertIn("Connect Input to Refine", review["repair"])
+
+    def test_topology_critic_prompt_accepts_shared_component_inside_source_container(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            Image.new("RGB", (1536, 1024), "white").save(candidate)
+            Image.new("RGB", (1536, 1024), "white").save(blueprint)
+            plan = _plan()
+            plan["figure_specification"].update({
+                "topology": "feedback",
+                "repeatable_labels": ["Model M"],
+                "modules": [
+                    {"id": "feedback", "name": "FEEDBACK"},
+                    {"id": "model", "name": "Model M"},
+                    {"id": "self_feedback", "name": "Self-Feedback"},
+                ],
+                "relations": [{"source": "feedback", "target": "self_feedback", "type": "feedback"}],
+                "terminology": {},
+            })
+            captured = {}
+
+            def topology(_path, prompt):
+                captured["prompt"] = prompt
+                return {"summary": "Focused topology.", "missing_relations": [], "reversed_relations": [], "bypassed_relations": [], "invented_relations": [], "repair": [], "repair_regions": [], "score": 1.0, "passed": True}
+
+            review_candidate(candidate, blueprint, plan, {"template_id": "feedback", "forbidden_copy_terms": []}, mode="vlm", ocr_engine="off", critic_adapter=_passing_critic, topology_adapter=topology)
+
+            self.assertIn('"Model M"', captured["prompt"])
+            self.assertIn("FEEDBACK container holding an allowed shared Model M badge", captured["prompt"])
+            self.assertIn("count the container-to-target relation as present", captured["prompt"])
 
     def test_issue_free_ten_point_scale_review_is_normalized_by_findings(self):
         with tempfile.TemporaryDirectory() as temp:
