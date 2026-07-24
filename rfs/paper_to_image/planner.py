@@ -583,9 +583,18 @@ def collect_visual_relations(spec: dict) -> list[dict[str, str]]:
 
 def collect_visual_roles(spec: dict) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
+    label_to_index: dict[str, int] = {}
     for field in ("inputs", "modules", "outputs", "innovations"):
         for item in spec.get(field, []) if isinstance(spec.get(field), list) else []:
             if not isinstance(item, dict) or not item.get("id"):
+                continue
+            label = str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or item.get("id"))
+            normalized_label = re.sub(r"[^\w\u4e00-\u9fff]+", "", label.casefold())
+            if field == "innovations" and normalized_label in label_to_index:
+                existing = result[label_to_index[normalized_label]]
+                existing["visual_constraint"] += " Also highlight this entity as an evidence-backed paper innovation without duplicating the node."
+                existing["visual_cue"] += " Add a compact innovation emphasis or mechanism inset inside the same entity."
+                existing["innovation"] = "true"
                 continue
             role = str(item.get("role") or field.rstrip("s"))
             normalized_role = re.sub(r"[^a-z0-9]+", "", role.casefold())
@@ -598,7 +607,7 @@ def collect_visual_roles(spec: dict) -> list[dict[str, str]]:
             elif field == "inputs":
                 constraint = "Show at the input boundary and connect only to its declared downstream target."
                 visual_cue = "A compact paper-grounded input example or input-object icon."
-            elif field == "outputs":
+            elif field == "outputs" or any(term in normalized_role for term in ("output", "prediction", "evaluation", "classification", "regressionhead")):
                 constraint = "Show at the output/evaluation boundary, not as an upstream input or internal method module."
                 visual_cue = "A compact outcome, prediction, or evaluation visual that does not introduce new metrics or numbers."
             elif field == "innovations":
@@ -609,12 +618,14 @@ def collect_visual_roles(spec: dict) -> list[dict[str, str]]:
                 visual_cue = "A mechanism-level mini diagram or scientific icon showing what the named operation does."
             result.append({
                 "id": str(item.get("id")),
-                "label": str(item.get("visible_label") or item.get("name") or item.get("text") or item.get("statement") or item.get("id")),
+                "label": label,
                 "field": field,
                 "role": role,
                 "visual_constraint": constraint,
                 "visual_cue": visual_cue,
             })
+            if normalized_label:
+                label_to_index[normalized_label] = len(result) - 1
     return result
 
 

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import fitz
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from rfs.cli import _doctor, _probe_executable, build_parser
 from rfs.paper_to_image import run_fast_framework_prompt, run_paper_to_image
@@ -295,6 +295,34 @@ class PaperToImageTests(unittest.TestCase):
             self.assertTrue(any("too close to the bare layout blueprint" in value for value in review["hard_errors"]))
             self.assertTrue(any("Enrich node interiors" in value for value in review["repair"]))
 
+    def test_visual_enrichment_is_measured_inside_the_blueprint_active_region(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate.png"
+            blueprint = root / "blueprint.png"
+            base = Image.new("RGB", (1000, 1000), "white")
+            draw = ImageDraw.Draw(base)
+            draw.rectangle((100, 100, 900, 900), outline="#1F4E79", width=4)
+            base.save(blueprint)
+            enriched = base.copy()
+            ImageDraw.Draw(enriched).rectangle((350, 350, 649, 549), fill="#3A9D9A")
+            enriched.save(candidate)
+
+            review = review_candidate(
+                candidate,
+                blueprint,
+                _plan(),
+                {"template_id": "linear", "forbidden_copy_terms": []},
+                mode="vlm",
+                ocr_engine="off",
+                critic_adapter=_passing_critic,
+                require_visual_enrichment=True,
+            )
+
+            self.assertLess(review["basic"]["blueprint_global_enrichment_ratio"], 0.08)
+            self.assertGreater(review["basic"]["blueprint_active_enrichment_ratio"], 0.08)
+            self.assertTrue(review["basic"]["visual_enrichment_passed"])
+
     def test_candidate_review_allows_evidence_supported_shared_label_reuse(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -377,6 +405,24 @@ class PaperToImageTests(unittest.TestCase):
             prompt = compile_image_prompt(plan, {"aspect_ratio": "3:2", "language": "English"})
             self.assertIn("source -> modality -> method chain", prompt)
 
+    def test_visual_role_contract_merges_duplicate_innovation_with_existing_node(self):
+        spec = {
+            "inputs": [{"id": "image", "name": "Input Image", "role": "input"}],
+            "modules": [{"id": "roi", "name": "RoIAlign", "role": "module"}],
+            "outputs": [{"id": "mask", "name": "mask branch", "role": "output head"}],
+            "innovations": [
+                {"id": "innovation_roi", "name": "RoIAlign"},
+                {"id": "innovation_mask", "name": "mask branch"},
+            ],
+        }
+
+        roles = collect_visual_roles(spec)
+
+        self.assertEqual([item["label"] for item in roles].count("RoIAlign"), 1)
+        self.assertEqual([item["label"] for item in roles].count("mask branch"), 1)
+        self.assertIn("without duplicating the node", next(item["visual_constraint"] for item in roles if item["label"] == "RoIAlign"))
+        self.assertIn("output/evaluation boundary", next(item["visual_constraint"] for item in roles if item["label"] == "mask branch"))
+
     def test_visible_label_whitelist_includes_declared_connector_labels(self):
         plan = _plan()
         plan["figure_specification"]["relations"][0]["label"] = "iterate"
@@ -454,6 +500,12 @@ class PaperToImageTests(unittest.TestCase):
             self.assertTrue(report["contains_paper_semantic_labels"])
             self.assertEqual(report["semantic_labels"][-1], "iterate")
             self.assertTrue(Path(report["path"]).exists())
+            with Image.open(report["path"]).convert("RGB") as rendered:
+                feedback_box = next(item["bbox_percent"] for item in feedback["panels"] if item["id"] == "feedback")
+                connector_x = round((feedback_box["x"] + 0.50 * feedback_box["w"]) * rendered.width)
+                self_feedback_bottom = round((feedback_box["y"] + 0.88 * feedback_box["h"]) * rendered.height)
+                connector_pixel = rendered.getpixel((connector_x, self_feedback_bottom + 5))
+                self.assertLess(sum(abs(value - expected) for value, expected in zip(connector_pixel, (31, 117, 126))), 30)
 
     def test_generic_feedback_contract_does_not_receive_self_refine_blueprint_or_prompt_terms(self):
         with tempfile.TemporaryDirectory() as temp:

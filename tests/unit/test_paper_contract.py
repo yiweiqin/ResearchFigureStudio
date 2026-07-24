@@ -1481,6 +1481,47 @@ class PaperContractTests(unittest.TestCase):
         self.assertTrue(spec["innovations"][0]["must_appear_in_figure"])
         self.assertTrue(plan["contract_completion_report"]["added_explicit_named_techniques"])
 
+    def test_parallel_leaf_heads_are_promoted_to_consistent_output_roles(self):
+        caption = "The mask branch is in parallel with the classification and bounding-box regression heads."
+        parsed = {
+            "page_count": 3,
+            "document_index": {"figures": [{"page": 1, "caption": caption}]},
+            "evidence": [{"id": "E0001", "page": 1, "kind": "caption", "text": caption, "section_hint": "Figure Captions", "confidence": 1.0}],
+        }
+        plan = {
+            "paper_summary": {"unknowns": []},
+            "figure_specification": {
+                "topology": "branch",
+                "inputs": [],
+                "modules": [
+                    {"id": "roialign", "name": "RoIAlign", "role": "module", "evidence_ids": ["E0001"]},
+                    {"id": "box", "name": "bounding-box regression", "role": "module", "evidence_ids": ["E0001"]},
+                    {"id": "mask", "name": "mask branch", "role": "module", "evidence_ids": ["E0001"]},
+                ],
+                "outputs": [{"id": "classification", "name": "Classification", "role": "output", "evidence_ids": ["E0001"]}],
+                "innovations": [{"id": "innovation_mask", "name": "mask branch", "evidence_ids": ["E0001"]}],
+                "relations": [
+                    {"source": "proposal", "target": "roialign", "type": "conditioning", "evidence_ids": ["E0001"]},
+                    {"source": "roialign", "target": "classification", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "roialign", "target": "box", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "roialign", "target": "mask", "type": "branch", "evidence_ids": ["E0001"]},
+                    {"source": "proposal", "target": "mask", "type": "data_flow", "evidence_ids": ["E0001"]},
+                ],
+            },
+        }
+        plan["figure_specification"]["modules"].insert(0, {"id": "proposal", "name": "Region Proposals", "role": "module", "evidence_ids": ["E0001"]})
+
+        spec = normalize_figure_contract(plan, parsed)
+        output_by_id = {item["id"]: item for item in spec["outputs"]}
+
+        self.assertEqual(set(output_by_id), {"classification", "box", "mask"})
+        self.assertNotIn("box", {item["id"] for item in spec["modules"]})
+        self.assertNotIn("mask", {item["id"] for item in spec["modules"]})
+        self.assertTrue(all(output_by_id[item_id]["role"] == "output head" for item_id in ("classification", "box", "mask")))
+        self.assertEqual(set(plan["contract_completion_report"]["promoted_parallel_output_heads"]), {"box", "mask"})
+        self.assertNotIn(("proposal", "mask"), {(item["source"], item["target"]) for item in spec["relations"]})
+        self.assertIn("proposal->mask", plan["contract_completion_report"]["removed_branch_shortcuts"])
+
     def test_generic_completion_recovers_retrieval_conditioned_generation(self):
         caption = "Figure 1: Overview of our approach. We combine a pre-trained retriever (Query Encoder + Document Index) with a pre-trained seq2seq model (Generator). For query x, we use MIPS to find the top-K documents. For final prediction y, the generator produces the output sequence."
         result_caption = "Figure 2: Posterior for each generated token with five retrieved documents."

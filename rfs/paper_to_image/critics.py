@@ -218,7 +218,28 @@ def review_candidate(
         mask_histogram = threshold_mask.histogram()
         changed_pixels = sum(mask_histogram[1:])
         total_pixels = max(1, candidate_rgb.size[0] * candidate_rgb.size[1])
-        blueprint_enrichment_ratio = changed_pixels / total_pixels
+        blueprint_global_enrichment_ratio = changed_pixels / total_pixels
+        corner_pixels = [
+            blueprint_rgb.getpixel((0, 0)),
+            blueprint_rgb.getpixel((blueprint_rgb.width - 1, 0)),
+            blueprint_rgb.getpixel((0, blueprint_rgb.height - 1)),
+            blueprint_rgb.getpixel((blueprint_rgb.width - 1, blueprint_rgb.height - 1)),
+        ]
+        background_color = tuple(sorted(pixel[channel] for pixel in corner_pixels)[len(corner_pixels) // 2] for channel in range(3))
+        background = Image.new("RGB", blueprint_rgb.size, background_color)
+        foreground_mask = ImageChops.difference(blueprint_rgb, background).point(lambda value: 255 if value > 8 else 0).convert("L")
+        active_bbox = foreground_mask.getbbox() or (0, 0, blueprint_rgb.width, blueprint_rgb.height)
+        padding = 24
+        active_bbox = (
+            max(0, active_bbox[0] - padding),
+            max(0, active_bbox[1] - padding),
+            min(blueprint_rgb.width, active_bbox[2] + padding),
+            min(blueprint_rgb.height, active_bbox[3] + padding),
+        )
+        active_diff = threshold_mask.crop(active_bbox)
+        active_pixels = max(1, active_diff.width * active_diff.height)
+        blueprint_active_enrichment_ratio = sum(active_diff.histogram()[1:]) / active_pixels
+        blueprint_enrichment_ratio = blueprint_active_enrichment_ratio
         blueprint_mean_abs_difference = sum(ImageStat.Stat(visual_diff).mean) / 3.0
     try:
         minimum_enrichment_ratio = max(0.0, min(1.0, float(os.getenv("RFS_MIN_BLUEPRINT_ENRICHMENT_RATIO", "0.08"))))
@@ -255,6 +276,10 @@ def review_candidate(
         "aspect_ratio_error": ratio_error,
         "visual_enrichment_required": bool(require_visual_enrichment),
         "blueprint_enrichment_ratio": round(blueprint_enrichment_ratio, 5),
+        "blueprint_global_enrichment_ratio": round(blueprint_global_enrichment_ratio, 5),
+        "blueprint_active_enrichment_ratio": round(blueprint_active_enrichment_ratio, 5),
+        "blueprint_active_region_bbox": list(active_bbox),
+        "blueprint_active_region_fraction": round(active_pixels / total_pixels, 5),
         "blueprint_mean_abs_difference": round(blueprint_mean_abs_difference, 3),
         "minimum_blueprint_enrichment_ratio": minimum_enrichment_ratio,
         "visual_enrichment_passed": visual_enrichment_passed,

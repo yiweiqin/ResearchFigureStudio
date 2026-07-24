@@ -457,7 +457,7 @@ def _deduplicate_contract_entities(spec: dict[str, Any]) -> dict[str, list[str]]
 
 def _simplify_branch_contract(spec: dict[str, Any]) -> dict[str, list[str]]:
     if str(spec.get("topology") or "") != "branch":
-        return {"merged_entities": [], "removed_cross_branch_relations": []}
+        return {"merged_entities": [], "removed_cross_branch_relations": [], "removed_branch_shortcuts": []}
 
     def group_for(item: dict[str, Any]) -> str | None:
         label = _normalized_label(_item_label(item))
@@ -545,8 +545,71 @@ def _simplify_branch_contract(spec: dict[str, Any]) -> dict[str, list[str]]:
             continue
         seen_relations[key] = relation
         deduplicated.append(relation)
+    branch_head_ids = {
+        str(item.get("id"))
+        for item in spec.get("outputs", []) if isinstance(spec.get("outputs"), list)
+        if isinstance(item, dict)
+        and item.get("id")
+        and (group_for(item) in branch_groups or "outputhead" in _normalized_label(str(item.get("role") or "")))
+    }
+    source_head_counts: dict[str, set[str]] = {}
+    for relation in deduplicated:
+        source, target = str(relation.get("source") or ""), str(relation.get("target") or "")
+        if target in branch_head_ids:
+            source_head_counts.setdefault(source, set()).add(target)
+    branch_source = next(
+        (
+            source for source, targets in sorted(source_head_counts.items(), key=lambda item: (-len(item[1]), item[0]))
+            if len(targets) >= 2
+        ),
+        None,
+    )
+    removed_branch_shortcuts: list[str] = []
+    if branch_source:
+        adjacency: dict[str, set[str]] = {}
+        for relation in deduplicated:
+            source, target = str(relation.get("source") or ""), str(relation.get("target") or "")
+            if source and target and target not in branch_head_ids:
+                adjacency.setdefault(source, set()).add(target)
+
+        def reaches_branch_source(start: str) -> bool:
+            pending = [start]
+            visited: set[str] = set()
+            while pending:
+                current = pending.pop()
+                if current == branch_source:
+                    return True
+                if current in visited:
+                    continue
+                visited.add(current)
+                pending.extend(adjacency.get(current, set()) - visited)
+            return False
+
+        direct_branch_pairs = {
+            (str(item.get("source") or ""), str(item.get("target") or ""))
+            for item in deduplicated
+        }
+        kept_relations: list[dict[str, Any]] = []
+        for relation in deduplicated:
+            source, target = str(relation.get("source") or ""), str(relation.get("target") or "")
+            bypasses_branch_point = (
+                target in branch_head_ids
+                and source != branch_source
+                and (branch_source, target) in direct_branch_pairs
+                and reaches_branch_source(source)
+            )
+            if bypasses_branch_point:
+                removed_branch_shortcuts.append(f"{source}->{target}")
+                continue
+            kept_relations.append(relation)
+        deduplicated = kept_relations
+
     spec["relations"] = deduplicated
-    return {"merged_entities": merged_entities, "removed_cross_branch_relations": removed_cross_branch_relations}
+    return {
+        "merged_entities": merged_entities,
+        "removed_cross_branch_relations": removed_cross_branch_relations,
+        "removed_branch_shortcuts": list(dict.fromkeys(removed_branch_shortcuts)),
+    }
 
 
 def _simplify_multimodal_contract(spec: dict[str, Any]) -> dict[str, Any]:
@@ -1303,6 +1366,90 @@ def _repair_explicit_named_techniques(spec: dict[str, Any], parsed: dict[str, An
         break
     return repaired
 
+
+def _repair_parallel_output_heads(spec: dict[str, Any], parsed: dict[str, Any]) -> dict[str, list[str]]:
+    """Promote evidence-backed leaf branches to output-head roles.
+
+    Branch planners often place classification, regression, mask, score, or
+    prediction heads in ``modules`` while placing only one sibling in
+    ``outputs``.  That makes visually equivalent parallel heads receive
+    incompatible role instructions.  Promotion is limited to leaf entities
+    sharing one upstream branch point, with at least two output-like siblings
+    and explicit branch/head/parallel evidence.
+    """
+    if str(spec.get("topology") or "").casefold() != "branch":
+        return {"promoted_outputs": [], "reclassified_outputs": []}
+    modules = [item for item in spec.get("modules", []) if isinstance(item, dict) and item.get("id")]
+    outputs = [item for item in spec.get("outputs", []) if isinstance(item, dict) and item.get("id")]
+    relations = [item for item in spec.get("relations", []) if isinstance(item, dict)]
+    if not modules or not relations:
+        return {"promoted_outputs": [], "reclassified_outputs": []}
+
+    entity_by_id = {str(item["id"]): item for item in [*modules, *outputs]}
+    outgoing = {str(item.get("source")) for item in relations if item.get("source")}
+    incoming_by_source: dict[str, set[str]] = {}
+    relation_evidence: dict[tuple[str, str], list[str]] = {}
+    for relation in relations:
+        source, target = str(relation.get("source") or ""), str(relation.get("target") or "")
+        if not source or not target:
+            continue
+        incoming_by_source.setdefault(source, set()).add(target)
+        relation_evidence.setdefault((source, target), []).extend(str(value) for value in relation.get("evidence_ids", []) if value)
+
+    evidence_by_id = {
+        str(item.get("id")): str(item.get("text") or "")
+        for item in parsed.get("evidence", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    output_name_pattern = re.compile(
+        r"\b(?:class(?:ification|ifier)?|regression|mask|segmentation|detection|prediction|score|label|output|head)\b",
+        re.IGNORECASE,
+    )
+    branch_evidence_pattern = re.compile(r"\b(?:parallel|branch(?:es)?|heads?|multi[- ]?task)\b", re.IGNORECASE)
+    promoted: list[str] = []
+    reclassified: list[str] = []
+
+    for source_id, target_ids in incoming_by_source.items():
+        leaf_targets = [
+            entity_by_id[target_id]
+            for target_id in target_ids
+            if target_id in entity_by_id and target_id not in outgoing
+        ]
+        output_like = [item for item in leaf_targets if output_name_pattern.search(_item_label(item))]
+        if len(output_like) < 2:
+            continue
+        evidence_ids = list(dict.fromkeys(
+            value
+            for item in output_like
+            for value in [
+                *item.get("evidence_ids", []),
+                *relation_evidence.get((source_id, str(item.get("id"))), []),
+            ]
+            if value
+        ))
+        evidence_text = " ".join(evidence_by_id.get(str(value), "") for value in evidence_ids)
+        if not branch_evidence_pattern.search(evidence_text):
+            continue
+        output_ids = {str(item.get("id")) for item in outputs}
+        for item in output_like:
+            item_id = str(item.get("id"))
+            if str(item.get("role") or "").casefold() != "output head":
+                item["role"] = "output head"
+                reclassified.append(item_id)
+            if item_id not in output_ids:
+                outputs.append(item)
+                output_ids.add(item_id)
+                promoted.append(item_id)
+
+    if promoted:
+        promoted_set = set(promoted)
+        spec["modules"] = [item for item in modules if str(item.get("id")) not in promoted_set]
+        spec["outputs"] = outputs
+    return {
+        "promoted_outputs": list(dict.fromkeys(promoted)),
+        "reclassified_outputs": list(dict.fromkeys(reclassified)),
+    }
+
 def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("paper_summary") if isinstance(plan.get("paper_summary"), dict) else {}
     spec = plan.get("figure_specification") if isinstance(plan.get("figure_specification"), dict) else {}
@@ -1357,6 +1504,9 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     completion_report["added_explicit_evaluation_relations"] = evaluation_report["added_relations"]
     completion_report["repaired_generic_named_modules"] = _repair_generic_named_modules(spec, parsed)
     completion_report["added_explicit_named_techniques"] = _repair_explicit_named_techniques(spec, parsed)
+    output_head_report = _repair_parallel_output_heads(spec, parsed)
+    completion_report["promoted_parallel_output_heads"] = output_head_report["promoted_outputs"]
+    completion_report["reclassified_parallel_output_heads"] = output_head_report["reclassified_outputs"]
     if endpoint_report["repaired"]:
         secondary_completion = augment_contract_from_evidence(spec, parsed)
         for key in ("added_entities", "upgraded_entities", "adopted_entities", "added_relations", "repaired_relations", "grounded_entities"):
@@ -1507,6 +1657,7 @@ def normalize_figure_contract(plan: dict[str, Any], parsed: dict[str, Any]) -> d
     branch_report = _simplify_branch_contract(spec)
     completion_report["branch_merged_entities"] = branch_report["merged_entities"]
     completion_report["removed_cross_branch_relations"] = branch_report["removed_cross_branch_relations"]
+    completion_report["removed_branch_shortcuts"] = branch_report["removed_branch_shortcuts"]
     spec.setdefault("training_flow", summary.get("training_flow") if isinstance(summary.get("training_flow"), list) else [])
     spec.setdefault("inference_flow", summary.get("inference_flow") if isinstance(summary.get("inference_flow"), list) else [])
     spec.setdefault("feedback_loops", [item for item in spec.get("relations", []) if isinstance(item, dict) and "feedback" in str(item.get("type") or "").casefold()])

@@ -506,7 +506,8 @@ def render_layout_blueprint(
         initial_start, initial_end = bottom_at(initial_box, 0.45), top_at(refinement_box, 0.35)
         initial_mid_y = round((initial_start[1] + initial_end[1]) / 2)
         draw_arrow_path([initial_start, (initial_start[0], initial_mid_y), (initial_end[0], initial_mid_y), initial_end], (31, 117, 126))
-        feedback_start, feedback_end = bottom_at(feedback_box, 0.50), top_at(refinement_box, 0.72)
+        feedback_source_box = region(feedback_box, 0.13, 0.60, 0.87, 0.88) if semantic_feedback else feedback_box
+        feedback_start, feedback_end = bottom_at(feedback_source_box, 0.50), top_at(refinement_box, 0.72)
         feedback_mid_y = round((feedback_start[1] + feedback_end[1]) / 2)
         draw_arrow_path([feedback_start, (feedback_start[0], feedback_mid_y), (feedback_end[0], feedback_mid_y), feedback_end], (31, 117, 126))
         draw_arrow_path([right(refinement_box), left(refined_box)], (31, 117, 126))
@@ -533,7 +534,7 @@ def render_layout_blueprint(
                 draw.rounded_rectangle(badge_box, radius=10, fill=(235, 243, 248), outline=(126, 157, 177), width=2)
                 centered_text(badge_box, exact("Model M"), badge_size, bold=False)
 
-            self_feedback_box = region(feedback_box, 0.13, 0.60, 0.87, 0.88)
+            self_feedback_box = feedback_source_box
             draw.rounded_rectangle(self_feedback_box, radius=10, fill=(238, 249, 248), outline=(31, 117, 126), width=2)
             centered_text(self_feedback_box, exact("Self-Feedback"), badge_size)
             internal_start = (round((feedback_box[0] + feedback_box[2]) / 2), region(feedback_box, 0, 0.47, 1, 0.47)[1])

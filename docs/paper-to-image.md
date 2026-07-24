@@ -204,10 +204,23 @@ them.
 Image-2 candidates must enrich the semantic blueprint rather than merely
 restyling its boxes. Candidate review records `blueprint_enrichment_ratio` and
 `blueprint_mean_abs_difference`; production defaults require at least `0.08`
-changed-pixel enrichment. The VLM aesthetic review separately scores visual
+changed-pixel enrichment inside the blueprint's detected active figure region.
+Reports also retain `blueprint_global_enrichment_ratio`,
+`blueprint_active_region_bbox`, and `blueprint_active_region_fraction` for
+diagnosis. This keeps the threshold strict without penalizing feedback or
+branch layouts that intentionally leave large white margins. The VLM aesthetic review separately scores visual
 information density, mechanism visualization, and publication polish. Sparse
 text-only nodes therefore fail even when labels, arrows, spacing, and colors
 are otherwise correct.
+
+For branch figures, evidence-backed parallel leaf heads are normalized to the
+same output-head role. Relations from an upstream ancestor directly into one
+head are removed when they bypass the shared branch point already feeding that
+head. If an innovation label is identical to an existing module or output, the
+role contract highlights the existing node rather than requesting a duplicate.
+For nested feedback layouts, the deterministic blueprint starts the feedback-to-
+refinement connector at the inner feedback artifact, not the outer container
+boundary.
 
 The same generic semantic plan can now bypass raster generation entirely:
 

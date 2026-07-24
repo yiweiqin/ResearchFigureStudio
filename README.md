@@ -142,6 +142,8 @@ The contract normalizer preserves semantic roles instead of checking labels alon
 
 Production Image-2 review rejects a neat but empty text-only flowchart. The critic checks entity-role mismatches, focused provenance topology, mechanism visualization, visual information density, and publication polish. A deterministic blueprint-enrichment gate requires substantive visual content beyond gradients and shadows; configure its default `0.08` changed-pixel threshold with `RFS_MIN_BLUEPRINT_ENRICHMENT_RATIO`. Generation prompts use a compact scientific contract so evidence, geometry, roles, and visual requirements remain explicit without repeating the full planning documents.
 
+Branch contracts now promote evidence-backed classification, regression, mask, prediction, and similar parallel leaf heads to one consistent output role, remove ancestor shortcuts that bypass the shared branch point, and merge duplicate innovation labels into the existing node instead of drawing a second node. Feedback blueprints anchor nested feedback connectors at the actual inner artifact rather than the outer container. Visual enrichment is measured inside the blueprint's active figure region while retaining the same `0.08` threshold, so large white margins do not reject a genuinely illustrated figure and sparse box-only diagrams still fail.
+
 Offline engineering validation:
 
 ```powershell

@@ -69,6 +69,11 @@ version, and scientific domain profile. Canvas ratio and display-language
 preferences are intentionally excluded because they are rendering concerns and
 must not produce competing scientific interpretations of the same paper.
 
+Topology normalization also owns role-consistent branch heads and shortcut
+removal, while deterministic template rendering owns exact nested connector
+anchors. Candidate review measures raster enrichment inside the detected active
+blueprint region and records both active-region and whole-canvas ratios.
+
 ## Stable workflow boundaries
 
 - `fast-framework-prompt`: produces the cached semantic contract and prompt; `--editable-ppt` additionally emits a fast native-shape PPTX without image generation.
